@@ -509,6 +509,18 @@ export class ConnectionManager {
       await this.stop(agentId);
     }
 
+    // КРИТИЧНО: при ЛЮБОМ повторном паринге (новый номер, истёкший код,
+    // ретрай после «телефон затупил») чистим authState в БД ДО start().
+    // Иначе:
+    //   - предыдущий запрос мог записать partial creds (me/noiseKey без
+    //     registered=true). При новом start() Baileys их подцепит и попытается
+    //     зайти как passive=true — WhatsApp молча отбивает соединение, новый
+    //     pairing code тоже отлетает как «неверный»;
+    //   - WhatsApp на стороне сервера держит одну активную pairing-сессию на
+    //     устройство. Чистый authState заставляет Baileys сгенерить новые
+    //     ключи устройства, и WhatsApp выдаст реально работающий код.
+    await wipeAuthStateInDb(agentId).catch(() => undefined);
+
     await this.start(agentId, { fresh: true });
     connection = this.getConnection(agentId);
     if (!connection?.socket) {

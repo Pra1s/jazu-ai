@@ -141,6 +141,18 @@ export default function WhatsappWizard() {
     }
   }
 
+  /**
+   * Запросить pairing code.
+   *
+   * Если в БД уже висит активная pairing/qr-сессия (например, юзер просил код,
+   * не успел ввести, сессия осталась) — ОБЯЗАТЕЛЬНО сначала зовём
+   * DELETE /whatsapp, чтобы worker полностью почистил authState. Иначе
+   * WhatsApp отбивает и старый, и новый код как «неверный»: на стороне
+   * сервера висит partial-сессия с предыдущей попытки.
+   *
+   * Идемпотентный кейс (тот же номер, код ещё в TTL) обрабатывает worker —
+   * вернёт тот же код, что и в первый раз.
+   */
   async function requestPairCode() {
     if (requestingCode) return;
     setError(null);
@@ -149,9 +161,24 @@ export default function WhatsappWizard() {
       return;
     }
     setRequestingCode(true);
+
+    const needsReset =
+      Boolean(pairCode) ||
+      effectiveStatus === "pairing" ||
+      effectiveStatus === "qr" ||
+      effectiveStatus === "error";
+    if (needsReset) {
+      setPairCode(null);
+      stopPolling();
+      try {
+        await apiFetch("/whatsapp", { method: "DELETE" });
+      } catch {
+        // не критично, дальше попробуем выдать код в любом случае
+      }
+      await refreshStatus();
+    }
+
     try {
-      // Используем raw fetch, чтобы 409 не превратился в throw —
-      // worker может вернуть idempotent-ответ или осмысленную ошибку.
       const res = await apiFetch("/whatsapp/pair", {
         method: "POST",
         body: JSON.stringify({ phone: phone.trim() })
@@ -167,7 +194,6 @@ export default function WhatsappWizard() {
         startPolling();
         return;
       }
-      // Ошибка от worker'а: показываем, но НЕ затираем уже выданный код.
       setError(data.error ?? "Не удалось получить код. Попробуйте «Сбросить и заново».");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось получить код");
@@ -176,16 +202,10 @@ export default function WhatsappWizard() {
     }
   }
 
+  // Кнопка «Сбросить и заново» — теперь просто алиас requestPairCode, потому
+  // что он сам делает reset при необходимости. Оставляем явный wrapper
+  // для UX: пользователь хочет понятную кнопку «начать с нуля».
   async function resetAndRetry() {
-    setError(null);
-    setPairCode(null);
-    stopPolling();
-    try {
-      await apiFetch("/whatsapp", { method: "DELETE" });
-    } catch {
-      // не критично, всё равно попробуем заново
-    }
-    await refreshStatus();
     await requestPairCode();
   }
 
@@ -429,17 +449,24 @@ export default function WhatsappWizard() {
 
       {/* Status footer (когда уже что-то начали, но ещё не подключено) */}
       {(effectiveStatus === "qr" || effectiveStatus === "pairing") && (
-        <div className="flex items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3 text-sm">
-          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-          <span className="text-muted-foreground">
-            Ожидаем подключения{" "}
-            {connectedPhone ? (
-              <>
-                с номера <span className="font-medium text-foreground">{connectedPhone}</span>
-              </>
-            ) : null}
-            …
-          </span>
+        <div className="rounded-2xl border border-border bg-card px-4 py-3 text-sm">
+          <div className="flex items-center gap-3">
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            <span className="text-muted-foreground">
+              Ожидаем подключения{" "}
+              {connectedPhone ? (
+                <>
+                  с номера <span className="font-medium text-foreground">{connectedPhone}</span>
+                </>
+              ) : null}
+              …
+            </span>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Если код не подошёл или WhatsApp пишет «неверный код» — нажмите{" "}
+            <b className="text-foreground">«Сбросить и заново»</b>. Просто запросить новый код
+            не поможет: WhatsApp удерживает старую сессию, нужно её сбросить.
+          </p>
         </div>
       )}
     </div>
