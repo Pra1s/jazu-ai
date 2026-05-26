@@ -1,4 +1,4 @@
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHmac, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
 
 export type MagicLinkPayload = {
   email: string;
@@ -7,6 +7,33 @@ export type MagicLinkPayload = {
 };
 
 export const MAGIC_LINK_TTL_MS = 1000 * 60 * 30;
+export const MAGIC_CODE_LENGTH = 6;
+export const MAGIC_CODE_TTL_MS = 1000 * 60 * 15; // 15 минут, обычно достаточно
+
+/**
+ * Генерирует криптостойкий N-значный numeric-код. Используем randomInt вместо
+ * Math.random — нужно равномерное распределение и непредсказуемость, иначе
+ * атакующий мог бы перебирать «вероятные» коды.
+ */
+export function generateMagicCode(length: number = MAGIC_CODE_LENGTH): string {
+  let out = "";
+  for (let i = 0; i < length; i += 1) {
+    out += String(randomInt(0, 10));
+  }
+  return out;
+}
+
+/**
+ * Возвращает HMAC-хеш кода. В БД мы НЕ храним сам код — только хеш, чтобы
+ * утечка БД не привела к компрометации непрочитанных писем. Соль здесь —
+ * email юзера: даже если два юзера получили одинаковый код в одну секунду,
+ * хеши будут разные.
+ */
+export function hashMagicCode(code: string, email: string, secret: string): string {
+  return createHmac("sha256", secret)
+    .update(`${email.toLowerCase()}:${code}`)
+    .digest("base64url");
+}
 
 function encodeBase64Url(value: string): string {
   return Buffer.from(value, "utf8").toString("base64url");

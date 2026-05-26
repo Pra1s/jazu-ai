@@ -21,7 +21,15 @@ import {
   revokeSession,
   rotateAndLoginSession
 } from "./lib/session.js";
-import { createMagicLink, MAGIC_LINK_TTL_MS, verifyInternalToken, verifyMagicLink } from "./lib/auth.js";
+import {
+  createMagicLink,
+  generateMagicCode,
+  hashMagicCode,
+  MAGIC_CODE_TTL_MS,
+  MAGIC_LINK_TTL_MS,
+  verifyInternalToken,
+  verifyMagicLink
+} from "./lib/auth.js";
 import { normalizeKzRuPhone } from "./lib/phone.js";
 import {
   buildGoogleAuthUrl,
@@ -45,7 +53,7 @@ import {
   type PlanId
 } from "@jazu/wa-pipeline";
 import { getInboundQueue } from "@jazu/queue";
-import { sendMagicLinkEmail, sendTelegramLead } from "./lib/notifications.js";
+import { sendMagicCodeEmail, sendMagicLinkEmail, sendTelegramLead } from "./lib/notifications.js";
 import { recordAudit } from "./lib/audit.js";
 
 const magicLinkBodySchema = z.object({
@@ -502,37 +510,44 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     const email = body.email.toLowerCase();
 
     // Телефон больше НЕ собирается на этапе magic-link: identity = email,
-    // номер запрашивается отдельно после клика по ссылке (см. /auth/phone).
+    // номер запрашивается отдельно после ввода кода (см. /auth/phone).
     // Поле body.phone сохранено как опциональное только для обратной
     // совместимости со старыми клиентами и здесь игнорируется.
 
     const session = await getOrCreateSession(request, reply);
-    const { token, link } = createMagicLink(email, env.MAGIC_LINK_SECRET, env.WEB_ORIGIN);
 
-    // Сохраняем токен в БД для one-time-use. phoneSnapshot оставлен null:
-    // в /auth/callback ветка `existing.phone ? {} : phoneFromToken ? ... : {}`
-    // корректно обработает оба варианта (с phone и без).
+    // Перешли с magic-link на 6-значный код: ссылка плохо работала в
+    // Gmail/Outlook WebView, где почтовый клиент открывал /auth/callback
+    // в собственном встроенном браузере и сессия логинилась НЕ там, где
+    // юзер начал. Код вводится в исходной вкладке и проблему снимает.
+    //
+    // В БД храним HMAC-хеш кода (поле token), а не сам код — даже
+    // утечка БД не даст залогиниться в чужой ящик до прочтения письма.
+    const code = generateMagicCode();
+    const codeHash = hashMagicCode(code, email, env.MAGIC_LINK_SECRET);
     const nonce = randomUUID();
     await prisma.magicLinkToken.create({
       data: {
-        token,
+        token: codeHash,
         email,
         nonce,
-        expiresAt: new Date(Date.now() + MAGIC_LINK_TTL_MS)
+        expiresAt: new Date(Date.now() + MAGIC_CODE_TTL_MS)
       }
     });
 
-    await sendMagicLinkEmail(email, link);
+    await sendMagicCodeEmail(email, code);
     await recordAudit({
       event: "magic_link.issued",
       request,
-      metadata: { email }
+      metadata: { email, kind: "code" }
     });
 
     const response = {
       ok: true,
       email,
-      ...(env.NODE_ENV === "development" ? { magicLink: link } : {})
+      // В dev отдаём код прямо в JSON, чтобы можно было быстро тестировать
+      // без открытия Resend. В prod это поле никогда не появляется.
+      ...(env.NODE_ENV === "development" ? { devCode: code } : {})
     };
 
     await prisma.session.update({
@@ -543,6 +558,131 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     });
 
     return response;
+  });
+
+  app.post("/auth/magic-link/verify", {
+    config: {
+      // Антиперебор: 10 попыток за минуту на email. Этого достаточно, чтобы
+      // юзер мог ошибиться 2-3 раза, и слишком мало, чтобы пробежать
+      // 1 000 000 комбинаций 6-значного кода.
+      rateLimit: {
+        max: 10,
+        timeWindow: "1 minute",
+        keyGenerator: (req) => {
+          const body = (req.body ?? {}) as { email?: unknown };
+          const email = typeof body.email === "string" ? body.email.toLowerCase() : null;
+          return email ? `magic-verify:${email}` : `magic-verify-ip:${req.ip}`;
+        }
+      }
+    }
+  }, async (request, reply) => {
+    const body = z
+      .object({
+        email: z.string().email(),
+        code: z.string().min(4).max(12)
+      })
+      .parse(request.body);
+
+    const email = body.email.trim().toLowerCase();
+    const code = body.code.replace(/\s+/g, "");
+    const codeHash = hashMagicCode(code, email, env.MAGIC_LINK_SECRET);
+
+    // Атомарно «потребляем» код: usedAt: null → usedAt = now, expiresAt > now.
+    // Так мы получаем one-time-use без гонок, даже если юзер дважды нажмёт
+    // «Войти» — второй запрос не пройдёт.
+    const consumed = await prisma.magicLinkToken.updateMany({
+      where: {
+        token: codeHash,
+        email,
+        usedAt: null,
+        expiresAt: { gt: new Date() }
+      },
+      data: { usedAt: new Date() }
+    });
+    if (consumed.count !== 1) {
+      await recordAudit({
+        event: "magic_link.expired",
+        request,
+        metadata: { email, reason: "invalid_or_expired_code" }
+      });
+      reply.code(400);
+      return { ok: false, error: "Неверный или истёкший код" };
+    }
+
+    // Создаём/находим юзера. Логика идентична magic-link callback.
+    const existing = await prisma.user.findUnique({ where: { email } });
+    const user = existing
+      ? existing
+      : await prisma.user.create({
+          data: {
+            email,
+            name: email.split("@").at(0) ?? email
+          }
+        });
+
+    const existingSession = await getOrCreateSession(request, reply);
+
+    // Тот же agent-resolver, что и в /auth/callback и Google-флоу.
+    const userAgent = await prisma.agent.findFirst({
+      where: { userId: user.id },
+      orderBy: { createdAt: "asc" }
+    });
+
+    let agent;
+    if (userAgent) {
+      agent = userAgent;
+    } else if (existingSession.agentId) {
+      const sessionAgent = await prisma.agent.findUnique({
+        where: { id: existingSession.agentId }
+      });
+      if (sessionAgent && sessionAgent.userId === null) {
+        agent = await prisma.agent.update({
+          where: { id: sessionAgent.id },
+          data: { userId: user.id }
+        });
+      } else {
+        agent = null;
+      }
+    } else {
+      agent = null;
+    }
+    if (!agent) {
+      agent = await prisma.agent.create({
+        data: {
+          userId: user.id,
+          name: `${user.name || "AI"} manager`,
+          status: "draft",
+          currentPrompt: buildFallbackPrompt(createInitialProfile()),
+          readyToFinalize: false,
+          businessProfile: {
+            create: {
+              data: createInitialProfile()
+            }
+          }
+        }
+      });
+    }
+
+    await rotateAndLoginSession(reply, existingSession.id, user.id, agent.id);
+
+    await recordAudit({
+      event: "magic_link.consumed",
+      userId: user.id,
+      request,
+      metadata: { method: "code", newUser: !existing }
+    });
+    await recordAudit({
+      event: "login.success",
+      userId: user.id,
+      request,
+      metadata: { method: "magic_link" }
+    });
+
+    return {
+      ok: true,
+      // Клиент сам решит, куда переходить — /dashboard или /auth/phone.
+      needsPhone: !user.phone
+    };
   });
 
   app.get("/auth/callback", async (request, reply) => {

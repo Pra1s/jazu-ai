@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import { ArrowRight, Zap } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ArrowLeft, ArrowRight, Zap } from "lucide-react";
 import { apiFetch, apiJson, API_BASE_URL } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
+import { resetAuthStatus } from "@/lib/use-auth-status";
 
 const MAGIC_LINK_COOLDOWN_SECONDS = 30;
 const COOLDOWN_STORAGE_KEY = "jazu_magic_link_lock_until";
@@ -26,18 +27,28 @@ function persistLockUntil(ts: number) {
   }
 }
 
+type Stage = "email" | "code";
+
 export default function AuthClient() {
+  const router = useRouter();
   const searchParams = useSearchParams();
+  // Legacy: старые письма со ссылкой ?token=... продолжают работать через
+  // GET /auth/callback. Сейчас новые письма ссылку не присылают, но если у
+  // кого-то открыта старая ссылка в почте — она должна сработать.
   const token = searchParams.get("token");
   const errorParam = searchParams.get("error");
+  const [stage, setStage] = useState<Stage>("email");
   const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  const [codeError, setCodeError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [googleEnabled, setGoogleEnabled] = useState(false);
-  // Время (epoch ms), до которого кнопка «Получить ссылку» заблокирована.
+  // Время (epoch ms), до которого «Получить код» заблокирована.
   // Persists в sessionStorage, чтобы reload страницы не сбрасывал отсчёт.
   const [lockUntil, setLockUntil] = useState(0);
   const [now, setNow] = useState(() => Date.now());
+  const codeInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setLockUntil(readPersistedLockUntil());
@@ -66,6 +77,14 @@ export default function AuthClient() {
     }
   }, [errorParam]);
 
+  useEffect(() => {
+    if (stage === "code") {
+      const t = window.setTimeout(() => codeInputRef.current?.focus(), 50);
+      return () => window.clearTimeout(t);
+    }
+    return;
+  }, [stage]);
+
   const cooldownSecondsLeft = Math.max(0, Math.ceil((lockUntil - now) / 1000));
   const cooldownActive = cooldownSecondsLeft > 0;
 
@@ -75,24 +94,20 @@ export default function AuthClient() {
     persistLockUntil(ts);
   }
 
-  async function sendMagicLink() {
+  async function sendMagicCode() {
     if (!email.trim() || busy || cooldownActive) return;
     setBusy(true);
     setMessage(null);
     try {
-      // apiFetch вместо apiJson: на 429 нам нужен и body, и Retry-After,
-      // а apiJson бы просто бросил исключение и съел контекст.
       const response = await apiFetch("/auth/magic-link", {
         method: "POST",
         body: JSON.stringify({ email: email.trim() })
       });
       const data = (await response.json().catch(() => null)) as
-        | { ok?: boolean; error?: string; magicLink?: string; message?: string }
+        | { ok?: boolean; error?: string; devCode?: string; message?: string }
         | null;
 
       if (response.status === 429) {
-        // Берём Retry-After если бэк его прислал (fastify-rate-limit
-        // выставляет автоматически), иначе фолбэк на полный кулдаун.
         const retryAfterHeader = response.headers.get("Retry-After");
         const retryAfter = retryAfterHeader ? Number(retryAfterHeader) : NaN;
         const seconds =
@@ -109,19 +124,55 @@ export default function AuthClient() {
       }
 
       if (!response.ok || !data?.ok) {
-        setMessage(data?.error ?? data?.message ?? "Не удалось отправить ссылку");
+        setMessage(data?.error ?? data?.message ?? "Не удалось отправить код");
         return;
       }
+
+      setStage("code");
+      setCode("");
       setMessage(
-        data.magicLink
-          ? `Для теста: ${data.magicLink}`
-          : "Проверьте почту — отправили ссылку для входа."
+        data.devCode
+          ? `Для теста: ${data.devCode}`
+          : "Мы отправили 6-значный код на ваш email."
       );
-      // После успешной отправки блокируем кнопку на полный кулдаун —
-      // даже если бэкенд почему-то не вернул бы 429 на повторный клик.
       startCooldown(MAGIC_LINK_COOLDOWN_SECONDS);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Не удалось отправить ссылку");
+      setMessage(err instanceof Error ? err.message : "Не удалось отправить код");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verifyMagicCode() {
+    const trimmed = code.replace(/\s+/g, "");
+    if (!trimmed || busy) return;
+    setBusy(true);
+    setCodeError(null);
+    try {
+      const response = await apiFetch("/auth/magic-link/verify", {
+        method: "POST",
+        body: JSON.stringify({ email: email.trim(), code: trimmed })
+      });
+      const data = (await response.json().catch(() => null)) as
+        | { ok?: boolean; error?: string; needsPhone?: boolean }
+        | null;
+
+      if (response.status === 429) {
+        setCodeError(data?.error ?? "Слишком много попыток. Подождите минуту.");
+        return;
+      }
+
+      if (!response.ok || !data?.ok) {
+        setCodeError(data?.error ?? "Неверный или истёкший код");
+        setCode("");
+        return;
+      }
+
+      // Сбрасываем кэш /auth/me, чтобы SideNav и гарды сразу увидели вход.
+      resetAuthStatus();
+      router.replace(data.needsPhone ? "/auth/phone" : "/dashboard");
+    } catch (err) {
+      setCodeError(err instanceof Error ? err.message : "Не удалось проверить код");
     } finally {
       setBusy(false);
     }
@@ -147,13 +198,17 @@ export default function AuthClient() {
           <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-foreground">
             <Zap className="h-5 w-5 text-background" />
           </div>
-          <h1 className="text-lg font-semibold">Войдите в Jazu</h1>
+          <h1 className="text-lg font-semibold">
+            {stage === "email" ? "Войдите в Jazu" : "Введите код из письма"}
+          </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Без пароля — отправим ссылку для входа на ваш email
+            {stage === "email"
+              ? "Без пароля — отправим 6-значный код на ваш email"
+              : `Отправили на ${email.trim()}`}
           </p>
         </div>
 
-        {googleEnabled && (
+        {stage === "email" && googleEnabled && (
           <>
             <Button
               variant="outline"
@@ -173,43 +228,115 @@ export default function AuthClient() {
           </>
         )}
 
-        <div className="space-y-3">
-          <div>
-            <label htmlFor="email" className="block text-sm font-medium text-foreground">
-              Email
-            </label>
-            <input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !cooldownActive) void sendMagicLink();
-              }}
-              placeholder="you@example.com"
-              className={cn(
-                "mt-1.5 w-full rounded-lg border border-border bg-background px-3.5 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted-foreground",
-                "focus:border-foreground focus:ring-1 focus:ring-foreground/10"
-              )}
-            />
-            <p className="mt-1 text-xs text-muted-foreground">
-              Если входите впервые — попросим номер телефона на следующем шаге.
-            </p>
-          </div>
+        {stage === "email" ? (
+          <div className="space-y-3">
+            <div>
+              <label htmlFor="email" className="block text-sm font-medium text-foreground">
+                Email
+              </label>
+              <input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !cooldownActive) void sendMagicCode();
+                }}
+                placeholder="you@example.com"
+                className={cn(
+                  "mt-1.5 w-full rounded-lg border border-border bg-background px-3.5 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted-foreground",
+                  "focus:border-foreground focus:ring-1 focus:ring-foreground/10"
+                )}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Если входите впервые — попросим номер телефона на следующем шаге.
+              </p>
+            </div>
 
-          <Button
-            className="w-full"
-            onClick={() => void sendMagicLink()}
-            disabled={busy || cooldownActive || !email.trim()}
-          >
-            {busy
-              ? "Отправляем…"
-              : cooldownActive
-              ? `Повторить через ${cooldownSecondsLeft} сек`
-              : "Получить ссылку"}
-            {!busy && !cooldownActive && <ArrowRight className="h-4 w-4" />}
-          </Button>
-        </div>
+            <Button
+              className="w-full"
+              onClick={() => void sendMagicCode()}
+              disabled={busy || cooldownActive || !email.trim()}
+            >
+              {busy
+                ? "Отправляем…"
+                : cooldownActive
+                ? `Повторить через ${cooldownSecondsLeft} сек`
+                : "Получить код"}
+              {!busy && !cooldownActive && <ArrowRight className="h-4 w-4" />}
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div>
+              <label htmlFor="code" className="block text-sm font-medium text-foreground">
+                Код из письма
+              </label>
+              <input
+                id="code"
+                ref={codeInputRef}
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9]*"
+                value={code}
+                onChange={(e) => {
+                  setCode(e.target.value.replace(/\D+/g, "").slice(0, 6));
+                  if (codeError) setCodeError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void verifyMagicCode();
+                }}
+                placeholder="123456"
+                aria-invalid={codeError ? true : undefined}
+                className={cn(
+                  "mt-1.5 w-full rounded-lg border bg-background px-3.5 py-2.5 text-center text-lg font-mono tracking-[0.4em] text-foreground outline-none transition placeholder:text-muted-foreground/50",
+                  codeError
+                    ? "border-destructive focus:border-destructive focus:ring-1 focus:ring-destructive/20"
+                    : "border-border focus:border-foreground focus:ring-1 focus:ring-foreground/10"
+                )}
+              />
+              {codeError && (
+                <p className="mt-2 text-xs text-destructive">{codeError}</p>
+              )}
+            </div>
+
+            <Button
+              className="w-full"
+              onClick={() => void verifyMagicCode()}
+              disabled={busy || code.length < 4}
+            >
+              {busy ? "Проверяем…" : "Войти"}
+              {!busy && <ArrowRight className="h-4 w-4" />}
+            </Button>
+
+            <div className="flex items-center justify-between gap-2 pt-1 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  setStage("email");
+                  setCode("");
+                  setCodeError(null);
+                  setMessage(null);
+                }}
+                className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <ArrowLeft className="h-3 w-3" />
+                Изменить email
+              </button>
+              <button
+                type="button"
+                onClick={() => void sendMagicCode()}
+                disabled={busy || cooldownActive}
+                className="text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60"
+              >
+                {cooldownActive
+                  ? `Запросить ещё через ${cooldownSecondsLeft} сек`
+                  : "Запросить новый код"}
+              </button>
+            </div>
+          </div>
+        )}
 
         {message && (
           <div className="mt-4 rounded-lg bg-secondary px-4 py-3 text-sm text-foreground">
