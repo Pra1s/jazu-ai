@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import QRCode from "qrcode";
 import {
-  Browsers,
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeWASocket,
@@ -250,9 +249,15 @@ export class ConnectionManager {
       version: version.version,
       auth: state,
       printQRInTerminal: false,
-      // WhatsApp проверяет browser-tuple при выдаче pairing code.
-      // Стандартный Chrome на Ubuntu — самая совместимая комбинация.
-      browser: Browsers.ubuntu("Chrome")
+      // WhatsApp проверяет browser-tuple при выдаче pairing code и сохраняет
+      // первый элемент как имя «устройства» в Linked Devices у клиента.
+      // Поэтому ставим бренд `app.jazu.chat`, а второй/третий элементы
+      // оставляем как у Browsers.ubuntu("Chrome") — это самая совместимая
+      // комбинация для pairing-code flow, отклонений на стороне WhatsApp
+      // на ней не наблюдалось.
+      // Влияет ТОЛЬКО на будущие привязки: уже подключённые сессии в
+      // Linked Devices остаются с прежним именем до перепривязки.
+      browser: ["app.jazu.chat", "Chrome", "Ubuntu"]
     });
 
     const existingAttempts = this.connections.get(agentId)?.reconnectAttempts ?? 0;
