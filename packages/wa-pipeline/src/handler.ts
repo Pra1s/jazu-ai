@@ -75,6 +75,9 @@ export type WaInboundResult =
       status: "bot_loop_protected";
       conversationId: string;
       outboundLastHour: number;
+    }
+  | {
+      status: "bot_paused";
     };
 
 export type WaInboundOptions = {
@@ -192,6 +195,14 @@ export async function processWaInbound(
     include: { businessProfile: true, user: true }
   });
   if (!agent) return { status: "agent_not_found" };
+
+  // Глобальный «выключатель» бота: владелец агента может поставить бот на паузу
+  // на странице «Диалоги». В этом режиме мы НЕ сохраняем inbound, НЕ списываем
+  // квоту, НЕ дёргаем LLM — будто бота вообще нет. Сообщение клиента
+  // фактически потеряется (что и хотел владелец).
+  if (!agent.botEnabled) {
+    return { status: "bot_paused" };
+  }
 
   const profile = agent.businessProfile
     ? businessProfileSchema.parse(agent.businessProfile.data)

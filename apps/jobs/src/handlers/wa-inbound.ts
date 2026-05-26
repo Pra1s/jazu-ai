@@ -73,4 +73,9 @@ export async function handleWaInbound(job: Job<WaInboundJob>): Promise<void> {
     );
     return;
   }
+
+  if (result.status === "bot_paused") {
+    log.info({ chatId }, "wa:inbound bot paused by owner — drop");
+    return;
+  }
 }

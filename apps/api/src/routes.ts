@@ -22,11 +22,9 @@ import {
   rotateAndLoginSession
 } from "./lib/session.js";
 import {
-  createMagicLink,
   generateMagicCode,
   hashMagicCode,
   MAGIC_CODE_TTL_MS,
-  MAGIC_LINK_TTL_MS,
   verifyInternalToken,
   verifyMagicLink
 } from "./lib/auth.js";
@@ -53,7 +51,7 @@ import {
   type PlanId
 } from "@jazu/wa-pipeline";
 import { getInboundQueue } from "@jazu/queue";
-import { sendMagicCodeEmail, sendMagicLinkEmail, sendTelegramLead } from "./lib/notifications.js";
+import { sendMagicCodeEmail, sendTelegramLead } from "./lib/notifications.js";
 import { recordAudit } from "./lib/audit.js";
 
 const magicLinkBodySchema = z.object({
@@ -82,6 +80,10 @@ const settingsBodySchema = z.object({
   telegramChatId: z.string().optional(),
   displayName: z.string().optional(),
   onboardingState: z.unknown().optional()
+});
+
+const botStateBodySchema = z.object({
+  botEnabled: z.boolean()
 });
 
 const whatsappInboundSchema = z.object({
@@ -1224,6 +1226,43 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
+  // Глобальный «выключатель» бота для текущего агента пользователя.
+  // Используется на странице «Диалоги»: пауза/возобновление ответов WA-бота.
+  // Не трогает Status — это разные оси (active/draft/archived vs paused/live).
+  app.patch("/agent/bot-state", {
+    config: {
+      rateLimit: { max: 30, timeWindow: "1 minute" }
+    }
+  }, async (request, reply) => {
+    const user = await getUserFromRequest(request);
+    if (!user) {
+      reply.code(401);
+      return { success: false, message: "Authentication required" };
+    }
+
+    const body = botStateBodySchema.parse(request.body ?? {});
+
+    const agent = await prisma.agent.findFirst({
+      where: { userId: user.id },
+      orderBy: { createdAt: "asc" }
+    });
+    if (!agent) {
+      reply.code(404);
+      return { success: false, message: "Agent not found" };
+    }
+
+    const updated = await prisma.agent.update({
+      where: { id: agent.id },
+      data: { botEnabled: body.botEnabled }
+    });
+
+    return {
+      success: true,
+      agentId: updated.id,
+      botEnabled: updated.botEnabled
+    };
+  });
+
   app.get("/agent/versions", async (request, reply) => {
     const agent = await getCurrentAgent(request, reply);
     if (!agent) {
@@ -2043,6 +2082,15 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         leadId: null,
         blocked: "bot_loop" as const,
         outboundLastHour: result.outboundLastHour
+      };
+    }
+    if (result.status === "bot_paused") {
+      return {
+        ok: true,
+        reply: null,
+        summary: null,
+        leadId: null,
+        blocked: "bot_paused" as const
       };
     }
 

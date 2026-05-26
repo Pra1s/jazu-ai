@@ -142,6 +142,7 @@ model Agent {
   status          AgentStatus      @default(draft)
   currentPrompt   String           @default("")
   readyToFinalize Boolean          @default(false)
+  botEnabled      Boolean          @default(true)
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   user            User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
