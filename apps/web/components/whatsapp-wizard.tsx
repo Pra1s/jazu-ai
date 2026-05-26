@@ -299,6 +299,13 @@ export default function WhatsappWizard() {
                 {disconnecting ? "Отключаем…" : "Отключить"}
               </Button>
             </div>
+            <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900">
+              <b>После «Отключить»:</b> на нашей стороне привязка снимается полностью.
+              Чтобы убрать её и в WhatsApp на телефоне, откройте{" "}
+              <b>Настройки → Связанные устройства</b>, выберите{" "}
+              <b>app.jazu.chat</b> и нажмите <b>«Выйти»</b>. Иначе устройство останется
+              в списке (без активной сессии).
+            </div>
           </div>
         </div>
       </div>
