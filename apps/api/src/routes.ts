@@ -93,6 +93,16 @@ const leadPatchSchema = z.object({
   status: z.enum(["new", "seen", "done"]).optional()
 });
 
+/**
+ * waChatId, под которым в БД хранится conversation, создаваемая из
+ * тестового чата ({@link app.post}("/test-chat/chat")). Она нужна, чтобы у
+ * `writeLeadIfNeeded` было куда писать summary при handoff в тесте, но
+ * наружу в /chats и /leads такие conversation/leads НЕ показываются —
+ * это не настоящий клиент. Если когда-нибудь захотим помечать тесты в
+ * схеме (поле isTest на Conversation) — заменим эту константу на флаг.
+ */
+const TEST_CONVERSATION_CHAT_ID = "test-conversation";
+
 type SseStream = {
   writeEvent: (event: string, data: unknown) => void;
   end: () => void;
@@ -1531,7 +1541,14 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       });
 
       if (turn.shouldHandoff) {
-        const conversation = await getOrCreateConversation(agent.id, "test-conversation", "Test client");
+        // chatId фиксирован, чтобы все handoff из теста сливались в одну
+        // и ту же conversation, а не плодили мусор. Эта conversation
+        // отфильтровывается в /chats и /leads (см. TEST_CONVERSATION_CHAT_ID).
+        const conversation = await getOrCreateConversation(
+          agent.id,
+          TEST_CONVERSATION_CHAT_ID,
+          "Test client"
+        );
         await writeLeadIfNeeded(agent.id, conversation.id, turn.summary || summarizeLead(profile, message), message, true);
       }
 
@@ -1969,7 +1986,12 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       return [];
     }
     const conversations = await prisma.conversation.findMany({
-      where: { agentId: agent.id },
+      where: {
+        agentId: agent.id,
+        // Тестовая conversation создаётся при handoff из /test-chat/chat —
+        // её не показываем в общем списке, это не настоящий клиент.
+        waChatId: { not: TEST_CONVERSATION_CHAT_ID }
+      },
       orderBy: { lastMessageAt: "desc" },
       include: {
         messages: {
@@ -1999,8 +2021,13 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     }
 
     // IDOR protection: verify conversation belongs to current agent
+    // и не относится к скрытой тестовой conversation.
     const conversation = await prisma.conversation.findFirst({
-      where: { id, agentId: agent.id }
+      where: {
+        id,
+        agentId: agent.id,
+        waChatId: { not: TEST_CONVERSATION_CHAT_ID }
+      }
     });
     if (!conversation) {
       reply.code(404);
@@ -2028,7 +2055,10 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     const leads = await prisma.lead.findMany({
       where: {
         conversation: {
-          agentId: agent.id
+          agentId: agent.id,
+          // Не показываем лиды, сгенерированные из /test-chat/chat:
+          // это handoff из тестового диалога, а не настоящий клиент.
+          waChatId: { not: TEST_CONVERSATION_CHAT_ID }
         }
       },
       orderBy: { createdAt: "desc" },
@@ -2049,8 +2079,15 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     }
 
     // IDOR protection: verify lead belongs to current agent's conversation
+    // и не относится к скрытой тестовой conversation.
     const lead = await prisma.lead.findFirst({
-      where: { id, conversation: { agentId: agent.id } }
+      where: {
+        id,
+        conversation: {
+          agentId: agent.id,
+          waChatId: { not: TEST_CONVERSATION_CHAT_ID }
+        }
+      }
     });
     if (!lead) {
       reply.code(404);
