@@ -1,6 +1,6 @@
 # Jazu
 
-[![CI](https://github.com/ID-Lusha/jazu/actions/workflows/ci.yml/badge.svg)](https://github.com/ID-Lusha/jazu/actions/workflows/ci.yml)
+[![CI](https://github.com/Pra1s/jazu-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/Pra1s/jazu-ai/actions/workflows/ci.yml)
 
 Chatera-like MVP for generic businesses: chat-based AI prompt builder, test sandbox, WhatsApp QR connect, chats, leads and settings.
 
