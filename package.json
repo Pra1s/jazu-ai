@@ -16,7 +16,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint:staged": "lint-staged",
-    "prepare": "node scripts/install-git-hooks.mjs",
+    "prepare": "node scripts/install-git-hooks.mjs || true",
     "db:up": "docker compose up -d postgres redis",
     "db:up:full": "docker compose --profile full up -d",
     "db:down": "docker compose down",
