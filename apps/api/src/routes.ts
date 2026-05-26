@@ -480,12 +480,16 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/auth/magic-link", {
     config: {
-      // Защита от email-флуда и user enumeration: max 5 запросов в минуту
-      // и max 20 в час на один email (а не на IP, чтобы общим NAT'ом не
-      // обижать офисы). IP-плечо тоже есть на уровне глобального лимита.
+      // Один запрос раз в 30 секунд на email. Это:
+      //  - защищает от случайных двойных кликов и от рассылочного флуда;
+      //  - даёт юзеру понятный UX-таймер «можно ещё через N сек»;
+      //  - закрывает enumeration по тайминговым каналам.
+      // Если разные юзеры стучат с одного NAT/офиса — лимит независимый
+      // на каждый email, так что друг другу они не мешают.
+      // IP-плечо тоже есть через глобальный per-user/IP лимит в server.ts.
       rateLimit: {
-        max: 5,
-        timeWindow: "1 minute",
+        max: 1,
+        timeWindow: "30 seconds",
         keyGenerator: (req) => {
           const body = (req.body ?? {}) as { email?: unknown };
           const email = typeof body.email === "string" ? body.email.toLowerCase() : null;

@@ -3,9 +3,28 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ArrowRight, Zap } from "lucide-react";
-import { apiJson, API_BASE_URL } from "@/lib/api";
+import { apiFetch, apiJson, API_BASE_URL } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
+
+const MAGIC_LINK_COOLDOWN_SECONDS = 30;
+const COOLDOWN_STORAGE_KEY = "jazu_magic_link_lock_until";
+
+function readPersistedLockUntil(): number {
+  if (typeof window === "undefined") return 0;
+  const raw = window.sessionStorage.getItem(COOLDOWN_STORAGE_KEY);
+  const ts = raw ? Number(raw) : 0;
+  return Number.isFinite(ts) && ts > Date.now() ? ts : 0;
+}
+
+function persistLockUntil(ts: number) {
+  if (typeof window === "undefined") return;
+  if (ts > Date.now()) {
+    window.sessionStorage.setItem(COOLDOWN_STORAGE_KEY, String(ts));
+  } else {
+    window.sessionStorage.removeItem(COOLDOWN_STORAGE_KEY);
+  }
+}
 
 export default function AuthClient() {
   const searchParams = useSearchParams();
@@ -15,6 +34,20 @@ export default function AuthClient() {
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [googleEnabled, setGoogleEnabled] = useState(false);
+  // Время (epoch ms), до которого кнопка «Получить ссылку» заблокирована.
+  // Persists в sessionStorage, чтобы reload страницы не сбрасывал отсчёт.
+  const [lockUntil, setLockUntil] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    setLockUntil(readPersistedLockUntil());
+  }, []);
+
+  useEffect(() => {
+    if (lockUntil <= now) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [lockUntil, now]);
 
   useEffect(() => {
     if (!token) return;
@@ -33,27 +66,60 @@ export default function AuthClient() {
     }
   }, [errorParam]);
 
+  const cooldownSecondsLeft = Math.max(0, Math.ceil((lockUntil - now) / 1000));
+  const cooldownActive = cooldownSecondsLeft > 0;
+
+  function startCooldown(seconds: number) {
+    const ts = Date.now() + seconds * 1000;
+    setLockUntil(ts);
+    persistLockUntil(ts);
+  }
+
   async function sendMagicLink() {
-    if (!email.trim()) return;
+    if (!email.trim() || busy || cooldownActive) return;
     setBusy(true);
     setMessage(null);
     try {
-      const res = await apiJson<{ ok: boolean; error?: string; magicLink?: string }>(
-        "/auth/magic-link",
-        {
-          method: "POST",
-          body: JSON.stringify({ email: email.trim() })
-        }
-      );
-      if (!res.ok) {
-        setMessage(res.error ?? "Не удалось отправить ссылку");
+      // apiFetch вместо apiJson: на 429 нам нужен и body, и Retry-After,
+      // а apiJson бы просто бросил исключение и съел контекст.
+      const response = await apiFetch("/auth/magic-link", {
+        method: "POST",
+        body: JSON.stringify({ email: email.trim() })
+      });
+      const data = (await response.json().catch(() => null)) as
+        | { ok?: boolean; error?: string; magicLink?: string; message?: string }
+        | null;
+
+      if (response.status === 429) {
+        // Берём Retry-After если бэк его прислал (fastify-rate-limit
+        // выставляет автоматически), иначе фолбэк на полный кулдаун.
+        const retryAfterHeader = response.headers.get("Retry-After");
+        const retryAfter = retryAfterHeader ? Number(retryAfterHeader) : NaN;
+        const seconds =
+          Number.isFinite(retryAfter) && retryAfter > 0
+            ? Math.min(MAGIC_LINK_COOLDOWN_SECONDS, Math.ceil(retryAfter))
+            : MAGIC_LINK_COOLDOWN_SECONDS;
+        startCooldown(seconds);
+        setMessage(
+          data?.message ??
+            data?.error ??
+            `Слишком часто. Подождите ${seconds} сек.`
+        );
+        return;
+      }
+
+      if (!response.ok || !data?.ok) {
+        setMessage(data?.error ?? data?.message ?? "Не удалось отправить ссылку");
         return;
       }
       setMessage(
-        res.magicLink
-          ? `Для теста: ${res.magicLink}`
+        data.magicLink
+          ? `Для теста: ${data.magicLink}`
           : "Проверьте почту — отправили ссылку для входа."
       );
+      // После успешной отправки блокируем кнопку на полный кулдаун —
+      // даже если бэкенд почему-то не вернул бы 429 на повторный клик.
+      startCooldown(MAGIC_LINK_COOLDOWN_SECONDS);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Не удалось отправить ссылку");
     } finally {
@@ -117,7 +183,9 @@ export default function AuthClient() {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && void sendMagicLink()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !cooldownActive) void sendMagicLink();
+              }}
               placeholder="you@example.com"
               className={cn(
                 "mt-1.5 w-full rounded-lg border border-border bg-background px-3.5 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted-foreground",
@@ -132,10 +200,14 @@ export default function AuthClient() {
           <Button
             className="w-full"
             onClick={() => void sendMagicLink()}
-            disabled={busy || !email.trim()}
+            disabled={busy || cooldownActive || !email.trim()}
           >
-            {busy ? "Отправляем…" : "Получить ссылку"}
-            {!busy && <ArrowRight className="h-4 w-4" />}
+            {busy
+              ? "Отправляем…"
+              : cooldownActive
+              ? `Повторить через ${cooldownSecondsLeft} сек`
+              : "Получить ссылку"}
+            {!busy && !cooldownActive && <ArrowRight className="h-4 w-4" />}
           </Button>
         </div>
 
