@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { apiJson } from "@/lib/api";
+import { apiFetch, apiJson } from "@/lib/api";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
@@ -50,13 +50,15 @@ function Input({
   onChange,
   placeholder,
   type = "text",
-  inputMode
+  inputMode,
+  invalid
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   type?: string;
   inputMode?: "text" | "tel" | "numeric" | "email" | "url" | "search" | "decimal";
+  invalid?: boolean;
 }) {
   return (
     <input
@@ -65,9 +67,12 @@ function Input({
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
       inputMode={inputMode}
+      aria-invalid={invalid ? true : undefined}
       className={cn(
-        "w-full rounded-lg border border-border bg-background px-3.5 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted-foreground",
-        "focus:border-foreground focus:ring-1 focus:ring-foreground/10"
+        "w-full rounded-lg border bg-background px-3.5 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted-foreground",
+        invalid
+          ? "border-destructive focus:border-destructive focus:ring-1 focus:ring-destructive/20"
+          : "border-border focus:border-foreground focus:ring-1 focus:ring-foreground/10"
       )}
     />
   );
@@ -80,6 +85,7 @@ export default function SettingsClient() {
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
   const [phoneBusy, setPhoneBusy] = useState(false);
+  const [phoneError, setPhoneError] = useState<string | null>(null);
 
   useEffect(() => {
     apiJson<MeResponse>("/settings")
@@ -111,28 +117,40 @@ export default function SettingsClient() {
   async function savePhone() {
     if (!phone.trim() || phoneBusy) return;
     setPhoneBusy(true);
+    setPhoneError(null);
     try {
-      const res = await apiJson<{ ok: boolean; error?: string; phone?: string }>(
-        "/auth/phone",
-        {
-          method: "POST",
-          body: JSON.stringify({ phone: phone.trim() })
+      // apiFetch вместо apiJson: на 409 нужен ответный JSON с error,
+      // а apiJson на не-2xx бросит исключение и сообщение пропадёт.
+      const response = await apiFetch("/auth/phone", {
+        method: "POST",
+        body: JSON.stringify({ phone: phone.trim() })
+      });
+      const data = (await response.json().catch(() => null)) as
+        | { ok?: boolean; error?: string; phone?: string }
+        | null;
+      if (!response.ok || !data?.ok) {
+        const message = data?.error ?? "Не удалось сохранить номер";
+        setPhoneError(message);
+        toast.error(message);
+        // Конфликт по чужому номеру — сбрасываем поле, чтобы юзер ввёл
+        // другой, а не пытался дожать тот же.
+        if (response.status === 409) {
+          setPhone("");
         }
-      );
-      if (!res.ok) {
-        toast.error(res.error ?? "Не удалось сохранить номер");
         return;
       }
-      // Освежим локальный state и кэш /auth/me, чтобы SideNav/гард
-      // увидели актуальный телефон, если до этого был needsPhone.
       setMe((prev) =>
-        prev?.user ? { ...prev, user: { ...prev.user, phone: res.phone ?? phone.trim() } } : prev
+        prev?.user
+          ? { ...prev, user: { ...prev.user, phone: data.phone ?? phone.trim() } }
+          : prev
       );
-      setPhone(res.phone ?? phone.trim());
+      setPhone(data.phone ?? phone.trim());
       resetAuthStatus();
       toast.success("Номер обновлён");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Не удалось сохранить номер");
+      const message = err instanceof Error ? err.message : "Не удалось сохранить номер";
+      setPhoneError(message);
+      toast.error(message);
     } finally {
       setPhoneBusy(false);
     }
@@ -181,12 +199,19 @@ export default function SettingsClient() {
                 <Field label="Номер телефона">
                   <Input
                     value={phone}
-                    onChange={(v) => setPhone(formatPhoneInput(v))}
+                    onChange={(v) => {
+                      setPhone(formatPhoneInput(v));
+                      if (phoneError) setPhoneError(null);
+                    }}
                     placeholder="+7 701 123 45 67"
                     type="tel"
                     inputMode="tel"
+                    invalid={Boolean(phoneError)}
                   />
                 </Field>
+                {phoneError && (
+                  <p className="mt-2 text-xs text-destructive">{phoneError}</p>
+                )}
               </div>
               <div className="mt-4 flex gap-2">
                 <Button

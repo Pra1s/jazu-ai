@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Phone } from "lucide-react";
-import { apiJson } from "@/lib/api";
+import { apiFetch, apiJson } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { resetAuthStatus } from "@/lib/use-auth-status";
@@ -74,12 +74,21 @@ export default function PhoneCaptureClient() {
     setBusy(true);
     setError(null);
     try {
-      const res = await apiJson<{ ok: boolean; error?: string }>("/auth/phone", {
+      // apiFetch вместо apiJson: нужно прочитать { error } даже при 409.
+      const response = await apiFetch("/auth/phone", {
         method: "POST",
         body: JSON.stringify({ phone: phone.trim() })
       });
-      if (!res.ok) {
-        setError(res.error ?? "Не удалось сохранить номер");
+      const data = (await response.json().catch(() => null)) as
+        | { ok?: boolean; error?: string }
+        | null;
+      if (!response.ok || !data?.ok) {
+        setError(data?.error ?? "Не удалось сохранить номер");
+        // Конфликт по чужому номеру — очищаем ввод, чтобы было видно,
+        // что значение не принято.
+        if (response.status === 409) {
+          setPhone("");
+        }
         return;
       }
       // Сбрасываем кэш /auth/me, чтобы SideNav сразу показал навигацию,
@@ -124,12 +133,18 @@ export default function PhoneCaptureClient() {
               type="tel"
               inputMode="tel"
               value={phone}
-              onChange={(e) => setPhone(formatPhoneInput(e.target.value))}
+              onChange={(e) => {
+                setPhone(formatPhoneInput(e.target.value));
+                if (error) setError(null);
+              }}
               onKeyDown={(e) => e.key === "Enter" && void submit()}
               placeholder={PHONE_HINT}
+              aria-invalid={error ? true : undefined}
               className={cn(
-                "mt-1.5 w-full rounded-lg border border-border bg-background px-3.5 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted-foreground",
-                "focus:border-foreground focus:ring-1 focus:ring-foreground/10"
+                "mt-1.5 w-full rounded-lg border bg-background px-3.5 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted-foreground",
+                error
+                  ? "border-destructive focus:border-destructive focus:ring-1 focus:ring-destructive/20"
+                  : "border-border focus:border-foreground focus:ring-1 focus:ring-foreground/10"
               )}
             />
             <p className="mt-1 text-xs text-muted-foreground">Формат +7XXXXXXXXXX (Казахстан / Россия)</p>
