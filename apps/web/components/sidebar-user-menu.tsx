@@ -123,6 +123,11 @@ export default function SidebarUserMenu({ collapsed = false }: { collapsed?: boo
     } finally {
       setBusy(false);
     }
+    // Локальный state у этого компонента не пересчитается сам после
+    // logout (loadMe вызывался один раз на маунте), поэтому без явного
+    // сброса карточка пользователя продолжает висеть до hard reload.
+    setMe({ success: false });
+    setUsage(null);
     // Сбросим кэш авторизации, чтобы SideNav сразу показал «Главная».
     resetAuthStatus();
     router.replace("/");
