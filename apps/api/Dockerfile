@@ -23,6 +23,7 @@ COPY packages/db/package.json         packages/db/package.json
 COPY packages/ai/package.json         packages/ai/package.json
 COPY packages/shared/package.json     packages/shared/package.json
 COPY packages/queue/package.json      packages/queue/package.json
+COPY packages/observability/package.json packages/observability/package.json
 COPY packages/wa-pipeline/package.json packages/wa-pipeline/package.json
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     pnpm install --frozen-lockfile
@@ -43,11 +44,21 @@ ENV NODE_ENV=production
 ENV PORT=3001
 
 # Прокидываем generated Prisma + полное дерево исходников (apps/api запускается через tsx).
-COPY --from=builder /app/node_modules            ./node_modules
-COPY --from=builder /app/apps/api/node_modules   ./apps/api/node_modules
-COPY --from=builder /app/packages/db/node_modules ./packages/db/node_modules
-COPY --from=builder /app/packages                ./packages
-COPY --from=builder /app/apps/api                ./apps/api
+# Порядок имеет значение: сначала копируем сорцы packages из builder (там
+# Prisma client уже сгенерён в packages/db/node_modules), затем поверх кладём
+# node_modules per-package из deps. pnpm hoist'ит общие deps в корневые
+# node_modules, но per-package symlinks на конкретные версии в .pnpm-store
+# живут в node_modules самих пакетов. Без них Node не находит транзитные deps
+# (типа @sentry/node, ioredis, bullmq) при импорте через @jazu/*.
+COPY --from=builder /app/packages                         ./packages
+COPY --from=builder /app/apps/api                         ./apps/api
+COPY --from=builder /app/node_modules                     ./node_modules
+COPY --from=builder /app/apps/api/node_modules            ./apps/api/node_modules
+COPY --from=builder /app/packages/db/node_modules         ./packages/db/node_modules
+COPY --from=deps    /app/packages/ai/node_modules         ./packages/ai/node_modules
+COPY --from=deps    /app/packages/queue/node_modules      ./packages/queue/node_modules
+COPY --from=deps    /app/packages/observability/node_modules ./packages/observability/node_modules
+COPY --from=deps    /app/packages/shared/node_modules     ./packages/shared/node_modules
 COPY pnpm-workspace.yaml package.json tsconfig.base.json ./
 
 # Скрипт-обёртка: сначала migrate deploy, потом запуск API.
