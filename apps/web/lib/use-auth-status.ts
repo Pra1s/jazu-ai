@@ -46,11 +46,28 @@ async function ensureLoaded() {
 }
 
 /** Сбросить кэш — вызывать после login/logout/изменения телефона, чтобы
- * навигация и гарды перерисовались без F5. */
+ * навигация и гарды перерисовались без F5. Все подписчики получат
+ * актуальное значение, как только fetchStatus вернётся. */
 export function resetAuthStatus() {
   cached = null;
   inflight = null;
+  // Уведомляем подписчиков о «сбросе» (null = «грузим заново»), чтобы UI мог
+  // показать loading-состояние, и сразу пинаем новый fetch.
+  for (const l of listeners) l(null);
   void ensureLoaded();
+}
+
+/** Низкоуровневая подписка для компонентов, которые не используют
+ * useAuthStatus напрямую (например, SidebarUserMenu тянет свой расширенный
+ * /auth/me со usage и хочет узнать о логине/логауте, чтобы перезагрузить
+ * данные). Возвращает unsubscribe. */
+export function subscribeAuthStatus(listener: (status: AuthStatus) => void): () => void {
+  listeners.add(listener);
+  // Сразу пинаем загрузку, если ещё не было.
+  void ensureLoaded();
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 export function useAuthStatus(): AuthStatus {

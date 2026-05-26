@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { LogIn, LogOut, ChevronUp, UserCircle, CreditCard, Zap } from "lucide-react";
 import { apiFetch, apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
-import { resetAuthStatus } from "@/lib/use-auth-status";
+import { resetAuthStatus, subscribeAuthStatus } from "@/lib/use-auth-status";
 
 type UsageView = {
   total: number;
@@ -70,25 +70,37 @@ export default function SidebarUserMenu({ collapsed = false }: { collapsed?: boo
   const [usage, setUsage] = useState<UsageView | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const loadMe = useCallback(async () => {
+    try {
+      const res = await apiFetch("/auth/me", { method: "GET" });
+      if (res.status === 401) {
+        setMe({ success: false });
+        setUsage(null);
+        return;
+      }
+      const data = (await res.json()) as Me;
+      setMe(data);
+      setUsage(data.usage ?? null);
+    } catch {
+      setMe({ success: false });
+      setUsage(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    // Перезагружаем /auth/me каждый раз, когда меняется глобальный
+    // auth-status: логин по коду / Google / logout / смена телефона.
+    // Без этой подписки карточка пользователя обновлялась бы только
+    // после полного reload страницы (loadMe раньше вызывался один раз
+    // на маунте).
+    const unsubscribe = subscribeAuthStatus(() => {
+      void loadMe();
+    });
+    return unsubscribe;
+  }, [loadMe]);
+
   useEffect(() => {
     let cancelled = false;
-
-    async function loadMe() {
-      try {
-        const res = await apiFetch("/auth/me", { method: "GET" });
-        if (cancelled) return;
-        if (res.status === 401) {
-          setMe({ success: false });
-          return;
-        }
-        const data = (await res.json()) as Me;
-        setMe(data);
-        if (data.usage) setUsage(data.usage);
-      } catch {
-        if (!cancelled) setMe({ success: false });
-      }
-    }
-
     async function pollUsage() {
       try {
         const res = await apiFetch("/billing/me", { method: "GET" });
@@ -99,14 +111,11 @@ export default function SidebarUserMenu({ collapsed = false }: { collapsed?: boo
         // тихо — следующий poll попробует снова
       }
     }
-
-    void loadMe();
     // Real-time через polling каждые 15с. Достаточно отзывчиво и не
     // нагружает API на десятках открытых вкладок.
     const timer = setInterval(() => {
       void pollUsage();
     }, 15_000);
-
     return () => {
       cancelled = true;
       clearInterval(timer);
