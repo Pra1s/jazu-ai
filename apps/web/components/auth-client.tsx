@@ -143,7 +143,7 @@ export default function AuthClient() {
 
           <div>
             <label htmlFor="phone" className="block text-sm font-medium text-foreground">
-              Номер WhatsApp
+              Личный номер
             </label>
             <input
               id="phone"
