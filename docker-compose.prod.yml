@@ -181,8 +181,12 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     environment:
-      WEB_DOMAIN: ${WEB_DOMAIN:?WEB_DOMAIN is required (e.g. app.jazu.io)}
-      API_DOMAIN: ${API_DOMAIN:?API_DOMAIN is required (e.g. api.jazu.io)}
+      WEB_DOMAIN: ${WEB_DOMAIN:?WEB_DOMAIN is required (e.g. app.jazu.chat)}
+      API_DOMAIN: ${API_DOMAIN:?API_DOMAIN is required (e.g. api.jazu.chat)}
+      # Опционально: apex-домен типа jazu.chat. Если задан — Caddy получит
+      # для него сертификат и будет редиректить на WEB_DOMAIN. Если пустой —
+      # Caddyfile-блок просто не активируется (Caddy парсит «» как «нет хоста»).
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-}
       ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required for Let's Encrypt}
     depends_on:
       api:

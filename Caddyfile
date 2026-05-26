@@ -8,6 +8,17 @@
     # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
 }
 
+# ── Apex-redirect ──────────────────────────────────────────────────────
+# jazu.chat → app.jazu.chat (постоянный 301). Чтобы юзер мог набрать
+# просто «jazu.chat» и попасть в приложение. Получаем сертификат и для
+# apex (Caddy умеет ACME для голого домена без проблем).
+#
+# Если ROOT_DOMAIN не задан — блок «{}» не активируется, поэтому даже
+# без переменной деплой не сломается.
+{$ROOT_DOMAIN} {
+    redir https://{$WEB_DOMAIN}{uri} permanent
+}
+
 # ── Web (Next.js) ──────────────────────────────────────────────────────
 {$WEB_DOMAIN} {
     encode zstd gzip
