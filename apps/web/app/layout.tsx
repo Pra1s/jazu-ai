@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import { Toaster } from "sonner";
 import "./globals.css";
 import { SideNav } from "@/components/side-nav";
+import PhoneRequiredGuard from "@/components/phone-required-guard";
 
 const inter = Inter({
   subsets: ["latin", "cyrillic"],
@@ -27,7 +28,7 @@ export default function RootLayout({
         <div className="flex h-dvh flex-col lg:flex-row">
           <SideNav />
           <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            {children}
+            <PhoneRequiredGuard>{children}</PhoneRequiredGuard>
           </main>
         </div>
         <Toaster position="bottom-right" richColors />

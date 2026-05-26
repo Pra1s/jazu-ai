@@ -6,6 +6,7 @@ import { ArrowRight, Phone } from "lucide-react";
 import { apiJson } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
+import { resetAuthStatus } from "@/lib/use-auth-status";
 
 const PHONE_HINT = "Например: +7 701 123 45 67";
 
@@ -53,6 +54,21 @@ export default function PhoneCaptureClient() {
     };
   }, [router]);
 
+  // Пока юзер на этой странице (то есть телефона ещё нет), предупреждаем
+  // о закрытии вкладки. Браузер сам покажет нативный диалог подтверждения.
+  // Глобальный гард PhoneRequiredGuard перехватит попытку перейти на другой
+  // маршрут внутри SPA — beforeunload же закрывает «дыру» с закрытием
+  // вкладки и hard-navigation.
+  useEffect(() => {
+    if (checking) return;
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      e.preventDefault();
+      e.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [checking]);
+
   async function submit() {
     if (!phone.trim() || busy) return;
     setBusy(true);
@@ -66,6 +82,9 @@ export default function PhoneCaptureClient() {
         setError(res.error ?? "Не удалось сохранить номер");
         return;
       }
+      // Сбрасываем кэш /auth/me, чтобы SideNav сразу показал навигацию,
+      // а PhoneRequiredGuard больше не считал нас обязанным вводить номер.
+      resetAuthStatus();
       router.replace("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось сохранить номер");

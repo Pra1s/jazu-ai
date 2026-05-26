@@ -30,12 +30,24 @@ const navItems = [
 function NavList({
   pathname,
   isAuthed,
+  needsPhone,
   onNavigate
 }: {
   pathname: string;
   isAuthed: boolean;
+  needsPhone: boolean;
   onNavigate?: () => void;
 }) {
+  // Если залогиненный юзер ещё не ввёл телефон — навигация по сайту
+  // запрещена. Сайдбар в этом состоянии не должен предлагать никаких
+  // переходов: показываем небольшую подсказку вместо списка.
+  if (needsPhone) {
+    return (
+      <div className="px-3 pt-4 text-xs leading-5 text-muted-foreground">
+        Заполните номер телефона, чтобы продолжить пользоваться Jazu.
+      </div>
+    );
+  }
   const items = navItems.filter((item) => !(item.hideWhenAuthed && isAuthed));
   return (
     <nav className="flex flex-col gap-0.5 p-2 pt-3">
@@ -77,9 +89,11 @@ export function SideNav() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const authStatus = useAuthStatus();
-  // До загрузки статуса считаем гостем — это безопасный дефолт, потому что
-  // «Главная» — публичная и её скрытие на 200мс не критично.
   const isAuthed = authStatus?.ok ?? false;
+  // Если у залогиненного юзера нет телефона — глобальный гард удержит его
+  // на /auth/phone, а навигация должна это визуально подтверждать:
+  // никаких ссылок, кроме самого требования ввести номер.
+  const needsPhone = authStatus?.ok === true && authStatus.needsPhone === true;
 
   useEffect(() => {
     setOpen(false);
@@ -138,7 +152,12 @@ export function SideNav() {
             <X className="h-5 w-5" />
           </button>
         </div>
-        <NavList pathname={pathname} isAuthed={isAuthed} onNavigate={() => setOpen(false)} />
+        <NavList
+          pathname={pathname}
+          isAuthed={isAuthed}
+          needsPhone={needsPhone}
+          onNavigate={() => setOpen(false)}
+        />
         <div className="mt-auto">
           <SidebarUserMenu />
         </div>
@@ -149,7 +168,7 @@ export function SideNav() {
         <div className="flex h-14 items-center border-b border-border px-4">
           <Logo />
         </div>
-        <NavList pathname={pathname} isAuthed={isAuthed} />
+        <NavList pathname={pathname} isAuthed={isAuthed} needsPhone={needsPhone} />
         <div className="mt-auto">
           <SidebarUserMenu />
         </div>

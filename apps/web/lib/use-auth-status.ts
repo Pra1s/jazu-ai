@@ -9,12 +9,12 @@ import { apiFetch } from "@/lib/api";
  * стреляли бы дважды на каждый рендер.
  *
  * Состояния:
- *   null            — ещё не загрузили
- *   { ok: false }   — гость
- *   { ok: true }    — авторизован
+ *   null                              — ещё не загрузили
+ *   { ok: false }                     — гость
+ *   { ok: true, needsPhone: boolean } — авторизован
  */
 
-type AuthStatus = { ok: boolean } | null;
+type AuthStatus = { ok: false } | { ok: true; needsPhone: boolean } | null;
 
 let cached: AuthStatus = null;
 let inflight: Promise<AuthStatus> | null = null;
@@ -24,8 +24,9 @@ async function fetchStatus(): Promise<AuthStatus> {
   try {
     const res = await apiFetch("/auth/me", { method: "GET" });
     if (res.status === 401) return { ok: false };
-    const data = (await res.json()) as { success?: boolean };
-    return { ok: Boolean(data.success) };
+    const data = (await res.json()) as { success?: boolean; needsPhone?: boolean };
+    if (!data.success) return { ok: false };
+    return { ok: true, needsPhone: Boolean(data.needsPhone) };
   } catch {
     return { ok: false };
   }
@@ -44,12 +45,11 @@ async function ensureLoaded() {
   return inflight;
 }
 
-/** Сбросить кэш — вызывать после login/logout, чтобы навигация
- * перерисовалась без F5. */
+/** Сбросить кэш — вызывать после login/logout/изменения телефона, чтобы
+ * навигация и гарды перерисовались без F5. */
 export function resetAuthStatus() {
   cached = null;
   inflight = null;
-  // Мгновенно дёрнем новую загрузку, чтобы подписчики получили апдейт.
   void ensureLoaded();
 }
 
