@@ -50,7 +50,11 @@ import { recordAudit } from "./lib/audit.js";
 
 const magicLinkBodySchema = z.object({
   email: z.string().email(),
-  phone: z.string().min(1)
+  // Поле сохранено как опциональное для обратной совместимости со
+  // старыми клиентами: они могут продолжать слать phone, но сервер его
+  // больше не использует. Номер запрашивается отдельно на /auth/phone
+  // после клика по magic-link (как в Google-флоу).
+  phone: z.string().optional()
 });
 
 const phoneBodySchema = z.object({
@@ -482,31 +486,23 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
   }, async (request, reply) => {
     const body = magicLinkBodySchema.parse(request.body);
     const email = body.email.toLowerCase();
-    const normalizedPhone = normalizeKzRuPhone(body.phone);
-    if (!normalizedPhone) {
-      reply.code(400);
-      return { ok: false, error: "Введите номер в формате +7XXXXXXXXXX" };
-    }
 
-    // Если телефон уже занят другим пользователем — отказ. Прежде, чем
-    // создавать magic link (иначе юзер получит письмо и потом упрётся в 409).
-    const phoneOwner = await prisma.user.findUnique({ where: { phone: normalizedPhone } });
-    if (phoneOwner && phoneOwner.email !== email) {
-      reply.code(409);
-      return { ok: false, error: "Этот номер уже привязан к другому аккаунту" };
-    }
+    // Телефон больше НЕ собирается на этапе magic-link: identity = email,
+    // номер запрашивается отдельно после клика по ссылке (см. /auth/phone).
+    // Поле body.phone сохранено как опциональное только для обратной
+    // совместимости со старыми клиентами и здесь игнорируется.
 
     const session = await getOrCreateSession(request, reply);
     const { token, link } = createMagicLink(email, env.MAGIC_LINK_SECRET, env.WEB_ORIGIN);
 
-    // Сохраняем токен в БД для one-time-use + кладём phoneSnapshot, чтобы
-    // в /auth/callback атомарно записать номер в User.
+    // Сохраняем токен в БД для one-time-use. phoneSnapshot оставлен null:
+    // в /auth/callback ветка `existing.phone ? {} : phoneFromToken ? ... : {}`
+    // корректно обработает оба варианта (с phone и без).
     const nonce = randomUUID();
     await prisma.magicLinkToken.create({
       data: {
         token,
         email,
-        phoneSnapshot: normalizedPhone,
         nonce,
         expiresAt: new Date(Date.now() + MAGIC_LINK_TTL_MS)
       }
@@ -516,7 +512,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     await recordAudit({
       event: "magic_link.issued",
       request,
-      metadata: { email, hasPhone: Boolean(normalizedPhone) }
+      metadata: { email }
     });
 
     const response = {

@@ -7,26 +7,11 @@ import { apiJson, API_BASE_URL } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 
-const PHONE_HINT = "Например: +7 701 123 45 67";
-
-function formatPhoneInput(raw: string): string {
-  // Лёгкая визуальная маска для +7XXXXXXXXXX (не строгая, на сервере всё равно нормализуем).
-  const digits = raw.replace(/\D+/g, "").slice(0, 11);
-  if (!digits) return "";
-  const tail = digits.startsWith("7") || digits.startsWith("8") ? digits.slice(1) : digits;
-  const padded = tail.padEnd(10, " ");
-  const parts = [padded.slice(0, 3), padded.slice(3, 6), padded.slice(6, 8), padded.slice(8, 10)]
-    .map((p) => p.replace(/\s+$/g, ""))
-    .filter((p) => p.length > 0);
-  return `+7 ${parts.join(" ")}`.trimEnd();
-}
-
 export default function AuthClient() {
   const searchParams = useSearchParams();
   const token = searchParams.get("token");
   const errorParam = searchParams.get("error");
   const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [googleEnabled, setGoogleEnabled] = useState(false);
@@ -49,7 +34,7 @@ export default function AuthClient() {
   }, [errorParam]);
 
   async function sendMagicLink() {
-    if (!email.trim() || !phone.trim()) return;
+    if (!email.trim()) return;
     setBusy(true);
     setMessage(null);
     try {
@@ -57,7 +42,7 @@ export default function AuthClient() {
         "/auth/magic-link",
         {
           method: "POST",
-          body: JSON.stringify({ email: email.trim(), phone: phone.trim() })
+          body: JSON.stringify({ email: email.trim() })
         }
       );
       if (!res.ok) {
@@ -98,7 +83,7 @@ export default function AuthClient() {
           </div>
           <h1 className="text-lg font-semibold">Войдите в Jazu</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Без пароля — ссылка на email и номер для WhatsApp
+            Без пароля — отправим ссылку для входа на ваш email
           </p>
         </div>
 
@@ -139,32 +124,15 @@ export default function AuthClient() {
                 "focus:border-foreground focus:ring-1 focus:ring-foreground/10"
               )}
             />
-          </div>
-
-          <div>
-            <label htmlFor="phone" className="block text-sm font-medium text-foreground">
-              Личный номер
-            </label>
-            <input
-              id="phone"
-              type="tel"
-              inputMode="tel"
-              value={phone}
-              onChange={(e) => setPhone(formatPhoneInput(e.target.value))}
-              onKeyDown={(e) => e.key === "Enter" && void sendMagicLink()}
-              placeholder={PHONE_HINT}
-              className={cn(
-                "mt-1.5 w-full rounded-lg border border-border bg-background px-3.5 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted-foreground",
-                "focus:border-foreground focus:ring-1 focus:ring-foreground/10"
-              )}
-            />
-            <p className="mt-1 text-xs text-muted-foreground">Формат +7XXXXXXXXXX (Казахстан / Россия)</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Если входите впервые — попросим номер телефона на следующем шаге.
+            </p>
           </div>
 
           <Button
             className="w-full"
             onClick={() => void sendMagicLink()}
-            disabled={busy || !email.trim() || !phone.trim()}
+            disabled={busy || !email.trim()}
           >
             {busy ? "Отправляем…" : "Получить ссылку"}
             {!busy && <ArrowRight className="h-4 w-4" />}
