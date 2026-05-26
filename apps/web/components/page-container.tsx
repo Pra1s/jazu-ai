@@ -15,7 +15,12 @@ export function PageContainer({
 
   return (
     <div className={cn("h-full w-full overflow-y-auto", className)}>
-      <div className={cn("mx-auto w-full px-4 py-6 sm:px-6 lg:px-8", max)}>
+      <div
+        className={cn(
+          "mx-auto w-full px-4 py-6 pb-[max(env(safe-area-inset-bottom),1.5rem)] sm:px-6 lg:px-8 lg:pb-6",
+          max
+        )}
+      >
         {children}
       </div>
     </div>

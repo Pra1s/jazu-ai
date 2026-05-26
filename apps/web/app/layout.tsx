@@ -21,10 +21,10 @@ export default function RootLayout({
   return (
     <html lang="ru" className={inter.variable}>
       <body
-        className="h-screen overflow-hidden bg-background text-foreground"
+        className="h-dvh overflow-hidden bg-background text-foreground"
         style={{ fontFamily: "var(--font-inter), system-ui, sans-serif" }}
       >
-        <div className="flex h-screen flex-col lg:flex-row">
+        <div className="flex h-dvh flex-col lg:flex-row">
           <SideNav />
           <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             {children}

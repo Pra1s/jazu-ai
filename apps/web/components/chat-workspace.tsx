@@ -575,16 +575,15 @@ export default function ChatWorkspace() {
       {/* Header */}
       <div
         className={cn(
-          "flex items-center justify-between border-b px-4 py-3 backdrop-blur",
-          isTest ? "border-black/5" : "border-border"
+          "flex items-center justify-between border-b px-4 py-3",
+          isTest ? "border-black/5 bg-test-canvas" : "border-border bg-card"
         )}
-        style={isTest ? { backgroundColor: "hsl(var(--test-canvas) / 0.85)" } : undefined}
       >
-        <div className="flex items-center gap-2">
-          <h1 className="text-sm font-semibold text-foreground">
+        <div className="flex min-w-0 items-center gap-2">
+          <h1 className="truncate text-sm font-semibold text-foreground">
             {isTest ? "Диалог как клиент" : "Настройка бота"}
           </h1>
-          <span className="text-xs text-muted-foreground">
+          <span className="hidden truncate text-xs text-muted-foreground sm:inline">
             {isTest ? "WhatsApp-режим" : "AI соберёт промпт по диалогу"}
           </span>
         </div>
