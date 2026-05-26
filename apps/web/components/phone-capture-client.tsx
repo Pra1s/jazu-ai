@@ -89,16 +89,16 @@ export default function PhoneCaptureClient() {
           <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-foreground">
             <Phone className="h-5 w-5 text-background" />
           </div>
-          <h1 className="text-lg font-semibold">Добавьте номер WhatsApp</h1>
+          <h1 className="text-lg font-semibold">Добавьте личный номер</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            На этот номер будут приходить уведомления и подключение к WhatsApp.
+            На этот номер будут приходить уведомления о работе бота.
           </p>
         </div>
 
         <div className="space-y-3">
           <div>
             <label htmlFor="phone" className="block text-sm font-medium text-foreground">
-              Номер WhatsApp
+              Личный номер
             </label>
             <input
               id="phone"
