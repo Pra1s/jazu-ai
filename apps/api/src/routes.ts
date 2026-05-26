@@ -1876,7 +1876,19 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete("/whatsapp", async (request, reply) => {
     const { agent } = await buildWriteSessionView(request, reply);
-    const workerStatus = await stopWorkerConnection(agent.id);
+
+    // Worker — best-effort: если он недоступен (рестарт, network blip, 500),
+    // мы ВСЁ РАВНО должны очистить локальную привязку, иначе пользователь
+    // не сможет переподключить WhatsApp. Раньше throw отсюда не давал
+    // дойти до wipe authState ниже — кнопка «Отключить» молча падала с 500.
+    let workerStatus: Awaited<ReturnType<typeof stopWorkerConnection>> | null = null;
+    let workerError: string | null = null;
+    try {
+      workerStatus = await stopWorkerConnection(agent.id);
+    } catch (err) {
+      workerError = err instanceof Error ? err.message : "Worker unavailable";
+      request.log.warn({ err, agentId: agent.id }, "wa: worker stop failed — continuing with local cleanup");
+    }
 
     // КРИТИЧНО: при отключении вычищаем authState, иначе следующая попытка
     // (особенно pairing) подцепит старые creds и Baileys будет логиниться
@@ -1886,6 +1898,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       update: {
         status: "disconnected",
         qrText: null,
+        qrDataUrl: null,
         workerSessionId: null,
         phone: null,
         authState: {},
@@ -1904,12 +1917,13 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       event: "wa.disconnected",
       userId: agent.userId ?? null,
       request,
-      metadata: { agentId: agent.id }
+      metadata: { agentId: agent.id, workerError }
     });
 
     return {
       ok: true,
-      workerStatus
+      workerStatus,
+      ...(workerError ? { workerError } : {})
     };
   });
 

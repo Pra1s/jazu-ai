@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, QrCode, Smartphone, RefreshCw, Loader2, LogIn } from "lucide-react";
+import { toast } from "sonner";
 import { apiFetch, apiJson } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -211,11 +212,32 @@ export default function WhatsappWizard() {
 
   async function disconnect() {
     setDisconnecting(true);
+    setError(null);
     stopPolling();
     try {
-      await apiJson("/whatsapp", { method: "DELETE" });
+      // apiFetch вместо apiJson — раньше при 500 от worker'а apiJson бросал
+      // throw и UI оставался в состоянии «Подключено». Сейчас бэк всегда
+      // чистит локальный authState даже при worker_error, так что мы
+      // можем смело продолжать — но всё равно покажем юзеру осмысленный
+      // статус, если что-то пошло не так.
+      const res = await apiFetch("/whatsapp", { method: "DELETE" });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        workerError?: string;
+      };
+      if (!res.ok) {
+        toast.error("Не удалось отключить WhatsApp. Попробуйте ещё раз.");
+        return;
+      }
       setPairCode(null);
       await refreshStatus();
+      if (data.workerError) {
+        toast.warning("WhatsApp отключён локально. Воркер недоступен — это не помешает переподключению.");
+      } else {
+        toast.success("WhatsApp отключён");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Не удалось отключить WhatsApp");
     } finally {
       setDisconnecting(false);
     }
