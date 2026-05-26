@@ -58,7 +58,11 @@ services:
       - "3001"
     stop_grace_period: 35s
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/readyz || exit 1"]
+      # ВАЖНО: используем 127.0.0.1, а не localhost. В Alpine /etc/hosts
+      # `::1 localhost` идёт первой строкой, и BusyBox wget резолвит
+      # localhost → IPv6 ::1. Node же по умолчанию слушает только IPv4
+      # (0.0.0.0) — отсюда `Connection refused` при работающем сервере.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/readyz || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -117,7 +121,8 @@ services:
     # Прод-graceful shutdown даём 35 секунд: 30 на graceful + 5 на zombie kill.
     stop_grace_period: 35s
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:4001/readyz || exit 1"]
+      # См. комментарий выше у api — IPv6/IPv4 resolution для localhost.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4001/readyz || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -155,7 +160,8 @@ services:
     expose:
       - "4002"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:4002/readyz || exit 1"]
+      # См. комментарий у api — IPv6/IPv4 resolution для localhost.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4002/readyz || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5

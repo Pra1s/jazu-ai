@@ -63,5 +63,5 @@ RUN printf '%s\n' \
 EXPOSE 3001
 USER node
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
-    CMD wget -qO- http://localhost:3001/api/health 2>/dev/null || exit 1
+    CMD wget -qO- http://127.0.0.1:3001/healthz 2>/dev/null || exit 1
 CMD ["/usr/local/bin/run-api.sh"]

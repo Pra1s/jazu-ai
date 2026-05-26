@@ -54,5 +54,5 @@ RUN mkdir -p ./apps/web/public
 EXPOSE 3000
 USER node
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
-    CMD wget -qO- http://localhost:3000 >/dev/null 2>&1 || exit 1
+    CMD wget -qO- http://127.0.0.1:3000 >/dev/null 2>&1 || exit 1
 CMD ["node", "apps/web/server.js"]
