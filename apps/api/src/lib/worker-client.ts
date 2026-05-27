@@ -16,6 +16,30 @@ function buildHeaders() {
   };
 }
 
+/**
+ * Внутренние HTTP-вызовы к wa-worker не должны блокировать пользовательский
+ * флоу дольше нескольких секунд: если worker подвис, лучше получить чёткую
+ * AbortError, чем держать запрос пользователя минутами на дефолтном TCP
+ * таймауте. Все потребители оборачивают вызов в try/catch и продолжают
+ * работать с fallback'ом из БД.
+ */
+const WORKER_FETCH_TIMEOUT_MS = 5_000;
+
+async function workerFetch(url: URL, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), WORKER_FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`Worker request timed out after ${WORKER_FETCH_TIMEOUT_MS}ms`, { cause: err });
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function startWorkerConnection(agentId: string): Promise<WorkerStatusResponse> {
   if (!env.WA_WORKER_URL) {
     return {
@@ -28,7 +52,7 @@ export async function startWorkerConnection(agentId: string): Promise<WorkerStat
     };
   }
 
-  const response = await fetch(new URL(`/connections/${agentId}/start`, env.WA_WORKER_URL), {
+  const response = await workerFetch(new URL(`/connections/${agentId}/start`, env.WA_WORKER_URL), {
     method: "POST",
     headers: buildHeaders(),
     body: JSON.stringify({ agentId })
@@ -53,7 +77,7 @@ export async function getWorkerConnection(agentId: string): Promise<WorkerStatus
     };
   }
 
-  const response = await fetch(new URL(`/connections/${agentId}/status`, env.WA_WORKER_URL), {
+  const response = await workerFetch(new URL(`/connections/${agentId}/status`, env.WA_WORKER_URL), {
     headers: buildHeaders()
   });
 
@@ -76,7 +100,7 @@ export async function stopWorkerConnection(agentId: string): Promise<WorkerStatu
     };
   }
 
-  const response = await fetch(new URL(`/connections/${agentId}`, env.WA_WORKER_URL), {
+  const response = await workerFetch(new URL(`/connections/${agentId}`, env.WA_WORKER_URL), {
     method: "DELETE",
     headers: buildHeaders()
   });
@@ -101,7 +125,7 @@ export async function pairWorkerConnection(
     throw new Error("WA_WORKER_URL is not configured");
   }
 
-  const response = await fetch(new URL(`/connections/${agentId}/pair`, env.WA_WORKER_URL), {
+  const response = await workerFetch(new URL(`/connections/${agentId}/pair`, env.WA_WORKER_URL), {
     method: "POST",
     headers: buildHeaders(),
     body: JSON.stringify({ phone: phoneDigits })
@@ -119,7 +143,7 @@ export async function sendWorkerMessage(agentId: string, payload: { chatId: stri
     return;
   }
 
-  const response = await fetch(new URL(`/connections/${agentId}/send`, env.WA_WORKER_URL), {
+  const response = await workerFetch(new URL(`/connections/${agentId}/send`, env.WA_WORKER_URL), {
     method: "POST",
     headers: buildHeaders(),
     body: JSON.stringify(payload)

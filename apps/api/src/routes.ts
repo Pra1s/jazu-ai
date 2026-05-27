@@ -1752,7 +1752,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       return { agentId: null, connection: null, workerStatus: { status: "disconnected", qrText: null, qrDataUrl: null, workerSessionId: null, phone: null, lastSeenAt: null } };
     }
     const connection = await ensureWaConnection(agent.id);
-    let workerStatus: Awaited<ReturnType<typeof getWorkerConnection>> = {
+    const dbFallback: Awaited<ReturnType<typeof getWorkerConnection>> = {
       status: connection.status,
       qrText: connection.qrText ?? null,
       qrDataUrl: (connection as { qrDataUrl?: string | null }).qrDataUrl ?? null,
@@ -1761,6 +1761,19 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       lastSeenAt: connection.lastSeenAt?.toISOString?.() ?? null
     };
 
+    // КРИТИЧНО: если в БД явно «disconnected» (пользователь только что нажал
+    // «Отключить»), БД — авторитетный источник. Worker может ещё держать
+    // сессию в памяти и ответить status=connected, если DELETE до него
+    // не дошёл (network blip, timeout). Тогда UI продолжал бы видеть
+    // «Подключено» — это и был баг.
+    if (connection.status === "disconnected") {
+      // Заодно best-effort пинаем worker ещё раз, чтобы он догнал состояние
+      // БД и снёс сессию у себя. Без await — нам ответ от него не нужен.
+      void stopWorkerConnection(agent.id).catch(() => undefined);
+      return { agentId: agent.id, connection, workerStatus: dbFallback };
+    }
+
+    let workerStatus = dbFallback;
     try {
       workerStatus = await getWorkerConnection(agent.id);
     } catch {
@@ -1888,6 +1901,13 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     } catch (err) {
       workerError = err instanceof Error ? err.message : "Worker unavailable";
       request.log.warn({ err, agentId: agent.id }, "wa: worker stop failed — continuing with local cleanup");
+      // Fire-and-forget retry: если worker оживёт через секунду, всё-таки
+      // снесём сессию у него тоже. Если первый запрос упал по таймауту, а
+      // второй пройдёт — это спасёт пользователя от «вечно подключён» в
+      // /whatsapp/status (см. логику ниже про БД-авторитативность).
+      setTimeout(() => {
+        void stopWorkerConnection(agent.id).catch(() => undefined);
+      }, 1500);
     }
 
     // КРИТИЧНО: при отключении вычищаем authState, иначе следующая попытка
