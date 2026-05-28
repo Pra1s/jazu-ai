@@ -1791,6 +1791,19 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
   app.post("/whatsapp/qr", async (request, reply) => {
     const { agent } = await buildWriteSessionView(request, reply);
     const connection = await ensureWaConnection(agent.id);
+
+    // Если в worker'е уже висит pairing/qr-сессия от предыдущей попытки
+    // (юзер переключился с «Кода» на «QR»), startWorkerConnection вернёт
+    // тот же state без создания нового сокета — QR никогда не появится.
+    // Гарантированно гасим её перед запросом QR.
+    if (connection.status === "pairing" || connection.status === "qr" || connection.status === "error") {
+      try {
+        await stopWorkerConnection(agent.id);
+      } catch (err) {
+        request.log.warn({ err, agentId: agent.id }, "wa: pre-qr stop failed — continuing");
+      }
+    }
+
     const workerStatus = await startWorkerConnection(agent.id);
 
     await prisma.waConnection.upsert({
