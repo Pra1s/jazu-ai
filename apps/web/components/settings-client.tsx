@@ -9,6 +9,11 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { resetAuthStatus } from "@/lib/use-auth-status";
 
+// Фиче-флаги видимости разделов настроек. Код оставлен в файле, чтобы
+// быстро вернуть, поставив true. Пока скрыто по запросу.
+const SHOW_DANGER_ZONE = false; // секция «Опасная зона» / удаление аккаунта
+const SHOW_WORKSPACE_TAB = false; // вкладка «Workspace»
+
 type MeResponse = {
   success: boolean;
   user?: {
@@ -210,7 +215,7 @@ export default function SettingsClient() {
         <TabsList>
           <TabsTrigger value="account">Аккаунт</TabsTrigger>
           <TabsTrigger value="notifications">Уведомления</TabsTrigger>
-          <TabsTrigger value="workspace">Workspace</TabsTrigger>
+          {SHOW_WORKSPACE_TAB && <TabsTrigger value="workspace">Workspace</TabsTrigger>}
         </TabsList>
 
         {/* Account tab */}
@@ -234,32 +239,34 @@ export default function SettingsClient() {
               </div>
             </div>
 
-            {/* Опасная зона: удаление аккаунта. Явный красный фон —
-                чтобы пользователь видел границу необратимого действия. */}
-            <div className="rounded-xl border border-red-300 bg-red-50 p-4 sm:p-5">
-              <h2 className="text-sm font-semibold text-red-700">Опасная зона</h2>
-              <p className="mt-1.5 text-sm text-foreground">
-                Удаление аккаунта необратимо. Будут удалены: все агенты, подключения WhatsApp,
-                переписки, лиды и личные данные. История платежей сохраняется обезличенно
-                для бухгалтерии.
-              </p>
-              <div className="mt-4">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setDeleteOpen(true);
-                    setDeleteConfirmEmail("");
-                    setDeleteAcknowledged(false);
-                    setDeleteWaAcknowledged(false);
-                    setDeleteError(null);
-                  }}
-                  className="border-red-300 bg-white text-red-700 hover:bg-red-100"
-                >
-                  Удалить аккаунт
-                </Button>
+            {/* Опасная зона: удаление аккаунта. Скрыто фиче-флагом
+                (SHOW_DANGER_ZONE) — пока не нужно, но код сохранён. */}
+            {SHOW_DANGER_ZONE && (
+              <div className="rounded-xl border border-red-300 bg-red-50 p-4 sm:p-5">
+                <h2 className="text-sm font-semibold text-red-700">Опасная зона</h2>
+                <p className="mt-1.5 text-sm text-foreground">
+                  Удаление аккаунта необратимо. Будут удалены: все агенты, подключения WhatsApp,
+                  переписки, лиды и личные данные. История платежей сохраняется обезличенно
+                  для бухгалтерии.
+                </p>
+                <div className="mt-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setDeleteOpen(true);
+                      setDeleteConfirmEmail("");
+                      setDeleteAcknowledged(false);
+                      setDeleteWaAcknowledged(false);
+                      setDeleteError(null);
+                    }}
+                    className="border-red-300 bg-white text-red-700 hover:bg-red-100"
+                  >
+                    Удалить аккаунт
+                  </Button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </TabsContent>
 
@@ -336,7 +343,8 @@ export default function SettingsClient() {
           </div>
         </TabsContent>
 
-        {/* Workspace tab */}
+        {/* Workspace tab — скрыта фиче-флагом SHOW_WORKSPACE_TAB */}
+        {SHOW_WORKSPACE_TAB && (
         <TabsContent value="workspace">
           <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
             <h2 className="text-sm font-semibold">Агент</h2>
@@ -369,6 +377,7 @@ export default function SettingsClient() {
             </div>
           </div>
         </TabsContent>
+        )}
       </Tabs>
 
       {deleteOpen && (
