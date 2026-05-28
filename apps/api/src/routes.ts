@@ -1928,6 +1928,29 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     // Baileys ждёт чистые цифры без "+".
     const digits = normalized.replace(/\D+/g, "");
 
+    // Анти-абуз PRE-CHECK: для pairing-code flow номер известен заранее
+    // (юзер сам его ввёл), поэтому проверяем claim ДО выдачи кода. Если
+    // номер застолблён другим аккаунтом — не выдаём код вообще, юзер сразу
+    // видит понятную ошибку. Это лучше, чем post-check в connection.open
+    // (там WhatsApp уже привязывает устройство, и откат — задним числом).
+    // Финальный post-check в worker'е остаётся как защита от подмены номера
+    // и для QR-flow, где номер заранее неизвестен.
+    const phoneHash = hashWaPhone(normalized);
+    const existingClaim = await prisma.waPhoneClaim.findUnique({
+      where: { phoneHash },
+      select: { userId: true }
+    });
+    if (existingClaim && existingClaim.userId !== agent.userId) {
+      reply.code(409);
+      return {
+        ok: false,
+        error:
+          "Этот номер WhatsApp уже привязан к другому аккаунту Jazu. " +
+          "Один номер можно использовать только в одном аккаунте. " +
+          "Если это ваш номер и нужно перенести — напишите в поддержку."
+      };
+    }
+
     try {
       const result = await pairWorkerConnection(agent.id, digits);
 
