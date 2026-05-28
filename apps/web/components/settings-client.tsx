@@ -268,10 +268,9 @@ export default function SettingsClient() {
               </div>
             </div>
 
-            {/* Опасная зона: удаление аккаунта. GDPR/152-ФЗ требуют этого
-                функционала. Делаем намеренно скучным и пугающим, чтобы
-                юзер не нажал случайно. */}
-            <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 sm:p-5">
+            {/* Опасная зона: удаление аккаунта. Заметный красный фон —
+                чтобы пользователь видел границу необратимого действия. */}
+            <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 sm:p-5">
               <h2 className="text-sm font-semibold text-destructive">Опасная зона</h2>
               <p className="mt-1.5 text-sm text-foreground">
                 Удаление аккаунта необратимо. Будут удалены: все агенты, подключения WhatsApp,
