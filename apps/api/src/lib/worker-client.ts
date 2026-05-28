@@ -9,9 +9,15 @@ type WorkerStatusResponse = {
   lastSeenAt: string | null;
 };
 
+/**
+ * Базовые заголовки для всех запросов к worker'у.
+ *
+ * ВАЖНО: Content-Type ставится отдельно (см. workerFetch), потому что
+ * Fastify 5 кидает FST_ERR_CTP_EMPTY_JSON_BODY на любой запрос с
+ * Content-Type: application/json и пустым body (например, DELETE без тела).
+ */
 function buildHeaders() {
   return {
-    "Content-Type": "application/json",
     "x-internal-token": env.API_INTERNAL_TOKEN
   };
 }
@@ -28,8 +34,16 @@ const WORKER_FETCH_TIMEOUT_MS = 5_000;
 async function workerFetch(url: URL, init?: RequestInit): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), WORKER_FETCH_TIMEOUT_MS);
+  // Content-Type ставим ТОЛЬКО когда есть body. Fastify 5 на стороне worker'а
+  // отбивает «Body cannot be empty when content-type is set to application/json»
+  // для DELETE/GET без тела, иначе.
+  const hasBody = init?.body !== undefined && init?.body !== null && init?.body !== "";
+  const headers = {
+    ...(init?.headers ?? {}),
+    ...(hasBody ? { "Content-Type": "application/json" } : {})
+  };
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    return await fetch(url, { ...init, headers, signal: controller.signal });
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error(`Worker request timed out after ${WORKER_FETCH_TIMEOUT_MS}ms`, { cause: err });
