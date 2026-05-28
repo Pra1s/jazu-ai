@@ -170,6 +170,7 @@ model Agent {
   testMessages     TestMessage[]
   waConnections    WaConnection[]
   conversations    Conversation[]
+  preConnectionChats WaPreConnectionChat[]
 
   @@index([userId])
 }
@@ -276,6 +277,27 @@ model WaPhoneClaim {
   user          User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([userId])
+}
+
+/// Снимок чатов, существовавших в WhatsApp ДО подключения бота.
+///
+/// Заполняется из history-sync (messaging-history.set) в момент первой
+/// привязки. Бот НИКОГДА не отвечает в этих чатах — это старые личные
+/// переписки владельца, в которые бот не должен вторгаться. В отличие от
+/// фильтра по messageTimestamp/Conversation.createdAt, ловит и те старые
+/// чаты, которых ещё нет в нашей БД (клиент написал в них впервые после
+/// подключения свежим сообщением).
+///
+/// Чистится при «Отключить» (Cascade с Agent + явно в DELETE /whatsapp).
+model WaPreConnectionChat {
+  id        String   @id @default(cuid())
+  agentId   String
+  waChatId  String
+  createdAt DateTime @default(now())
+  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, waChatId])
+  @@index([agentId])
 }
 
 model Conversation {

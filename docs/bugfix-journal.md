@@ -5,6 +5,32 @@
 
 ---
 
+## 2026-05-29 — Бот отвечал на старые диалоги (до подключения)
+
+- **Что случилось:** на новые диалоги бот отвечал правильно, но если клиент
+  писал в СТАРЫЙ диалог (переписка велась до привязки бота) — бот всё равно
+  отвечал, хотя не должен.
+- **Почему:** фильтр `botRespondsSince` ловил старый диалог только если (1)
+  `messageTimestamp` сообщения старый, или (2) Conversation уже есть в нашей БД.
+  Но старый чат из WhatsApp, которого нет в нашей БД, + свежее сообщение от
+  клиента → оба условия мимо → бот отвечал. Мы знали только чаты, прошедшие
+  через бота, а какие существовали в WhatsApp до подключения — нет.
+- **Как решили:** снимок «до-коннектных» чатов из WhatsApp history-sync.
+  • `syncFullHistory: true` в makeWASocket — полная история при привязке;
+  • worker слушает `messaging-history.set`, собирает chatId из chats+messages,
+    шлёт в API ([apps/wa-worker/src/manager.ts](../apps/wa-worker/src/manager.ts));
+  • API `POST /internal/wa-preconnection-chats` сохраняет их в новую таблицу
+    `WaPreConnectionChat`, но только в «окне свежей привязки» (botRespondsSince
+    < 15 мин) — чтобы reconnect старой сессии не пометил чаты, которые бот уже
+    ведёт ([apps/api/src/routes.ts](../apps/api/src/routes.ts));
+  • handler: если chatId в WaPreConnectionChat → `pre_connection_message`
+    ([packages/wa-pipeline/src/handler.ts](../packages/wa-pipeline/src/handler.ts));
+  • очистка снимка при «Отключить».
+- **Как проверить / не повторить:** 100% недостижимо — WhatsApp сам не отдаёт
+  полную историю за всё время; очень старый неактивный чат вне history-sync
+  теоретически проскочит. `syncFullHistory` максимизирует полноту снимка.
+  Миграция `20260529000000_wa_preconnection_chat`.
+
 ## 2026-05-29 — Анти-абуз WA-номера срабатывал задним числом
 
 - **Что случилось:** при привязке чужого (уже застолблённого) номера с другого

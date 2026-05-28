@@ -2033,6 +2033,10 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       }
     });
 
+    // Сбрасываем снимок «до-коннектных» чатов: следующая привязка снимет
+    // новый снимок из свежего history-sync.
+    await prisma.waPreConnectionChat.deleteMany({ where: { agentId: agent.id } });
+
     await recordAudit({
       event: "wa.disconnected",
       userId: agent.userId ?? null,
@@ -2260,6 +2264,50 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     });
 
     return { ok: true, alreadyClaimed: false };
+  });
+
+  // ─── Internal: pre-connection чаты (снимок из history-sync) ──────────────
+  // Worker шлёт сюда chatId, существовавшие в WhatsApp ДО подключения.
+  // Добавляем их в WaPreConnectionChat ТОЛЬКО в «окне свежей привязки»:
+  // botRespondsSince установлен недавно. Это защищает от ситуации, когда
+  // worker рестартит через дни, WhatsApp повторно шлёт history-sync со
+  // ВСЕМИ чатами (включая те, что бот уже ведёт) — мы их не должны метить.
+  const PRECONNECTION_WINDOW_MS = 15 * 60 * 1000; // 15 минут после привязки
+  app.post("/internal/wa-preconnection-chats", {
+    // FULL history-sync может содержать сотни-тысячи чатов — поднимаем лимит.
+    bodyLimit: 8 * 1024 * 1024
+  }, async (request, reply) => {
+    if (!verifyInternalToken(request.headers["x-internal-token"], env.API_INTERNAL_TOKEN, env.API_INTERNAL_TOKEN_OLD)) {
+      reply.code(401);
+      return { ok: false, error: "Unauthorized" };
+    }
+
+    const body = z.object({
+      agentId: z.string().min(1),
+      chatIds: z.array(z.string().min(1)).max(20000)
+    }).parse(request.body);
+
+    const conn = await prisma.waConnection.findUnique({
+      where: { agentId: body.agentId },
+      select: { botRespondsSince: true }
+    });
+    const respondsSince = conn?.botRespondsSince ?? null;
+    // Окно закрыто (или привязки нет) — игнорируем history-sync. Это reconnect
+    // старой сессии, чаты бота метить нельзя.
+    if (!respondsSince || Date.now() - respondsSince.getTime() > PRECONNECTION_WINDOW_MS) {
+      return { ok: true, skipped: true as const };
+    }
+
+    if (body.chatIds.length === 0) {
+      return { ok: true, added: 0 };
+    }
+
+    const result = await prisma.waPreConnectionChat.createMany({
+      data: body.chatIds.map((waChatId) => ({ agentId: body.agentId, waChatId })),
+      skipDuplicates: true
+    });
+
+    return { ok: true, added: result.count };
   });
 
   app.put("/internal/wa-auth/:agentId", {

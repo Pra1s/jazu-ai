@@ -225,6 +225,48 @@ async function pushStatusToApi(agentId: string, payload: {
 }
 
 /**
+ * Отправить в API список chatId, существовавших ДО подключения (из
+ * history-sync). API сам решит, добавлять ли их (только в окне свежей
+ * привязки — см. botRespondsSince). Best-effort.
+ */
+async function pushPreConnectionChats(agentId: string, chatIds: string[]): Promise<void> {
+  if (chatIds.length === 0) return;
+  try {
+    await fetch(new URL("/api/internal/wa-preconnection-chats", env.API_ORIGIN), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-internal-token": env.API_INTERNAL_TOKEN
+      },
+      body: JSON.stringify({ agentId, chatIds })
+    });
+  } catch (err) {
+    console.error(
+      "[wa] push pre-connection chats failed:",
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
+/** Извлекает chatId (remoteJid) из history-sync payload. Берём и из chats,
+ *  и из messages — чтобы максимально полно покрыть «до-коннектные» чаты.
+ *  Игнорируем статусы/броадкасты — это не реальные диалоги. */
+function collectHistoryChatIds(payload: {
+  chats?: Array<{ id?: string | null }> | null;
+  messages?: Array<{ key?: { remoteJid?: string | null } | null }> | null;
+}): string[] {
+  const ids = new Set<string>();
+  const add = (jid: string | null | undefined) => {
+    if (!jid) return;
+    if (jid === "status@broadcast") return;
+    ids.add(jid);
+  };
+  for (const c of payload.chats ?? []) add(c?.id);
+  for (const m of payload.messages ?? []) add(m?.key?.remoteJid);
+  return Array.from(ids);
+}
+
+/**
  * Положить inbound в Redis-очередь wa:inbound. Используется как основной
  * путь обработки — освобождает Baileys event loop моментально.
  */
@@ -360,7 +402,11 @@ export class ConnectionManager {
       // "pairing code generated but not received as notification"; фикс —
       // вернуться на Browsers.ubuntu('Chrome')). Красивое имя устройства в
       // Linked Devices не стоит сломанной привязки.
-      browser: Browsers.ubuntu("Chrome")
+      browser: Browsers.ubuntu("Chrome"),
+      // Запрашиваем максимально полную историю чатов при привязке. Нужно для
+      // pre-connection snapshot: чем полнее history-sync, тем больше старых
+      // чатов мы пометим как «до-коннектные» и бот в них не полезет.
+      syncFullHistory: true
     });
 
     const existingAttempts = this.connections.get(agentId)?.reconnectAttempts ?? 0;
@@ -383,6 +429,16 @@ export class ConnectionManager {
     });
 
     socket.ev.on("creds.update", saveCreds);
+
+    // history-sync: снимок чатов, существовавших ДО подключения. Шлём их в
+    // API — там они станут «до-коннектными» (бот в них молчит). API сам
+    // отфильтрует по окну свежей привязки, поэтому при reconnect старой
+    // сессии чаты, которые бот уже ведёт, НЕ будут помечены.
+    socket.ev.on("messaging-history.set", (payload) => {
+      if (managed.stopRequested) return;
+      const chatIds = collectHistoryChatIds(payload);
+      void pushPreConnectionChats(agentId, chatIds);
+    });
 
     socket.ev.on("connection.update", async (update) => {
       if (managed.stopRequested) {

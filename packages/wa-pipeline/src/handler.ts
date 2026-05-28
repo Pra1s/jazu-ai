@@ -281,6 +281,20 @@ export async function processWaInbound(
     }
   }
 
+  // Главный фильтр старых диалогов: чат был в WhatsApp ДО подключения
+  // (снят из history-sync в WaPreConnectionChat). Ловит даже те старые
+  // чаты, которых ещё нет в нашей Conversation — клиент написал в них
+  // впервые после подключения свежим сообщением (messageTimestamp и
+  // Conversation.createdAt в этом случае фильтр выше не отсекают).
+  // Работает независимо от botRespondsSince — снимок и есть точка отсчёта.
+  const preConnectionChat = await prisma.waPreConnectionChat.findUnique({
+    where: { agentId_waChatId: { agentId: agent.id, waChatId: input.chatId } },
+    select: { id: true }
+  });
+  if (preConnectionChat) {
+    return { status: "pre_connection_message" };
+  }
+
   const profile = agent.businessProfile
     ? businessProfileSchema.parse(agent.businessProfile.data)
     : createInitialProfile();
