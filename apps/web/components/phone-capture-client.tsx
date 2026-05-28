@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Phone } from "lucide-react";
+import { ArrowRight, Bell, Phone } from "lucide-react";
 import { apiFetch, apiJson } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
@@ -119,7 +119,7 @@ export default function PhoneCaptureClient() {
           </div>
           <h1 className="text-lg font-semibold">Добавьте личный номер</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            На этот номер будут приходить уведомления о работе бота.
+            На него будут приходить уведомления о новых лидах и работе бота.
           </p>
         </div>
 
@@ -128,6 +128,10 @@ export default function PhoneCaptureClient() {
             <label htmlFor="phone" className="block text-sm font-medium text-foreground">
               Личный номер
             </label>
+            <p className="mt-1 mb-1.5 text-xs text-muted-foreground">
+              Это ваш номер, а не номер бизнес-WhatsApp. Бот-номер вы привяжете позже
+              на странице WhatsApp.
+            </p>
             <input
               id="phone"
               type="tel"
@@ -158,6 +162,18 @@ export default function PhoneCaptureClient() {
             {busy ? "Сохраняем…" : "Сохранить"}
             {!busy && <ArrowRight className="h-4 w-4" />}
           </Button>
+        </div>
+
+        <div className="mt-5 rounded-lg border border-border bg-secondary/40 px-4 py-3 text-xs leading-5 text-muted-foreground">
+          <div className="mb-1.5 flex items-center gap-1.5 font-medium text-foreground">
+            <Bell className="h-3.5 w-3.5" />
+            Что мы будем сюда присылать
+          </div>
+          <ul className="space-y-1 pl-1">
+            <li>• уведомления о новых лидах от бота;</li>
+            <li>• статус подключения WhatsApp и важные алерты;</li>
+            <li>• ничего рекламного, без спама.</li>
+          </ul>
         </div>
 
         {error && (

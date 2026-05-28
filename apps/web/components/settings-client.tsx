@@ -237,7 +237,8 @@ export default function SettingsClient() {
             <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
               <h2 className="text-sm font-semibold">Личный номер</h2>
               <p className="mt-1.5 text-sm text-muted-foreground">
-                На этот номер приходят уведомления о работе бота. Формат +7XXXXXXXXXX
+                На этот номер приходят уведомления о новых лидах и работе бота.
+                Это ваш номер, не номер бизнес-WhatsApp. Формат +7XXXXXXXXXX
                 (Казахстан / Россия).
               </p>
               <div className="mt-4">
