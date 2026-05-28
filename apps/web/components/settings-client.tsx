@@ -268,10 +268,10 @@ export default function SettingsClient() {
               </div>
             </div>
 
-            {/* Опасная зона: удаление аккаунта. Заметный красный фон —
+            {/* Опасная зона: удаление аккаунта. Явный красный фон —
                 чтобы пользователь видел границу необратимого действия. */}
-            <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 sm:p-5">
-              <h2 className="text-sm font-semibold text-destructive">Опасная зона</h2>
+            <div className="rounded-xl border border-red-300 bg-red-50 p-4 sm:p-5">
+              <h2 className="text-sm font-semibold text-red-700">Опасная зона</h2>
               <p className="mt-1.5 text-sm text-foreground">
                 Удаление аккаунта необратимо. Будут удалены: все агенты, подключения WhatsApp,
                 переписки, лиды и личные данные. История платежей сохраняется обезличенно
@@ -288,7 +288,7 @@ export default function SettingsClient() {
                     setDeleteWaAcknowledged(false);
                     setDeleteError(null);
                   }}
-                  className="border-destructive/40 text-destructive hover:bg-destructive/10"
+                  className="border-red-300 bg-white text-red-700 hover:bg-red-100"
                 >
                   Удалить аккаунт
                 </Button>
