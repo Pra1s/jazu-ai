@@ -2239,7 +2239,16 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true, alreadyClaimed: false };
   });
 
-  app.put("/internal/wa-auth/:agentId", async (request, reply) => {
+  app.put("/internal/wa-auth/:agentId", {
+    // authState Baileys раздувается после history-sync (сотни prekeys +
+    // app-state мутации + signal sessions на каждый контакт) — легко
+    // превышает глобальный bodyLimit (256 KB). Это internal-роут, защищён
+    // x-internal-token и ходит только из wa-worker по внутренней сети,
+    // поэтому поднимаем лимит индивидуально. Без этого PUT падает с
+    // "Request body is too large", authState не сохраняется и сессия
+    // не стабилизируется (бесконечный "failed to commit mutations").
+    bodyLimit: 32 * 1024 * 1024
+  }, async (request, reply) => {
     if (!verifyInternalToken(request.headers["x-internal-token"], env.API_INTERNAL_TOKEN, env.API_INTERNAL_TOKEN_OLD)) {
       reply.code(401);
       return { ok: false, error: "Unauthorized" };
