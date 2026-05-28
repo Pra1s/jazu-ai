@@ -447,8 +447,35 @@ export class ConnectionManager {
 
       if (update.connection === "close") {
         const reasonCode = (update.lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode;
-        managed.status = "disconnected";
         managed.lastSeenAt = new Date();
+
+        // КРИТИЧНО: code 515 (restartRequired) — это НЕ ошибка. WhatsApp
+        // присылает его сразу после успешного pairing ("pairing configured
+        // successfully, expect to restart the connection"). Это инструкция
+        // «закрой сокет, открой новый с теми же creds — и заходи как
+        // зарегистрированное устройство». На это надо реагировать НЕМЕДЛЕННО
+        // и без exponential backoff. Если не успеть в 1-2 секунды, WhatsApp
+        // ставит cooldown и следующие коннекты молча отбивает с
+        // Connection Failure.
+        if (reasonCode === DisconnectReason.restartRequired) {
+          // НЕ выставляем status=disconnected — это всё ещё «pairing in
+          // progress». Иначе UI скажет «отключено» в момент завершения
+          // привязки.
+          managed.reconnectAttempts = 0;
+          if (managed.reconnectTimer) {
+            clearTimeout(managed.reconnectTimer);
+          }
+          // setImmediate, а не setTimeout(0), чтобы дать saveCreds() добежать
+          // в текущем тике event loop.
+          setImmediate(() => {
+            void this.start(agentId).catch((err: unknown) => {
+              console.error("[wa] post-515 restart failed:", err);
+            });
+          });
+          return;
+        }
+
+        managed.status = "disconnected";
         void pushStatusToApi(agentId, { status: "disconnected", qrText: null, workerSessionId: managed.workerSessionId });
 
         if (reasonCode !== DisconnectReason.loggedOut && !managed.stopRequested) {
