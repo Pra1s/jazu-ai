@@ -29,6 +29,7 @@ import {
   verifyMagicLink
 } from "./lib/auth.js";
 import { normalizeKzRuPhone } from "./lib/phone.js";
+import { hashWaPhone } from "./lib/phone-hash.js";
 import {
   buildGoogleAuthUrl,
   exchangeGoogleCode,
@@ -2026,6 +2027,123 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       select: { agentId: true }
     });
     return { agentIds: connections.map((c) => c.agentId) };
+  });
+
+  // ─── Internal: WA phone claim (анти-абуз) ───────────────────────────────
+  // Worker зовёт этот эндпоинт в момент успешного pairing
+  // (connection.update → "open"), когда уже знает реальный номер из
+  // socket.user.id. Атомарно проверяем — не привязан ли этот номер уже к
+  // ДРУГОМУ пользователю. Если да — отвечаем ALREADY_BOUND, worker должен
+  // тут же разорвать сессию.
+  //
+  // Защита от race condition: UNIQUE(phoneHash) делает INSERT атомарным.
+  // При конфликте проверяем владельца — тот же userId? обновляем
+  // lastBoundAt и говорим ok (юзер переподключил свой же номер).
+  app.post("/internal/wa-claim", async (request, reply) => {
+    if (!verifyInternalToken(request.headers["x-internal-token"], env.API_INTERNAL_TOKEN, env.API_INTERNAL_TOKEN_OLD)) {
+      reply.code(401);
+      return { ok: false, error: "Unauthorized" };
+    }
+
+    const body = z.object({
+      agentId: z.string().min(1),
+      phone: z.string().min(1)
+    }).parse(request.body);
+
+    const normalized = normalizeKzRuPhone(body.phone);
+    if (!normalized) {
+      reply.code(400);
+      return { ok: false, reason: "INVALID_PHONE" as const };
+    }
+
+    const agent = await prisma.agent.findUnique({
+      where: { id: body.agentId },
+      select: { id: true, userId: true }
+    });
+    if (!agent) {
+      reply.code(404);
+      return { ok: false, reason: "AGENT_NOT_FOUND" as const };
+    }
+    if (!agent.userId) {
+      // Анонимные агенты (без юзера) не могут «застолбить» номер — это
+      // нарушило бы саму семантику «один номер на один аккаунт».
+      reply.code(409);
+      return { ok: false, reason: "AGENT_HAS_NO_OWNER" as const };
+    }
+
+    const phoneHash = hashWaPhone(normalized);
+
+    const existing = await prisma.waPhoneClaim.findUnique({
+      where: { phoneHash },
+      select: { userId: true, agentId: true }
+    });
+
+    if (existing) {
+      if (existing.userId !== agent.userId) {
+        request.log.warn(
+          { agentId: agent.id, userId: agent.userId, claimedBy: existing.userId },
+          "wa-claim: phone already bound to different user — rejecting pair"
+        );
+        return {
+          ok: false,
+          reason: "ALREADY_BOUND" as const,
+          message:
+            "Этот номер WhatsApp уже привязан к другому аккаунту Jazu. " +
+            "Один номер можно использовать только в одном аккаунте. " +
+            "Если это ваш номер и нужно перенести — напишите в поддержку."
+        };
+      }
+
+      // Тот же владелец — это reconnect/перепривязка к другому агенту того
+      // же юзера. Обновляем метаданные.
+      await prisma.waPhoneClaim.update({
+        where: { phoneHash },
+        data: {
+          agentId: agent.id,
+          lastBoundAt: new Date()
+        }
+      });
+      return { ok: true, alreadyClaimed: true };
+    }
+
+    try {
+      await prisma.waPhoneClaim.create({
+        data: {
+          phoneHash,
+          userId: agent.userId,
+          agentId: agent.id
+        }
+      });
+    } catch (err) {
+      // Race condition: между нашими findUnique и create другой запрос
+      // успел вставить. Повторно читаем и решаем как выше.
+      const raced = await prisma.waPhoneClaim.findUnique({
+        where: { phoneHash },
+        select: { userId: true }
+      });
+      if (raced && raced.userId !== agent.userId) {
+        request.log.warn({ err }, "wa-claim: lost race with different user");
+        return {
+          ok: false,
+          reason: "ALREADY_BOUND" as const,
+          message:
+            "Этот номер WhatsApp уже привязан к другому аккаунту Jazu. " +
+            "Один номер можно использовать только в одном аккаунте. " +
+            "Если это ваш номер и нужно перенести — напишите в поддержку."
+        };
+      }
+      // Тот же владелец выиграл гонку — это ок, возвращаем успех.
+      return { ok: true, alreadyClaimed: true };
+    }
+
+    await recordAudit({
+      event: "wa.phone_claimed",
+      userId: agent.userId,
+      request,
+      metadata: { agentId: agent.id, phoneHashPrefix: phoneHash.slice(0, 8) }
+    });
+
+    return { ok: true, alreadyClaimed: false };
   });
 
   app.put("/internal/wa-auth/:agentId", async (request, reply) => {

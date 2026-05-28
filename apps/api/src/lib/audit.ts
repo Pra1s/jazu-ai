@@ -17,6 +17,8 @@ export type AuditEvent =
   | "wa.pair_requested"
   | "wa.paired"
   | "wa.disconnected"
+  | "wa.phone_claimed"
+  | "wa.phone_claim_rejected"
   | "purchase.completed"
   | "purchase.failed"
   | "session.revoked";

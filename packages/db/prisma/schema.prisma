@@ -34,6 +34,7 @@ model User {
   usageEvents     UsageEvent[]
   purchases       Purchase[]
   llmCallLogs     LlmCallLog[]
+  waPhoneClaims   WaPhoneClaim[]
 }
 
 // Лог каждого вызова OpenAI: модель, токены, стоимость, latency, статус.
@@ -223,6 +224,30 @@ model WaConnection {
   agent               Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
 
   @@index([agentId])
+}
+
+/// Реестр «WA-номеров, застолблённых пользователями».
+///
+/// Один и тот же WhatsApp-номер можно привязать только к ОДНОМУ аккаунту
+/// Jazu (анти-абуз бесплатного периода). Когда worker подтверждает
+/// успешный pairing (connection.update → open), API хэширует реальный
+/// номер с HMAC(PHONE_HASH_PEPPER) и атомарно вставляет сюда строку.
+/// Если phoneHash уже есть с другим userId — pairing откатывается,
+/// сокет рвётся, юзеру показываем ошибку.
+///
+/// phoneHash — HMAC-SHA256(normalized digits, env.PHONE_HASH_PEPPER) в hex.
+/// Pepper никогда не меняется (иначе старые хэши перестанут сходиться).
+/// Запись живёт вечно: «отпускает» номер только админ ручным DELETE.
+model WaPhoneClaim {
+  id            String   @id @default(cuid())
+  phoneHash     String   @unique
+  userId        String
+  agentId       String?
+  firstBoundAt  DateTime @default(now())
+  lastBoundAt   DateTime @default(now())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model Conversation {

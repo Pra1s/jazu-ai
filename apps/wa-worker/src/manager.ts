@@ -126,6 +126,66 @@ async function wipeAuthStateInDb(agentId: string): Promise<void> {
   });
 }
 
+/**
+ * Атомарно «застолбить» номер за владельцем агента через API.
+ *
+ * Зовётся ОДИН раз — в момент успешного pairing (connection.update→open),
+ * когда socket.user.id уже содержит реальный номер. API хэширует, проверяет
+ * уникальность в WaPhoneClaim, и:
+ *   - ok: true                      → номер наш или уже наш, продолжаем
+ *   - ok: false, ALREADY_BOUND      → этот номер у другого аккаунта,
+ *                                     надо немедленно разорвать сессию
+ *   - ok: false, любая другая       → лучше тоже разорвать, чтобы не оставить
+ *                                     юзера в подвешенном состоянии
+ *
+ * При сетевой ошибке возвращает { ok: false, networkError: true } — в этом
+ * случае мы НЕ рвём сессию (не наказываем юзера за наш сбой инфраструктуры),
+ * просто логируем и идём дальше. Claim создастся при следующем reconnect.
+ */
+async function claimWaPhone(agentId: string, phoneDigits: string): Promise<{
+  ok: boolean;
+  reason?: string;
+  message?: string;
+  networkError?: boolean;
+}> {
+  try {
+    const res = await fetch(new URL("/api/internal/wa-claim", env.API_ORIGIN), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-internal-token": env.API_INTERNAL_TOKEN
+      },
+      body: JSON.stringify({ agentId, phone: phoneDigits })
+    });
+    const data = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      reason?: string;
+      message?: string;
+    };
+    if (data.ok) return { ok: true };
+    return {
+      ok: false,
+      reason: data.reason ?? "UNKNOWN",
+      message: data.message ?? "WA phone claim rejected"
+    };
+  } catch (err) {
+    console.error("[wa-claim] network error:", err instanceof Error ? err.message : err);
+    return { ok: false, networkError: true };
+  }
+}
+
+/**
+ * Извлечь цифры номера из Baileys socket.user.id.
+ * Формат: "77001234567:1@s.whatsapp.net" или "77001234567@s.whatsapp.net".
+ * Возвращаем 7XXXXXXXXXX (без + и без device suffix).
+ */
+function extractPhoneFromJid(jid: string | undefined): string | null {
+  if (!jid) return null;
+  const local = jid.split("@")[0] ?? "";
+  const digits = local.split(":")[0] ?? "";
+  return /^\d{10,15}$/.test(digits) ? digits : null;
+}
+
 async function pushStatusToApi(agentId: string, payload: {
   status: "disconnected" | "qr" | "pairing" | "connected" | "error";
   qrText?: string | null;
@@ -306,19 +366,83 @@ export class ConnectionManager {
       }
 
       if (update.connection === "open") {
-        managed.status = "connected";
-        managed.qrText = null;
-        managed.qrDataUrl = null;
-        managed.phone = socket.user?.id ?? managed.phone ?? null;
-        managed.lastSeenAt = new Date();
-        managed.pairingMode = false;
-        managed.pairingCode = null;
-        void pushStatusToApi(agentId, {
-          status: "connected",
-          phone: managed.phone,
-          qrText: null,
-          workerSessionId: managed.workerSessionId
-        });
+        // Анти-абуз: атомарно «застолбить» номер за владельцем агента.
+        // Делаем ДО того как пометим себя connected — иначе юзер увидит
+        // «Подключено» на долю секунды, а потом «Этот номер уже занят».
+        const phoneDigits = extractPhoneFromJid(socket.user?.id);
+        if (phoneDigits) {
+          void (async () => {
+            const claim = await claimWaPhone(agentId, phoneDigits);
+            if (!claim.ok && !claim.networkError) {
+              // Чужой номер — рвём всё. wipeAuthState критичен, иначе при
+              // следующем start() Baileys поднимет creds и опять привяжется
+              // (мы же не отозвали pairing на стороне WA — мы просто отказали).
+              console.warn(
+                `[wa-claim] rejecting agent=${agentId} reason=${claim.reason}: ${claim.message}`
+              );
+              try {
+                socket.ev.removeAllListeners?.("connection.update");
+                socket.ev.removeAllListeners?.("creds.update");
+                socket.ev.removeAllListeners?.("messages.upsert");
+                const sockAny = socket as unknown as {
+                  ws?: { close?: () => void };
+                  end?: (err?: Error) => void;
+                };
+                sockAny.end?.(new Error("claim rejected"));
+                sockAny.ws?.close?.();
+              } catch {
+                // no-op
+              }
+              managed.status = "error";
+              managed.qrText = claim.message ?? "Этот номер уже привязан к другому аккаунту.";
+              managed.qrDataUrl = null;
+              managed.phone = null;
+              managed.pairingMode = false;
+              managed.pairingCode = null;
+              this.connections.delete(agentId);
+              await wipeAuthStateInDb(agentId).catch(() => undefined);
+              void pushStatusToApi(agentId, {
+                status: "error",
+                qrText: managed.qrText,
+                qrDataUrl: null,
+                phone: null,
+                workerSessionId: managed.workerSessionId
+              });
+              return;
+            }
+            // Claim OK (или networkError — claim создастся при следующем
+            // reconnect). Помечаем connected как обычно.
+            managed.status = "connected";
+            managed.qrText = null;
+            managed.qrDataUrl = null;
+            managed.phone = `+${phoneDigits}`;
+            managed.lastSeenAt = new Date();
+            managed.pairingMode = false;
+            managed.pairingCode = null;
+            void pushStatusToApi(agentId, {
+              status: "connected",
+              phone: managed.phone,
+              qrText: null,
+              workerSessionId: managed.workerSessionId
+            });
+          })();
+        } else {
+          // Не смогли распарсить номер — это аномалия Baileys. Лучше
+          // не блокировать юзера, идём по обычному пути.
+          managed.status = "connected";
+          managed.qrText = null;
+          managed.qrDataUrl = null;
+          managed.phone = socket.user?.id ?? managed.phone ?? null;
+          managed.lastSeenAt = new Date();
+          managed.pairingMode = false;
+          managed.pairingCode = null;
+          void pushStatusToApi(agentId, {
+            status: "connected",
+            phone: managed.phone,
+            qrText: null,
+            workerSessionId: managed.workerSessionId
+          });
+        }
       }
 
       if (update.connection === "close") {

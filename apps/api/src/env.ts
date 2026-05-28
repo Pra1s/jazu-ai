@@ -2,6 +2,10 @@ import { z } from "zod";
 
 const DEV_MAGIC_LINK_SECRET = "jazu-dev-magic-secret";
 const DEV_INTERNAL_TOKEN = "jazu-internal-token";
+// Pepper для HMAC-хэширования WA-номеров (анти-абуз: один номер — один аккаунт).
+// В dev допускаем дефолт, в проде ОБЯЗАТЕЛЕН и НИКОГДА не меняется (иначе
+// старые хэши перестанут совпадать с новыми и защита сломается).
+const DEV_PHONE_HASH_PEPPER = "jazu-dev-phone-hash-pepper";
 
 const baseSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -24,6 +28,7 @@ const baseSchema = z.object({
   // Для бесшовной ротации API_INTERNAL_TOKEN: API принимает оба, но wa-worker
   // и jobs шлют только CURRENT. Если _OLD не задан — проверка идёт только по CURRENT.
   API_INTERNAL_TOKEN_OLD: z.string().min(16).optional(),
+  PHONE_HASH_PEPPER: z.string().min(32).default(DEV_PHONE_HASH_PEPPER),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
@@ -59,6 +64,7 @@ const envSchema = baseSchema.superRefine((value, ctx) => {
 
   requireOverride("MAGIC_LINK_SECRET", DEV_MAGIC_LINK_SECRET, "MAGIC_LINK_SECRET");
   requireOverride("API_INTERNAL_TOKEN", DEV_INTERNAL_TOKEN, "API_INTERNAL_TOKEN");
+  requireOverride("PHONE_HASH_PEPPER", DEV_PHONE_HASH_PEPPER, "PHONE_HASH_PEPPER");
   requireSet("OPENAI_API_KEY", "OPENAI_API_KEY");
   requireSet("RESEND_API_KEY", "RESEND_API_KEY");
   requireSet("FROM_EMAIL", "FROM_EMAIL");

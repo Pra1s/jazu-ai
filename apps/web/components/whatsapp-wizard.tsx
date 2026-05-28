@@ -65,6 +65,10 @@ export default function WhatsappWizard() {
     [status]
   );
   const connectedPhone = status?.workerStatus?.phone || status?.connection?.phone || null;
+  // Worker'у некуда было передать message ошибки, кроме qrText (поле String?).
+  // На фронте если status=error, qrText трактуем как «человеческое сообщение».
+  const errorMessage =
+    status?.workerStatus?.qrText || status?.connection?.qrText || null;
 
   useEffect(() => {
     let cancelled = false;
@@ -267,6 +271,37 @@ export default function WhatsappWizard() {
         <Button className="mt-4" onClick={() => router.push("/auth")}>
           Войти
         </Button>
+      </div>
+    );
+  }
+
+  // ── Ошибка: показываем сообщение и предлагаем сбросить.
+  // Главный кейс — отказ wa-claim («этот номер уже привязан к другому
+  // аккаунту»). qrText от worker'а несёт человекочитаемый текст.
+  if (effectiveStatus === "error") {
+    return (
+      <div className="rounded-2xl border border-destructive/40 bg-destructive/5 p-8">
+        <div className="flex items-start gap-4">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+            <LogIn className="h-6 w-6 rotate-180" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-lg font-semibold text-destructive">Не удалось подключить WhatsApp</h2>
+            <p className="mt-2 text-sm leading-6 text-foreground">
+              {errorMessage ?? "Произошла ошибка при подключении. Попробуйте ещё раз."}
+            </p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void disconnect()}
+                disabled={disconnecting}
+              >
+                {disconnecting ? "Сбрасываем…" : "Сбросить и попробовать снова"}
+              </Button>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
