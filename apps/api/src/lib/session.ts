@@ -94,6 +94,13 @@ export async function getUserFromRequest(request: FastifyRequest) {
     return null;
   }
 
+  // GDPR: пользователь с deletedAt не должен считаться залогиненным даже
+  // если каким-то чудом cookie выжил после deleteUserAccount() (DELETE
+  // /auth/me чистит все sessions, но на всякий случай дублируем тут).
+  if (session.user.deletedAt) {
+    return null;
+  }
+
   return session.user;
 }
 

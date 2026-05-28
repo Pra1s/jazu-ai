@@ -21,7 +21,8 @@ export type AuditEvent =
   | "wa.phone_claim_rejected"
   | "purchase.completed"
   | "purchase.failed"
-  | "session.revoked";
+  | "session.revoked"
+  | "account.deleted";
 
 type AuditOptions = {
   event: AuditEvent;

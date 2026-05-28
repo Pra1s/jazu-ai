@@ -19,9 +19,11 @@ import {
   getOrCreateSession,
   getUserFromRequest,
   revokeSession,
-  rotateAndLoginSession
+  rotateAndLoginSession,
+  SESSION_COOKIE
 } from "./lib/session.js";
 import {
+  clearAuthCookieOptions,
   generateMagicCode,
   hashMagicCode,
   MAGIC_CODE_TTL_MS,
@@ -30,6 +32,7 @@ import {
 } from "./lib/auth.js";
 import { normalizeKzRuPhone } from "./lib/phone.js";
 import { hashWaPhone } from "./lib/phone-hash.js";
+import { deleteUserAccount } from "./lib/account-deletion.js";
 import {
   buildGoogleAuthUrl,
   exchangeGoogleCode,
@@ -974,6 +977,59 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     await revokeSession(reply, session.id);
     await recordAudit({ event: "logout", userId, request });
     return { ok: true };
+  });
+
+  // GDPR / 152-ФЗ «право на забвение».
+  // Безвозвратно удаляет аккаунт пользователя со всеми связанными данными.
+  // Confirmation: юзер должен передать свой текущий email — защита от
+  // случайных кликов и от XSS (атакующий с XSS-уязвимостью не знает email,
+  // т.к. он рендерится в DOM только после загрузки /auth/me).
+  //
+  // Что происходит подробно — см. deleteUserAccount() в lib/account-deletion.ts.
+  app.delete("/auth/me", {
+    config: {
+      // Удаление — необратимое действие. 3 попытки в минуту достаточно
+      // (учесть опечатки в email), больше — подозрительно.
+      rateLimit: { max: 3, timeWindow: "1 minute" }
+    }
+  }, async (request, reply) => {
+    const user = await getUserFromRequest(request);
+    if (!user) {
+      reply.code(401);
+      return { success: false, message: "Authentication required" };
+    }
+
+    const body = z.object({
+      confirmEmail: z.string().min(1)
+    }).parse(request.body ?? {});
+
+    // Сравнение case-insensitive — email в БД сохраняем как есть, но
+    // юзер мог ввести с другим регистром, что для email эквивалентно.
+    if (body.confirmEmail.trim().toLowerCase() !== user.email.toLowerCase()) {
+      reply.code(400);
+      return {
+        success: false,
+        message: "Email не совпадает. Введите email, под которым вы вошли."
+      };
+    }
+
+    // Записываем audit ДО удаления — иначе после wipe мы потеряем userId.
+    // AuditLog.userId nullable, но «жив» как трейс события.
+    await recordAudit({
+      event: "account.deleted",
+      userId: user.id,
+      request,
+      metadata: { emailHashPrefix: user.email.slice(0, 3) }
+    });
+
+    await deleteUserAccount(user.id);
+
+    // Сессии уже снесены внутри deleteUserAccount (deleteMany). Cookie на
+    // стороне браузера остаётся — явно говорим браузеру удалить его,
+    // чтобы он не слал нам мёртвый cookieId при следующем запросе.
+    reply.clearCookie(SESSION_COOKIE, clearAuthCookieOptions());
+
+    return { success: true };
   });
 
   // ─── Google OAuth ────────────────────────────────────────────────────────

@@ -27,6 +27,13 @@ model User {
   // на OpenAI. По умолчанию 50_000 для free trial (~10-15 диалогов в день).
   // У платных пользователей увеличивается в момент покупки пакета.
   dailyTokenLimit Int         @default(50000)
+  // GDPR/152-ФЗ: «право на забвение». При удалении аккаунта PII-поля
+  // (email/name/phone/google/avatar/telegram) обнуляются или заменяются
+  // на placeholder, а сюда ставится timestamp. Все queries фильтруют
+  // deletedAt IS NULL — такой User не может залогиниться и не виден в API.
+  // Сам ряд оставляем, чтобы FK на Purchase/LlmCallLog/UsageEvent/AuditLog
+  // оставались валидными (история транзакций сохраняется обезличенно).
+  deletedAt       DateTime?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
   sessions        Session[]
@@ -69,23 +76,32 @@ model LlmCallLog {
 // Один UsageEvent = одна (userId, chatId, periodKey) тройка.
 // periodKey формата "YYYY-MM" (UTC) — раз в месяц уникальность chatId
 // сбрасывается, и тот же клиент снова стоит 1 диалог.
+//
+// userId nullable + SetNull: при удалении аккаунта userId обнуляется, но
+// записи остаются для агрегированной аналитики. Postgres UNIQUE с NULL
+// разрешает множественные NULL, так что коллизий не будет.
 model UsageEvent {
   id         String   @id @default(cuid())
-  userId     String
+  userId     String?
   chatId     String
   periodKey  String
   agentId    String?
   createdAt  DateTime @default(now())
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@unique([userId, chatId, periodKey])
   @@index([userId, periodKey])
 }
 
 // История покупок пакетов диалогов. Пока stub-оплата — статус сразу "paid".
+//
+// userId nullable + SetNull: бухгалтерия требует сохранять записи о
+// транзакциях даже после удаления аккаунта пользователя (152-ФЗ + НК РФ
+// о хранении первичных документов). При удалении userId обнуляется,
+// сама запись с amount/createdAt/packageId остаётся.
 model Purchase {
   id           String   @id @default(cuid())
-  userId       String
+  userId       String?
   packageId    String   // "free" | "basic" | "pro" | "max" | "custom"
   conversations Int
   pricePerOne  Int      // \u20b8 за 1 диалог (на момент покупки, для прозрачности)
@@ -94,7 +110,7 @@ model Purchase {
   status       String   @default("paid") // "pending" | "paid" | "refunded"
   metadata     Json?
   createdAt    DateTime @default(now())
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([userId])
 }
@@ -241,11 +257,15 @@ model WaConnection {
 model WaPhoneClaim {
   id            String   @id @default(cuid())
   phoneHash     String   @unique
-  userId        String
+  // userId nullable И onDelete: SetNull. При удалении аккаунта userId
+  // обнуляется, но запись остаётся — иначе сломается анти-абуз (юзер мог
+  // бы удалить аккаунт, перерегаться и заново выжечь free trial с того же
+  // номера). Хэш без userId — обезличенные данные, не PII.
+  userId        String?
   agentId       String?
   firstBoundAt  DateTime @default(now())
   lastBoundAt   DateTime @default(now())
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user          User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([userId])
 }

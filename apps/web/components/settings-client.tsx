@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { apiFetch, apiJson } from "@/lib/api";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -79,6 +80,7 @@ function Input({
 }
 
 export default function SettingsClient() {
+  const router = useRouter();
   const [me, setMe] = useState<MeResponse | null>(null);
   const [telegramChatId, setTelegramChatId] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -86,6 +88,49 @@ export default function SettingsClient() {
   const [busy, setBusy] = useState(false);
   const [phoneBusy, setPhoneBusy] = useState(false);
   const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteConfirmEmail, setDeleteConfirmEmail] = useState("");
+  const [deleteAcknowledged, setDeleteAcknowledged] = useState(false);
+  const [deleteWaAcknowledged, setDeleteWaAcknowledged] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function deleteAccount() {
+    if (deleteBusy) return;
+    if (!me?.user?.email) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      const response = await apiFetch("/auth/me", {
+        method: "DELETE",
+        body: JSON.stringify({ confirmEmail: deleteConfirmEmail.trim() })
+      });
+      const data = (await response.json().catch(() => null)) as
+        | { success?: boolean; message?: string }
+        | null;
+      if (!response.ok || !data?.success) {
+        const message = data?.message ?? "Не удалось удалить аккаунт";
+        setDeleteError(message);
+        return;
+      }
+      // Аккаунт удалён. Сбрасываем глобальный auth-статус и редиректим
+      // на /auth — там пользователь увидит чистую форму логина.
+      resetAuthStatus();
+      toast.success("Аккаунт удалён");
+      router.replace("/auth");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Не удалось удалить аккаунт";
+      setDeleteError(message);
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
+  const deleteCanSubmit =
+    deleteAcknowledged &&
+    deleteWaAcknowledged &&
+    deleteConfirmEmail.trim().length > 0 &&
+    !deleteBusy;
 
   useEffect(() => {
     apiJson<MeResponse>("/settings")
@@ -222,6 +267,34 @@ export default function SettingsClient() {
                 </Button>
               </div>
             </div>
+
+            {/* Опасная зона: удаление аккаунта. GDPR/152-ФЗ требуют этого
+                функционала. Делаем намеренно скучным и пугающим, чтобы
+                юзер не нажал случайно. */}
+            <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 sm:p-5">
+              <h2 className="text-sm font-semibold text-destructive">Опасная зона</h2>
+              <p className="mt-1.5 text-sm text-foreground">
+                Удаление аккаунта необратимо. Будут удалены: все агенты, подключения WhatsApp,
+                переписки, лиды и личные данные. История платежей сохраняется обезличенно
+                для бухгалтерии.
+              </p>
+              <div className="mt-4">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setDeleteOpen(true);
+                    setDeleteConfirmEmail("");
+                    setDeleteAcknowledged(false);
+                    setDeleteWaAcknowledged(false);
+                    setDeleteError(null);
+                  }}
+                  className="border-destructive/40 text-destructive hover:bg-destructive/10"
+                >
+                  Удалить аккаунт
+                </Button>
+              </div>
+            </div>
           </div>
         </TabsContent>
 
@@ -287,6 +360,95 @@ export default function SettingsClient() {
           </div>
         </TabsContent>
       </Tabs>
+
+      {deleteOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => {
+            if (!deleteBusy) setDeleteOpen(false);
+          }}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl border border-border bg-card p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-destructive">
+              Удалить аккаунт навсегда?
+            </h3>
+            <p className="mt-2 text-sm text-foreground">
+              Это действие нельзя отменить. Чтобы продолжить, отметьте оба пункта и
+              введите свой email.
+            </p>
+
+            <div className="mt-5 space-y-3 text-sm">
+              <label className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={deleteAcknowledged}
+                  onChange={(e) => setDeleteAcknowledged(e.target.checked)}
+                  disabled={deleteBusy}
+                  className="mt-0.5"
+                />
+                <span>
+                  Я понимаю, что моя учётная запись, агенты, подключения WhatsApp,
+                  переписки и лиды будут безвозвратно удалены.
+                </span>
+              </label>
+              <label className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={deleteWaAcknowledged}
+                  onChange={(e) => setDeleteWaAcknowledged(e.target.checked)}
+                  disabled={deleteBusy}
+                  className="mt-0.5"
+                />
+                <span>
+                  Я понимаю, что WhatsApp-номера, которые я когда-либо привязывал,
+                  нельзя будет привязать к другому моему аккаунту.
+                </span>
+              </label>
+            </div>
+
+            <div className="mt-5">
+              <Field label={`Введите свой email для подтверждения: ${me?.user?.email ?? ""}`}>
+                <Input
+                  value={deleteConfirmEmail}
+                  onChange={(v) => {
+                    setDeleteConfirmEmail(v);
+                    if (deleteError) setDeleteError(null);
+                  }}
+                  placeholder={me?.user?.email ?? ""}
+                  type="email"
+                  inputMode="email"
+                  invalid={Boolean(deleteError)}
+                />
+              </Field>
+              {deleteError && (
+                <p className="mt-2 text-xs text-destructive">{deleteError}</p>
+              )}
+            </div>
+
+            <div className="mt-6 flex flex-wrap justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setDeleteOpen(false)}
+                disabled={deleteBusy}
+              >
+                Отмена
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => void deleteAccount()}
+                disabled={!deleteCanSubmit}
+              >
+                {deleteBusy ? "Удаляем…" : "Удалить аккаунт"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
