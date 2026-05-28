@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import QRCode from "qrcode";
 import {
+  Browsers,
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeWASocket,
@@ -329,15 +330,13 @@ export class ConnectionManager {
       version: version.version,
       auth: state,
       printQRInTerminal: false,
-      // WhatsApp проверяет browser-tuple при выдаче pairing code и сохраняет
-      // первый элемент как имя «устройства» в Linked Devices у клиента.
-      // Поэтому ставим бренд `app.jazu.chat`, а второй/третий элементы
-      // оставляем как у Browsers.ubuntu("Chrome") — это самая совместимая
-      // комбинация для pairing-code flow, отклонений на стороне WhatsApp
-      // на ней не наблюдалось.
-      // Влияет ТОЛЬКО на будущие привязки: уже подключённые сессии в
-      // Linked Devices остаются с прежним именем до перепривязки.
-      browser: ["app.jazu.chat", "Chrome", "Ubuntu"]
+      // ВАЖНО: только СТАНДАРТНЫЙ browser-tuple. Кастомный массив
+      // (["app.jazu.chat", "Chrome", "Ubuntu"]) ломал привязку — WhatsApp
+      // переставал доводить pairing до pair-success (см. Baileys issue #2306:
+      // "pairing code generated but not received as notification"; фикс —
+      // вернуться на Browsers.ubuntu('Chrome')). Красивое имя устройства в
+      // Linked Devices не стоит сломанной привязки.
+      browser: Browsers.ubuntu("Chrome")
     });
 
     const existingAttempts = this.connections.get(agentId)?.reconnectAttempts ?? 0;
