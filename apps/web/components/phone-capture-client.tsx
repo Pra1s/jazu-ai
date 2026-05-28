@@ -119,7 +119,7 @@ export default function PhoneCaptureClient() {
           </div>
           <h1 className="text-lg font-semibold">Добавьте личный номер</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            На него будут приходить уведомления о новых лидах и работе бота.
+            На этот номер мы будем писать в WhatsApp о новых лидах от вашего бота.
           </p>
         </div>
 
@@ -129,8 +129,7 @@ export default function PhoneCaptureClient() {
               Личный номер
             </label>
             <p className="mt-1 mb-1.5 text-xs text-muted-foreground">
-              Это ваш номер, а не номер бизнес-WhatsApp. Бот-номер вы привяжете позже
-              на странице WhatsApp.
+              Это ваш личный номер, а не номер бизнес-WhatsApp.
             </p>
             <input
               id="phone"

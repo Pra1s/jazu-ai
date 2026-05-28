@@ -2296,7 +2296,11 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         ...(workerSessionId ? { workerSessionId } : {}),
         ...(payload.messageTimestamp !== undefined ? { messageTimestamp: payload.messageTimestamp } : {})
       },
-      { telegramBotToken: env.TELEGRAM_BOT_TOKEN }
+      {
+        telegramBotToken: env.TELEGRAM_BOT_TOKEN,
+        workerUrl: env.WA_WORKER_URL,
+        internalToken: env.API_INTERNAL_TOKEN
+      }
     );
 
     if (result.status === "agent_not_found") {

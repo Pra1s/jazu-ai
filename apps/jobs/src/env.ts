@@ -22,6 +22,10 @@ const schema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
+  // wa-worker для отправки WA-уведомлений владельцу о новых лидах.
+  // Опционально: если не задан, WA-уведомления не шлются (Telegram работает).
+  WA_WORKER_URL: z.string().url().optional(),
+  API_INTERNAL_TOKEN: z.string().optional(),
   JOBS_CONCURRENCY: z.coerce.number().int().positive().default(10),
   JOBS_INBOUND_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
   /** Порт встроенного Fastify под /healthz и /readyz. */

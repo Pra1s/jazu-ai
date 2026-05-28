@@ -234,41 +234,6 @@ export default function SettingsClient() {
               </div>
             </div>
 
-            <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
-              <h2 className="text-sm font-semibold">Личный номер</h2>
-              <p className="mt-1.5 text-sm text-muted-foreground">
-                На этот номер приходят уведомления о новых лидах и работе бота.
-                Это ваш номер, не номер бизнес-WhatsApp. Формат +7XXXXXXXXXX
-                (Казахстан / Россия).
-              </p>
-              <div className="mt-4">
-                <Field label="Номер телефона">
-                  <Input
-                    value={phone}
-                    onChange={(v) => {
-                      setPhone(formatPhoneInput(v));
-                      if (phoneError) setPhoneError(null);
-                    }}
-                    placeholder="+7 701 123 45 67"
-                    type="tel"
-                    inputMode="tel"
-                    invalid={Boolean(phoneError)}
-                  />
-                </Field>
-                {phoneError && (
-                  <p className="mt-2 text-xs text-destructive">{phoneError}</p>
-                )}
-              </div>
-              <div className="mt-4 flex gap-2">
-                <Button
-                  onClick={() => void savePhone()}
-                  disabled={phoneBusy || !phone.trim() || !phoneDirty}
-                >
-                  {phoneBusy ? "Сохраняю…" : "Сохранить номер"}
-                </Button>
-              </div>
-            </div>
-
             {/* Опасная зона: удаление аккаунта. Явный красный фон —
                 чтобы пользователь видел границу необратимого действия. */}
             <div className="rounded-xl border border-red-300 bg-red-50 p-4 sm:p-5">
@@ -300,28 +265,73 @@ export default function SettingsClient() {
 
         {/* Notifications tab */}
         <TabsContent value="notifications">
-          <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
-            <h2 className="text-sm font-semibold">Telegram для горячих лидов</h2>
-            <p className="mt-1.5 text-sm text-muted-foreground">
-              Когда AI определяет горячий лид, он пришлёт summary вам в Telegram.
-            </p>
-            <div className="mt-4">
-              <Field label="Telegram Chat ID">
-                <Input
-                  value={telegramChatId}
-                  onChange={setTelegramChatId}
-                  placeholder="123456789"
-                  type="text"
-                />
-              </Field>
+          <div className="space-y-4">
+            {/* Основной канал: WhatsApp на личный номер. */}
+            <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
+              <h2 className="text-sm font-semibold">Личный номер для уведомлений</h2>
+              <p className="mt-1.5 text-sm text-muted-foreground">
+                На этот номер бот будет писать в WhatsApp о новых лидах. Если он
+                совпадает с номером бизнес-WhatsApp — уведомления придут в чат
+                «Сообщения себе». Формат +7XXXXXXXXXX (Казахстан / Россия).
+              </p>
+              {initialPhone && (
+                <div className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-700">
+                  Сохранён: {initialPhone}
+                </div>
+              )}
+              <div className="mt-4">
+                <Field label="Номер телефона">
+                  <Input
+                    value={phone}
+                    onChange={(v) => {
+                      setPhone(formatPhoneInput(v));
+                      if (phoneError) setPhoneError(null);
+                    }}
+                    placeholder="+7 701 123 45 67"
+                    type="tel"
+                    inputMode="tel"
+                    invalid={Boolean(phoneError)}
+                  />
+                </Field>
+                {phoneError && (
+                  <p className="mt-2 text-xs text-destructive">{phoneError}</p>
+                )}
+              </div>
+              <div className="mt-4 flex gap-2">
+                <Button
+                  onClick={() => void savePhone()}
+                  disabled={phoneBusy || !phone.trim() || !phoneDirty}
+                >
+                  {phoneBusy ? "Сохраняю…" : "Сохранить номер"}
+                </Button>
+              </div>
             </div>
-            <p className="mt-3 text-xs text-muted-foreground">
-              Узнать chat id: напишите @userinfobot в Telegram.
-            </p>
-            <div className="mt-4 flex gap-2">
-              <Button onClick={() => void save()} disabled={busy}>
-                {busy ? "Сохраняю…" : "Сохранить"}
-              </Button>
+
+            {/* Опциональный второй канал: Telegram. */}
+            <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
+              <h2 className="text-sm font-semibold">Telegram (дополнительный канал)</h2>
+              <p className="mt-1.5 text-sm text-muted-foreground">
+                Лиды также можно получать в Telegram. Основной канал — WhatsApp;
+                Telegram включается по желанию.
+              </p>
+              <div className="mt-4">
+                <Field label="Telegram Chat ID">
+                  <Input
+                    value={telegramChatId}
+                    onChange={setTelegramChatId}
+                    placeholder="123456789"
+                    type="text"
+                  />
+                </Field>
+              </div>
+              <p className="mt-3 text-xs text-muted-foreground">
+                Узнать chat id: напишите @userinfobot в Telegram.
+              </p>
+              <div className="mt-4 flex gap-2">
+                <Button onClick={() => void save()} disabled={busy}>
+                  {busy ? "Сохраняю…" : "Сохранить"}
+                </Button>
+              </div>
             </div>
           </div>
         </TabsContent>

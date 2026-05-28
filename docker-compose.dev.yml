@@ -190,6 +190,7 @@ services:
       NODE_ENV: development
       DATABASE_URL: postgresql://jazu:jazu@postgres:5432/jazu
       REDIS_URL: redis://redis:6379
+      WA_WORKER_URL: http://wa-worker:4001
       JOBS_CONCURRENCY: "10"
     volumes:
       - ./:/app

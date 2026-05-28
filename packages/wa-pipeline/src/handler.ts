@@ -9,7 +9,7 @@ import {
   businessProfileSchema,
   type ActionButton
 } from "@jazu/shared";
-import { sendTelegramLead } from "./notifications.js";
+import { sendTelegramLead, sendWhatsappOwnerNotification } from "./notifications.js";
 import { trackConversationUsage, type UsageView } from "./billing.js";
 import { buildLlmTelemetry } from "./llm-telemetry.js";
 
@@ -102,6 +102,14 @@ export type WaInboundOptions = {
   prisma?: PrismaClient;
   telegramBotToken?: string | undefined;
   /**
+   * URL wa-worker (env.WA_WORKER_URL) + internal-токен. Нужны, чтобы при
+   * новом лиде отправить владельцу уведомление в WhatsApp через его же бота.
+   * Если не переданы — WA-уведомление не отправляется (Telegram-канал
+   * по-прежнему работает независимо).
+   */
+  workerUrl?: string | undefined;
+  internalToken?: string | undefined;
+  /**
    * Bot-loop protection: если за последний час бот уже ответил этому chatId
    * больше N раз — пропускаем без LLM-вызова. Защищает от бесконечного
    * «бот → бот» цикла и от спам-ботов на стороне клиента.
@@ -158,7 +166,7 @@ async function writeLeadIfNeeded(
   summary: string,
   message: string,
   shouldCreate: boolean,
-  telegramBotToken: string | undefined
+  options: WaInboundOptions
 ): Promise<string | null> {
   if (!shouldCreate) return null;
   const existing = await prisma.lead.findFirst({
@@ -181,12 +189,33 @@ async function writeLeadIfNeeded(
 
   const agent = await prisma.agent.findUnique({
     where: { id: agentId },
-    include: { user: true }
+    include: { user: true, waConnections: { orderBy: { createdAt: "desc" }, take: 1 } }
   });
 
+  // Канал 1 (основной): WhatsApp на личный номер владельца через его бота.
+  // Шлём только если бот подключён (есть activный WaConnection) и у юзера
+  // указан личный номер. Если личный номер == номер бота — уйдёт «себе».
+  const waConnection = agent?.waConnections?.[0];
+  if (
+    agent?.user?.phone &&
+    waConnection?.status === "connected" &&
+    options.workerUrl &&
+    options.internalToken
+  ) {
+    void sendWhatsappOwnerNotification({
+      workerUrl: options.workerUrl,
+      internalToken: options.internalToken,
+      agentId: agent.id,
+      personalPhone: agent.user.phone,
+      botPhone: waConnection.phone,
+      text: [`🔔 Новый лид`, summary, `Агент: ${agent.name}`].join("\n\n")
+    });
+  }
+
+  // Канал 2 (опциональный, независимый): Telegram, если указан chat id.
   if (agent?.user?.telegramChatId) {
     void sendTelegramLead(
-      telegramBotToken,
+      options.telegramBotToken,
       agent.user.telegramChatId,
       [`<b>Новый лид</b>`, summary, `Agent: ${agent.name}`].join("\n")
     );
@@ -368,7 +397,7 @@ export async function processWaInbound(
     summary,
     input.message,
     runtimeTurn.shouldHandoff,
-    options.telegramBotToken
+    options
   );
 
   return {
