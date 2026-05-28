@@ -149,14 +149,16 @@ export default function WhatsappWizard() {
   /**
    * Запросить pairing code.
    *
-   * Если в БД уже висит активная pairing/qr-сессия (например, юзер просил код,
-   * не успел ввести, сессия осталась) — ОБЯЗАТЕЛЬНО сначала зовём
-   * DELETE /whatsapp, чтобы worker полностью почистил authState. Иначе
-   * WhatsApp отбивает и старый, и новый код как «неверный»: на стороне
-   * сервера висит partial-сессия с предыдущей попытки.
+   * Никакого reset с фронта НЕ делаем: `manager.pair()` на воркере сам
+   * правильно разруливает все кейсы (идемпотентность по TTL, wipe authState
+   * при повторе с другим номером, чистый старт). Если мы дополнительно
+   * звали DELETE /whatsapp перед /whatsapp/pair, получался ДВОЙНОЙ stop:
+   * worker рвал сокет, через 100ms стартовал новый, через ещё 100ms
+   * запрашивал код — WhatsApp не успевал зачистить старую pairing-сессию,
+   * новый код выпускался, но push-уведомления на телефон не приходили.
    *
-   * Идемпотентный кейс (тот же номер, код ещё в TTL) обрабатывает worker —
-   * вернёт тот же код, что и в первый раз.
+   * Явный «начать с нуля» нужен только если юзер сам нажал
+   * «Сбросить и заново» — это делает resetAndRetry().
    */
   async function requestPairCode() {
     if (requestingCode) return;
@@ -166,22 +168,6 @@ export default function WhatsappWizard() {
       return;
     }
     setRequestingCode(true);
-
-    const needsReset =
-      Boolean(pairCode) ||
-      effectiveStatus === "pairing" ||
-      effectiveStatus === "qr" ||
-      effectiveStatus === "error";
-    if (needsReset) {
-      setPairCode(null);
-      stopPolling();
-      try {
-        await apiFetch("/whatsapp", { method: "DELETE" });
-      } catch {
-        // не критично, дальше попробуем выдать код в любом случае
-      }
-      await refreshStatus();
-    }
 
     try {
       const res = await apiFetch("/whatsapp/pair", {
@@ -207,10 +193,26 @@ export default function WhatsappWizard() {
     }
   }
 
-  // Кнопка «Сбросить и заново» — теперь просто алиас requestPairCode, потому
-  // что он сам делает reset при необходимости. Оставляем явный wrapper
-  // для UX: пользователь хочет понятную кнопку «начать с нуля».
+  // «Сбросить и заново» — явный полный reset: чистим authState через
+  // DELETE /whatsapp, потом запрашиваем код заново. Используем только если
+  // юзер реально хочет начать с чистого листа (например, прошлый код не
+  // подошёл).
   async function resetAndRetry() {
+    if (requestingCode) return;
+    setError(null);
+    setPairCode(null);
+    stopPolling();
+    setRequestingCode(true);
+    try {
+      try {
+        await apiFetch("/whatsapp", { method: "DELETE" });
+      } catch {
+        // best-effort
+      }
+      await refreshStatus();
+    } finally {
+      setRequestingCode(false);
+    }
     await requestPairCode();
   }
 
