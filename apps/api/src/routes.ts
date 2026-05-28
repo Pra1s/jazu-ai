@@ -95,7 +95,11 @@ const whatsappInboundSchema = z.object({
   chatId: z.string().min(1),
   senderName: z.string().optional(),
   message: z.string().min(1),
-  waMessageId: z.string().optional()
+  waMessageId: z.string().optional(),
+  // Baileys.message.messageTimestamp — Unix-секунды. Используется для
+  // фильтра «бот отвечает только после подключения». Опционально для
+  // обратной совместимости с тестами и legacy интеграциями.
+  messageTimestamp: z.number().int().positive().optional()
 });
 
 const whatsappSendBodySchema = z.object({
@@ -1992,7 +1996,10 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         workerSessionId: null,
         phone: null,
         authState: {},
-        authStateUpdatedAt: new Date()
+        authStateUpdatedAt: new Date(),
+        // Сбрасываем «отсечку»: следующая привязка должна поставить новую,
+        // основанную на момент того нового подключения.
+        botRespondsSince: null
       },
       create: {
         agentId: agent.id,
@@ -2030,8 +2037,23 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       qrText: z.string().nullable().optional(),
       qrDataUrl: z.string().nullable().optional(),
       phone: z.string().nullable().optional(),
-      workerSessionId: z.string().nullable().optional()
+      workerSessionId: z.string().nullable().optional(),
+      botRespondsSince: z.string().datetime().nullable().optional()
     }).parse(request.body);
+
+    // botRespondsSince ставим ТОЛЬКО если в БД пусто (первая привязка после
+    // disconnect). При авто-reconnect worker присылает тот же флаг, но мы
+    // не хотим переписывать — иначе при каждом сетевом блипе бот «забывает»
+    // с кем уже общался, и Conversation, созданные минуту назад, станут
+    // «доконнектными».
+    const existing = await prisma.waConnection.findUnique({
+      where: { agentId: body.agentId },
+      select: { botRespondsSince: true }
+    });
+    const newBotRespondsSince =
+      body.botRespondsSince && !existing?.botRespondsSince
+        ? new Date(body.botRespondsSince)
+        : undefined;
 
     await prisma.waConnection.upsert({
       where: { agentId: body.agentId },
@@ -2041,7 +2063,8 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         qrDataUrl: body.qrDataUrl ?? null,
         workerSessionId: body.workerSessionId ?? null,
         phone: body.phone ?? null,
-        lastSeenAt: new Date()
+        lastSeenAt: new Date(),
+        ...(newBotRespondsSince ? { botRespondsSince: newBotRespondsSince } : {})
       },
       create: {
         agentId: body.agentId,
@@ -2051,7 +2074,8 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         qrDataUrl: body.qrDataUrl ?? null,
         workerSessionId: body.workerSessionId ?? null,
         phone: body.phone ?? null,
-        lastSeenAt: new Date()
+        lastSeenAt: new Date(),
+        botRespondsSince: body.botRespondsSince ? new Date(body.botRespondsSince) : null
       }
     });
 
@@ -2269,7 +2293,8 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         ...(payload.senderName !== undefined ? { senderName: payload.senderName } : {}),
         message: payload.message,
         ...(payload.waMessageId !== undefined ? { waMessageId: payload.waMessageId } : {}),
-        ...(workerSessionId ? { workerSessionId } : {})
+        ...(workerSessionId ? { workerSessionId } : {}),
+        ...(payload.messageTimestamp !== undefined ? { messageTimestamp: payload.messageTimestamp } : {})
       },
       { telegramBotToken: env.TELEGRAM_BOT_TOKEN }
     );
@@ -2312,6 +2337,15 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         summary: null,
         leadId: null,
         blocked: "bot_paused" as const
+      };
+    }
+    if (result.status === "pre_connection_message") {
+      return {
+        ok: true,
+        reply: null,
+        summary: null,
+        leadId: null,
+        blocked: "pre_connection" as const
       };
     }
 

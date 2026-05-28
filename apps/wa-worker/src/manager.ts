@@ -49,6 +49,8 @@ const PAIRING_CODE_TTL_MS = 50_000;
 type WAMessageLike = {
   key: { fromMe?: boolean | null; remoteJid?: string | null; id?: string | null };
   pushName?: string | null;
+  /** Unix-секунды (Baileys: number | Long). Возраст оригинального сообщения. */
+  messageTimestamp?: number | { toNumber?: () => number } | null;
   message?: {
     conversation?: string | null;
     extendedTextMessage?: { text?: string | null } | null;
@@ -57,6 +59,17 @@ type WAMessageLike = {
     documentMessage?: { caption?: string | null } | null;
   } | null;
 };
+
+/** Baileys присылает messageTimestamp либо как number, либо как Long
+ *  (зависит от proto-парсинга). Унифицируем в number или undefined. */
+function extractMessageTimestamp(ts: WAMessageLike["messageTimestamp"]): number | undefined {
+  if (ts === null || ts === undefined) return undefined;
+  if (typeof ts === "number") return ts;
+  if (typeof ts === "object" && typeof ts.toNumber === "function") {
+    return ts.toNumber();
+  }
+  return undefined;
+}
 
 function getTextMessage(message: WAMessageLike): string | null {
   const content = message.message;
@@ -192,6 +205,9 @@ async function pushStatusToApi(agentId: string, payload: {
   qrDataUrl?: string | null;
   phone?: string | null;
   workerSessionId?: string | null;
+  /** ISO-строка. Передаётся ТОЛЬКО при connection.open после успешного claim —
+   *  значит «начни отвечать с этого момента, всё что раньше — игнор». */
+  botRespondsSince?: string | null;
 }) {
   try {
     await fetch(new URL("/api/whatsapp/qr-update", env.API_ORIGIN), {
@@ -217,7 +233,8 @@ async function enqueueInbound(
   senderName: string | undefined,
   message: string,
   waMessageId: string | undefined,
-  workerSessionId: string
+  workerSessionId: string,
+  messageTimestamp: number | undefined
 ): Promise<void> {
   const queue = getInboundQueue();
   // Inbound у нас приходит не из HTTP, поэтому request-id генерим тут.
@@ -230,7 +247,8 @@ async function enqueueInbound(
     workerSessionId,
     requestId,
     ...(senderName !== undefined ? { senderName } : {}),
-    ...(waMessageId !== undefined ? { waMessageId } : {})
+    ...(waMessageId !== undefined ? { waMessageId } : {}),
+    ...(messageTimestamp !== undefined ? { messageTimestamp } : {})
   };
   await queue.add("wa-inbound", payload, {
     // Тот же dedupe-ключ, что и в API endpoint /whatsapp/inbound/enqueue.
@@ -249,7 +267,8 @@ async function sendInboundToApi(
   senderName: string | undefined,
   message: string,
   waMessageId: string | undefined,
-  workerSessionId: string
+  workerSessionId: string,
+  messageTimestamp: number | undefined
 ) {
   const response = await fetch(new URL("/api/whatsapp/inbound", env.API_ORIGIN), {
     method: "POST",
@@ -263,7 +282,8 @@ async function sendInboundToApi(
       chatId,
       senderName,
       message,
-      waMessageId
+      waMessageId,
+      messageTimestamp
     })
   });
 
@@ -412,6 +432,11 @@ export class ConnectionManager {
             }
             // Claim OK (или networkError — claim создастся при следующем
             // reconnect). Помечаем connected как обычно.
+            //
+            // botRespondsSince: фиксируем «бот отвечает только на сообщения
+            // и чаты ПОСЛЕ этого момента». Защита от history-sync flood
+            // (WhatsApp при connection шлёт пачку старых непрочитанных) и
+            // от вторжения бота в старые чаты юзера.
             managed.status = "connected";
             managed.qrText = null;
             managed.qrDataUrl = null;
@@ -423,7 +448,8 @@ export class ConnectionManager {
               status: "connected",
               phone: managed.phone,
               qrText: null,
-              workerSessionId: managed.workerSessionId
+              workerSessionId: managed.workerSessionId,
+              botRespondsSince: new Date().toISOString()
             });
           })();
         } else {
@@ -440,7 +466,8 @@ export class ConnectionManager {
             status: "connected",
             phone: managed.phone,
             qrText: null,
-            workerSessionId: managed.workerSessionId
+            workerSessionId: managed.workerSessionId,
+            botRespondsSince: new Date().toISOString()
           });
         }
       }
@@ -520,13 +547,14 @@ export class ConnectionManager {
 
         const senderName = message.pushName || undefined;
         const waMsgId = message.key.id ?? undefined;
+        const messageTimestamp = extractMessageTimestamp(message.messageTimestamp);
 
         // Production path: enqueue в Redis. Ответ прилетит обратно через
         // wa:outbound и его отправит outboundWorker (другой consumer ниже).
         // Baileys event loop не блокируется ни на LLM, ни на DB.
         if (env.REDIS_URL) {
           try {
-            await enqueueInbound(agentId, chatId, senderName, text, waMsgId, managed.workerSessionId);
+            await enqueueInbound(agentId, chatId, senderName, text, waMsgId, managed.workerSessionId, messageTimestamp);
             continue;
           } catch (err) {
             console.error(
@@ -547,7 +575,8 @@ export class ConnectionManager {
               senderName,
               text,
               waMsgId,
-              managed.workerSessionId
+              managed.workerSessionId,
+              messageTimestamp
             );
             if (result.reply) {
               await socket.sendMessage(chatId, { text: result.reply });

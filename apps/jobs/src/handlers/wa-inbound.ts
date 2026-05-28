@@ -78,4 +78,9 @@ export async function handleWaInbound(job: Job<WaInboundJob>): Promise<void> {
     log.info({ chatId }, "wa:inbound bot paused by owner — drop");
     return;
   }
+
+  if (result.status === "pre_connection_message") {
+    log.info({ chatId }, "wa:inbound pre-connection message — drop");
+    return;
+  }
 }

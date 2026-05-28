@@ -235,6 +235,14 @@ model WaConnection {
   qrDataUrl           String?
   workerSessionId     String?
   lastSeenAt          DateTime?
+  // Бот отвечает только на сообщения с messageTimestamp >= этой даты И
+  // только в Conversation, созданных >= этой даты. Защита от:
+  //   - history sync flood при подключении (старые непрочитанные от друзей,
+  //     которые WhatsApp догоняет за последний месяц);
+  //   - вторжения бота в чаты, которые шли вне его.
+  // Выставляется автоматически при каждом успешном connection.open.
+  // NULL = «фильтр выключен» (legacy / dev).
+  botRespondsSince    DateTime?
   createdAt           DateTime      @default(now())
   updatedAt           DateTime      @updatedAt
   agent               Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)

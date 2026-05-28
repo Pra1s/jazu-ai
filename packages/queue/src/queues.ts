@@ -47,6 +47,11 @@ export type WaInboundJob = {
    * отбросить устаревшее сообщение без ответа.
    */
   workerSessionId?: string;
+  /** Unix-секунды, когда оригинальное сообщение было отправлено клиентом
+   *  (Baileys: message.messageTimestamp). Используется, чтобы не отвечать
+   *  на history-sync (старые сообщения, которые WhatsApp присылает пачкой
+   *  при connection). См. WaConnection.botRespondsSince. */
+  messageTimestamp?: number;
   /** request-id для end-to-end-трассировки (HTTP → BullMQ → log → SSE). */
   requestId?: string;
 };

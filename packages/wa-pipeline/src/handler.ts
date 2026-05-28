@@ -44,6 +44,13 @@ export type WaInboundInput = {
    * совпадает. Защита от race-condition при перепривязке WA-аккаунта.
    */
   workerSessionId?: string;
+  /**
+   * Unix-секунды (Baileys.message.messageTimestamp). Если у WaConnection
+   * выставлен botRespondsSince, сообщения с timestamp до этой отсечки
+   * считаются «доконнектными» — бот их игнорирует и не сохраняет.
+   * Это история-sync flood при подключении.
+   */
+  messageTimestamp?: number;
 };
 
 export type WaInboundResult =
@@ -78,6 +85,17 @@ export type WaInboundResult =
     }
   | {
       status: "bot_paused";
+    }
+  | {
+      /**
+       * Сообщение или чат старше отсечки `WaConnection.botRespondsSince`.
+       * Бот не отвечает, сообщение НЕ сохраняем, квоту НЕ списываем.
+       * Случается:
+       *   - история-sync при первом подключении (старые непрочитанные
+       *     от друзей за последний месяц);
+       *   - реальный inbound в чате, который существовал до подключения.
+       */
+      status: "pre_connection_message";
     };
 
 export type WaInboundOptions = {
@@ -202,6 +220,36 @@ export async function processWaInbound(
   // фактически потеряется (что и хотел владелец).
   if (!agent.botEnabled) {
     return { status: "bot_paused" };
+  }
+
+  // Фильтр «бот отвечает только на сообщения после подключения».
+  // Защищает от:
+  //   1) history-sync flood: WhatsApp при connection шлёт пачку старых
+  //      непрочитанных сообщений за последний месяц. messageTimestamp у них
+  //      в прошлом — отсекаем по нему.
+  //   2) Вторжения бота в чаты, которые шли вне его. Если Conversation
+  //      существовал до подключения (например, юзер раньше уже был привязан),
+  //      бот не должен туда лезть.
+  // Если botRespondsSince=NULL — фильтр выключен (legacy / dev).
+  const waConnection = await prisma.waConnection.findUnique({
+    where: { agentId: agent.id },
+    select: { botRespondsSince: true }
+  });
+  const respondsSince = waConnection?.botRespondsSince ?? null;
+  if (respondsSince) {
+    if (input.messageTimestamp !== undefined) {
+      const msgDate = new Date(input.messageTimestamp * 1000);
+      if (msgDate < respondsSince) {
+        return { status: "pre_connection_message" };
+      }
+    }
+    const existingConversation = await prisma.conversation.findUnique({
+      where: { agentId_waChatId: { agentId: agent.id, waChatId: input.chatId } },
+      select: { createdAt: true }
+    });
+    if (existingConversation && existingConversation.createdAt < respondsSince) {
+      return { status: "pre_connection_message" };
+    }
   }
 
   const profile = agent.businessProfile
