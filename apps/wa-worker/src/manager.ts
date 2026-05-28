@@ -318,10 +318,34 @@ export class ConnectionManager {
     };
   }
 
-  async start(agentId: string, options: { fresh?: boolean } = {}): Promise<PublicConnectionState> {
+  async start(
+    agentId: string,
+    options: { fresh?: boolean; restart?: boolean } = {}
+  ): Promise<PublicConnectionState> {
     const existing = this.getConnection(agentId);
-    if (!options.fresh && existing && !existing.stopRequested && existing.status !== "disconnected") {
+    // restart=true ОБХОДИТ этот guard: после code 515 managed ещё «живой»
+    // (status="pairing"/"connecting"), но сокет мёртв — нужно пересоздать
+    // его с теми же creds, а не вернуть осиротевшее соединение.
+    if (
+      !options.fresh &&
+      !options.restart &&
+      existing &&
+      !existing.stopRequested &&
+      existing.status !== "disconnected"
+    ) {
       return this.publicState(existing);
+    }
+
+    // Пересоздаём сокет — снимаем listeners со старого, чтобы его фоновые
+    // эвенты (или поздний close после 515) не дёргали обновлённый managed.
+    if (existing?.socket) {
+      try {
+        existing.socket.ev.removeAllListeners?.("connection.update");
+        existing.socket.ev.removeAllListeners?.("creds.update");
+        existing.socket.ev.removeAllListeners?.("messages.upsert");
+      } catch {
+        // no-op
+      }
     }
 
     const { state, saveCreds } = await useDbAuthState(agentId, { fresh: options.fresh ?? false });
@@ -493,8 +517,12 @@ export class ConnectionManager {
           }
           // setImmediate, а не setTimeout(0), чтобы дать saveCreds() добежать
           // в текущем тике event loop.
+          // restart=true КРИТИЧНО: иначе guard в start() увидит managed со
+          // статусом не-disconnected и вернёт мёртвое соединение, не пересоздав
+          // сокет — reconnect не случится, WhatsApp по таймауту инвалидирует
+          // линк, телефон покажет «не удалось».
           setImmediate(() => {
-            void this.start(agentId).catch((err: unknown) => {
+            void this.start(agentId, { restart: true }).catch((err: unknown) => {
               console.error("[wa] post-515 restart failed:", err);
             });
           });
