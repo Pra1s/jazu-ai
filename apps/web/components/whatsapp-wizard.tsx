@@ -6,6 +6,7 @@ import { CheckCircle2, QrCode, Smartphone, RefreshCw, Loader2, LogIn } from "luc
 import { toast } from "sonner";
 import { apiFetch, apiJson } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { FormAlert } from "@/components/ui/form-alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/cn";
 
@@ -282,13 +283,13 @@ export default function WhatsappWizard() {
   // аккаунту»). qrText от worker'а несёт человекочитаемый текст.
   if (effectiveStatus === "error") {
     return (
-      <div className="rounded-2xl border border-destructive/40 bg-destructive/5 p-8">
+      <div className="rounded-2xl border border-red-200 bg-red-50 p-8">
         <div className="flex items-start gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-600">
             <LogIn className="h-6 w-6 rotate-180" />
           </div>
           <div className="min-w-0 flex-1">
-            <h2 className="text-lg font-semibold text-destructive">Не удалось подключить WhatsApp</h2>
+            <h2 className="text-lg font-semibold text-red-700">Не удалось подключить WhatsApp</h2>
             <p className="mt-2 text-sm leading-6 text-foreground">
               {errorMessage ?? "Произошла ошибка при подключении. Попробуйте ещё раз."}
             </p>
@@ -331,7 +332,7 @@ export default function WhatsappWizard() {
                 size="sm"
                 onClick={() => void disconnect()}
                 disabled={disconnecting}
-                className="border-destructive/40 text-destructive hover:bg-destructive/10"
+                className="border-red-300 text-red-600 hover:bg-red-50"
               >
                 {disconnecting ? "Отключаем…" : "Отключить"}
               </Button>
@@ -507,9 +508,9 @@ export default function WhatsappWizard() {
         </Tabs>
 
         {error && (
-          <div className="mt-4 rounded-lg bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          <FormAlert variant="error" className="mt-4">
             {error}
-          </div>
+          </FormAlert>
         )}
       </div>
 

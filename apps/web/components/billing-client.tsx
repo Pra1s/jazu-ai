@@ -226,7 +226,7 @@ export default function BillingClient() {
       {(error || successMsg) && (
         <div className="flex justify-center">
           {error && (
-            <div className="rounded-full bg-destructive/10 px-4 py-1.5 text-xs text-destructive">
+            <div className="rounded-full border border-red-200 bg-red-50 px-4 py-1.5 text-xs font-medium text-red-700">
               {error}
             </div>
           )}

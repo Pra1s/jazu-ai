@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, ArrowRight, Zap } from "lucide-react";
 import { apiFetch, apiJson, API_BASE_URL } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { FormAlert } from "@/components/ui/form-alert";
 import { cn } from "@/lib/cn";
 import { resetAuthStatus } from "@/lib/use-auth-status";
 
@@ -41,6 +42,7 @@ export default function AuthClient() {
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  const [messageKind, setMessageKind] = useState<"error" | "success">("success");
   const [codeError, setCodeError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [googleEnabled, setGoogleEnabled] = useState(false);
@@ -73,6 +75,7 @@ export default function AuthClient() {
 
   useEffect(() => {
     if (errorParam) {
+      setMessageKind("error");
       setMessage(`Ошибка Google-входа: ${errorParam.replace(/^google_/, "")}`);
     }
   }, [errorParam]);
@@ -87,6 +90,16 @@ export default function AuthClient() {
 
   const cooldownSecondsLeft = Math.max(0, Math.ceil((lockUntil - now) / 1000));
   const cooldownActive = cooldownSecondsLeft > 0;
+
+  function showError(text: string) {
+    setMessageKind("error");
+    setMessage(text);
+  }
+
+  function showSuccess(text: string) {
+    setMessageKind("success");
+    setMessage(text);
+  }
 
   function startCooldown(seconds: number) {
     const ts = Date.now() + seconds * 1000;
@@ -115,7 +128,7 @@ export default function AuthClient() {
             ? Math.min(MAGIC_LINK_COOLDOWN_SECONDS, Math.ceil(retryAfter))
             : MAGIC_LINK_COOLDOWN_SECONDS;
         startCooldown(seconds);
-        setMessage(
+        showError(
           data?.message ??
             data?.error ??
             `Слишком часто. Подождите ${seconds} сек.`
@@ -124,20 +137,20 @@ export default function AuthClient() {
       }
 
       if (!response.ok || !data?.ok) {
-        setMessage(data?.error ?? data?.message ?? "Не удалось отправить код");
+        showError(data?.error ?? data?.message ?? "Не удалось отправить код");
         return;
       }
 
       setStage("code");
       setCode("");
-      setMessage(
+      showSuccess(
         data.devCode
           ? `Для теста: ${data.devCode}`
           : "Мы отправили 6-значный код на ваш email."
       );
       startCooldown(MAGIC_LINK_COOLDOWN_SECONDS);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Не удалось отправить код");
+      showError(err instanceof Error ? err.message : "Не удалось отправить код");
     } finally {
       setBusy(false);
     }
@@ -292,12 +305,12 @@ export default function AuthClient() {
                 className={cn(
                   "mt-1.5 w-full rounded-lg border bg-background px-3.5 py-2.5 text-center text-lg font-mono tracking-[0.4em] text-foreground outline-none transition placeholder:text-muted-foreground/50",
                   codeError
-                    ? "border-destructive focus:border-destructive focus:ring-1 focus:ring-destructive/20"
+                    ? "border-red-400 focus:border-red-500 focus:ring-1 focus:ring-red-500/20"
                     : "border-border focus:border-foreground focus:ring-1 focus:ring-foreground/10"
                 )}
               />
               {codeError && (
-                <p className="mt-2 text-xs text-destructive">{codeError}</p>
+                <p className="mt-2 flex items-center gap-1 text-xs text-red-600">{codeError}</p>
               )}
             </div>
 
@@ -339,9 +352,9 @@ export default function AuthClient() {
         )}
 
         {message && (
-          <div className="mt-4 rounded-lg bg-secondary px-4 py-3 text-sm text-foreground">
+          <FormAlert variant={messageKind} className="mt-4">
             {message}
-          </div>
+          </FormAlert>
         )}
       </div>
     </div>

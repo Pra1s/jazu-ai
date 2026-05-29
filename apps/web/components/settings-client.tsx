@@ -77,7 +77,7 @@ function Input({
       className={cn(
         "w-full rounded-lg border bg-background px-3.5 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted-foreground",
         invalid
-          ? "border-destructive focus:border-destructive focus:ring-1 focus:ring-destructive/20"
+          ? "border-red-400 focus:border-red-500 focus:ring-1 focus:ring-red-500/20"
           : "border-border focus:border-foreground focus:ring-1 focus:ring-foreground/10"
       )}
     />
@@ -301,7 +301,7 @@ export default function SettingsClient() {
                   />
                 </Field>
                 {phoneError && (
-                  <p className="mt-2 text-xs text-destructive">{phoneError}</p>
+                  <p className="mt-2 text-xs text-red-600">{phoneError}</p>
                 )}
               </div>
               <div className="mt-4 flex gap-2">
@@ -391,7 +391,7 @@ export default function SettingsClient() {
             className="w-full max-w-lg rounded-2xl border border-border bg-card p-6 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-lg font-semibold text-destructive">
+            <h3 className="text-lg font-semibold text-red-700">
               Удалить аккаунт навсегда?
             </h3>
             <p className="mt-2 text-sm text-foreground">
@@ -443,7 +443,7 @@ export default function SettingsClient() {
                 />
               </Field>
               {deleteError && (
-                <p className="mt-2 text-xs text-destructive">{deleteError}</p>
+                <p className="mt-2 text-xs text-red-600">{deleteError}</p>
               )}
             </div>
 

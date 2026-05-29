@@ -6,6 +6,7 @@ import { ArrowRight, Bot, MessageSquare, Zap } from "lucide-react";
 import { apiJson, apiSse } from "@/lib/api";
 import { type ActionButton } from "@jazu/shared";
 import { Button } from "@/components/ui/button";
+import { FormAlert } from "@/components/ui/form-alert";
 import { cn } from "@/lib/cn";
 
 type BuilderTurn = {
@@ -118,9 +119,9 @@ export default function LandingClient() {
         </div>
 
         {error && (
-          <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+          <FormAlert variant="error" className="mt-3">
             {error}
-          </div>
+          </FormAlert>
         )}
       </div>
 

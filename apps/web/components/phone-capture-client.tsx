@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { ArrowRight, Bell, Phone } from "lucide-react";
 import { apiFetch, apiJson } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { FormAlert } from "@/components/ui/form-alert";
 import { cn } from "@/lib/cn";
 import { resetAuthStatus } from "@/lib/use-auth-status";
 
@@ -146,7 +147,7 @@ export default function PhoneCaptureClient() {
               className={cn(
                 "mt-1.5 w-full rounded-lg border bg-background px-3.5 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted-foreground",
                 error
-                  ? "border-destructive focus:border-destructive focus:ring-1 focus:ring-destructive/20"
+                  ? "border-red-400 focus:border-red-500 focus:ring-1 focus:ring-red-500/20"
                   : "border-border focus:border-foreground focus:ring-1 focus:ring-foreground/10"
               )}
             />
@@ -176,9 +177,9 @@ export default function PhoneCaptureClient() {
         </div>
 
         {error && (
-          <div className="mt-4 rounded-lg bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          <FormAlert variant="error" className="mt-4">
             {error}
-          </div>
+          </FormAlert>
         )}
       </div>
     </div>
