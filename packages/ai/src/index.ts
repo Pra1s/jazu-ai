@@ -8,6 +8,7 @@ import {
 } from "./openai.js";
 import {
   buildBuilderSystemPrompt,
+  buildCorrectionSystemPrompt,
   buildPromptFromProfile,
   buildRuntimeEnvelope,
   buildRuntimePrompt,
@@ -434,6 +435,8 @@ export type CorrectionResult = {
   newPrompt: string;
   assistantText: string;
   changeSummary: string;
+  correctionType?: string;
+  sectionEdited?: string;
 };
 
 export async function applyPromptCorrection(params: {
@@ -455,24 +458,10 @@ export async function applyPromptCorrection(params: {
       newPrompt?: string;
       assistantText?: string;
       changeSummary?: string;
+      correctionType?: string;
+      sectionEdited?: string;
     }>({
-      system: [
-        "Ты — редактор system prompt для WhatsApp-бота.",
-        "Получаешь ТЕКУЩИЙ промпт и КОНКРЕТНУЮ правку от владельца бизнеса.",
-        "Твоя задача — переписать промпт так, чтобы правка была реально учтена в будущих ответах бота.",
-        "",
-        "Правила:",
-        "- Сохрани всю структуру и существующие секции промпта.",
-        "- Внеси правку в правильную секцию (или создай новую секцию, если правка про что-то новое).",
-        "- Если правка противоречит существующему правилу — замени старое правило, а не дублируй.",
-        "- Не сокращай и не выкидывай существующий контент, кроме того, что прямо противоречит правке.",
-        "- Не добавляй преамбул вроде 'Вот новый промпт:' — верни СТРОГО валидный JSON.",
-        "",
-        "Формат ответа JSON:",
-        "- newPrompt: string — полный обновлённый system prompt.",
-        "- changeSummary: string — 1 короткая фраза о том, что именно изменилось (для лога).",
-        "- assistantText: string — короткое сообщение пользователю в стиле 'Готово, теперь бот будет <X>. Попробуй ещё раз.' (1-2 предложения, живой тон)."
-      ].join("\n"),
+      system: buildCorrectionSystemPrompt(),
       messages: [
         {
           role: "user",
@@ -513,7 +502,9 @@ export async function applyPromptCorrection(params: {
         completion.assistantText ||
           `Готово, учёл правку — попробуй задать тот же вопрос боту ещё раз.`
       ),
-      changeSummary: completion.changeSummary?.trim() || correctionText.slice(0, 120)
+      changeSummary: completion.changeSummary?.trim() || correctionText.slice(0, 120),
+      ...(completion.correctionType ? { correctionType: completion.correctionType } : {}),
+      ...(completion.sectionEdited ? { sectionEdited: completion.sectionEdited } : {})
     };
   } catch {
     const appended = `${base}\n\n## Уточнение от владельца (правка ${new Date().toISOString().slice(0, 10)})\n- ${correctionText}`;
@@ -540,6 +531,7 @@ export function createInitialProfile(): BusinessProfile {
 
 export {
   buildBuilderSystemPrompt,
+  buildCorrectionSystemPrompt,
   buildPromptFromProfile,
   buildRuntimeEnvelope,
   buildRuntimePrompt,
