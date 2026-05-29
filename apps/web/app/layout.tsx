@@ -14,7 +14,10 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: "Jazu AI",
-  description: "AI-менеджер для WhatsApp — настройте бота за пять минут"
+  description: "AI-менеджер для WhatsApp — настройте бота за пять минут",
+  icons: {
+    icon: "/icon.svg"
+  }
 };
 
 export default function RootLayout({
