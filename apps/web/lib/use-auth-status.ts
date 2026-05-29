@@ -82,8 +82,18 @@ export function resetAuthStatus() {
  * данные). Возвращает unsubscribe. */
 export function subscribeAuthStatus(listener: (status: AuthStatus) => void): () => void {
   listeners.add(listener);
-  // Сразу пинаем загрузку, если ещё не было.
-  void ensureLoaded();
+  if (cached !== null) {
+    // Статус уже загружен ДО подписки (например, компонент смонтировался
+    // позже, когда AppShell уже переключился в авторизованный каркас). В
+    // этом случае ensureLoaded() не оповестит нового слушателя — оповестим
+    // его текущим значением вручную, иначе карточка аккаунта зависнет в
+    // состоянии загрузки.
+    listener(cached);
+  } else {
+    // Ещё не загружено — пинаем загрузку; когда fetch дорезолвится,
+    // broadcast в ensureLoaded застанет нашего слушателя в наборе.
+    void ensureLoaded();
+  }
   return () => {
     listeners.delete(listener);
   };

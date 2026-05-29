@@ -1,0 +1,39 @@
+---
+description: Команды деплоя на прод-сервере (Docker Compose) и git-воркфлоу
+alwaysApply: true
+---
+
+# Git-воркфлоу
+
+Пользователь хочет, чтобы изменения сразу попадали на сервер. Поэтому:
+
+- После того как задача сделана и проверена (typecheck/lint зелёные) — СРАЗУ
+  коммить и пуш в `origin/main` без отдельного запроса.
+- Коммиты на русском в стиле `тип(скоуп): описание` (feat/fix/chore...).
+- НЕ коммитить `docs/*.html` (тяжёлые исходники pdf2htmlEX) — только код.
+
+# Деплой на сервере
+
+Прод крутится на сервере через Docker Compose (prod-оверлей). На сервере
+проект в `~/jazu`. Когда пользователь «подтягивает изменения», он выполняет
+команды такого вида:
+
+```bash
+cd ~/jazu
+git pull origin main
+
+# пересобрать и поднять конкретный сервис (чаще всего web)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env up -d --build web
+```
+
+## Подсказки
+
+- `--build <service>` пересобирает и поднимает один сервис. Сервисы: `web`, `api`
+  (и БД `postgres`, `redis`, воркеры — их обычно не трогаем).
+- Веб-образ ВАЖНО пересобирать (`--build`), т.к. `NEXT_PUBLIC_*` зашиваются в
+  бандл на этапе сборки.
+- Если менялась схема Prisma — после `up` накатить миграции:
+  `docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env exec api sh -c 'cd /app/packages/db && node_modules/.bin/prisma migrate deploy'`
+- Те же действия завёрнуты в pnpm-скрипты: `docker:prod:build`, `docker:prod:up`,
+  `docker:prod:logs`, `docker:prod:migrate` (см. `package.json`).
+- Когда фикс только фронтовый — достаточно пересобрать `web`, миграции не нужны.
