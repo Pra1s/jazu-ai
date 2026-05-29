@@ -9,6 +9,7 @@ import {
 import {
   buildBuilderSystemPrompt,
   buildPromptFromProfile,
+  buildRuntimeEnvelope,
   buildRuntimePrompt,
   getNextQuestions,
   mergeProfile,
@@ -32,6 +33,7 @@ export type BuilderTurn = {
 export type RuntimeTurn = {
   reply: string;
   shouldHandoff: boolean;
+  handoffType?: "hot_lead" | "complaint" | "out_of_scope" | "requested" | null;
   summary?: string;
   actionButton?: ActionButton | undefined;
 };
@@ -351,35 +353,13 @@ export async function buildRuntimeTurn(
     : null;
   const systemPrompt = override ?? buildRuntimePrompt(profile);
 
-  // ПОРЯДОК ВАЖЕН: сначала systemPrompt (актуальные данные бизнеса из БД или
-  // fallback — ниша, оффер, ограничения), и только ПОСЛЕ него — жёсткое
-  // «Правило Инициативы». Бот сначала осознаёт свою нишу и границы, затем
-  // получает команду закрывать сделку.
-  const runtimeSystem = [
-    systemPrompt,
-    "",
-    "## Роль и формат ответа",
-    "Ты отвечаешь клиенту в WhatsApp как опытный и нацеленный на результат менеджер компании. Не упоминай, что ты AI.",
-    "",
-    "ПРАВИЛО ИНИЦИАТИВЫ (КРИТИЧЕСКИ ВАЖНО): Твоя главная задача — закрыть сделку или перевести лида на следующий этап (запись/осмотр/расчет).",
-    "- НИКОГДА не заканчивай сообщение просто выдачей сухой информации (например, просто назвав цену).",
-    "- ВСЕГДА заканчивай свое сообщение коротким, открытым или альтернативным вопросом, чтобы продвинуть клиента вперед (например: \"Вам удобнее на буднях или на выходных?\", \"Рассчитать точную смету по фото?\").",
-    "",
-    "## Передача человеку (Handoff)",
-    "Если запрос требует человека, клиент скандалит, или сработал триггер \"Анти-лид\" — подготовь handoff summary и предупреди клиента, что передаёшь диалог специалисту.",
-    "",
-    "ВАЖНО: верни СТРОГО валидный JSON без markdown-обёртки, формат:",
-    "{",
-    "  \"reply\": \"string — твой ответ клиенту (с соблюдением Правила Инициативы)\",",
-    "  \"shouldHandoff\": boolean — true только если этот запрос точно нужно отдать человеку,",
-    "  \"summary\": \"string — короткое summary для менеджера (можно пустую строку)\"",
-    "}"
-  ].join("\n");
+  const runtimeSystem = buildRuntimeEnvelope(systemPrompt);
 
   try {
     const wrapper = await runJsonCallWithTelemetry<{
       reply?: string;
       shouldHandoff?: boolean;
+      handoffType?: "hot_lead" | "complaint" | "out_of_scope" | "requested" | null;
       summary?: string;
       actionButton?: ActionButton;
     }>({
@@ -414,6 +394,7 @@ export async function buildRuntimeTurn(
     return {
       reply: sanitizeAssistantText(completion.reply),
       shouldHandoff: completion.shouldHandoff ?? handoff.handoff,
+      ...(completion.handoffType !== undefined ? { handoffType: completion.handoffType } : {}),
       summary: completion.summary || summary,
       ...(completion.actionButton ? { actionButton: completion.actionButton } : {})
     };
@@ -560,6 +541,7 @@ export function createInitialProfile(): BusinessProfile {
 export {
   buildBuilderSystemPrompt,
   buildPromptFromProfile,
+  buildRuntimeEnvelope,
   buildRuntimePrompt,
   getNextQuestions,
   mergeProfile,
