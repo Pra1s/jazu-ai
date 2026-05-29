@@ -99,36 +99,36 @@ export default function GuestHeader() {
                 className={cn(
                   // Мобильный: фиксированная карточка под шапкой с отступами от
                   // краёв экрана, чтобы текст не обрезался. Десктоп: выпадашка
-                  // от кнопки справа.
-                  "fixed inset-x-3 top-[calc(3.5rem+0.5rem)] z-40 rounded-2xl bg-[#2563eb] p-4 text-white shadow-2xl",
+                  // от кнопки справа. Стиль — как у обучающих подсказок сайта.
+                  "fixed inset-x-3 top-[calc(3.5rem+0.5rem)] z-40 rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl",
                   "sm:absolute sm:inset-x-auto sm:right-0 sm:top-[calc(100%+10px)] sm:w-80"
                 )}
               >
                 {/* стрелка-указатель к кнопке — только на десктопе */}
-                <div className="absolute -top-1.5 right-8 hidden h-3 w-3 rotate-45 bg-[#2563eb] sm:block" />
+                <div className="absolute -top-1.5 right-8 hidden h-3 w-3 rotate-45 border-l border-t border-slate-200 bg-white sm:block" />
                 <div className="flex items-start justify-between gap-3">
-                  <h3 className="text-sm font-semibold leading-5">
+                  <h3 className="text-sm font-semibold leading-5 text-slate-900">
                     Бот готов — подключите WhatsApp
                   </h3>
                   <button
                     type="button"
                     onClick={dismissCoachmark}
                     aria-label="Закрыть подсказку"
-                    className="-mr-1 -mt-1 shrink-0 rounded-full p-1 text-white/70 transition hover:bg-white/10 hover:text-white"
+                    className="-mr-1 -mt-1 shrink-0 rounded-full p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
                   >
                     <X className="h-4 w-4" />
                   </button>
                 </div>
-                <p className="mt-1.5 text-sm leading-5 text-white/90">
+                <p className="mt-1.5 text-sm leading-5 text-slate-600">
                   Вы собрали промпт и отладили ответы на правках. Нажмите
                   «Привязать WhatsApp»: после быстрой регистрации бот начнёт
-                  отвечать клиентам 24/7, а горячие лиды будут приходить вам в
-                  Telegram.
+                  отвечать клиентам 24/7, а уведомления о лидах и их статусе
+                  будут приходить в WhatsApp.
                 </p>
                 <button
                   type="button"
                   onClick={dismissCoachmark}
-                  className="mt-3 rounded-full bg-white px-4 py-1.5 text-sm font-semibold text-[#2563eb] transition hover:bg-white/90"
+                  className="mt-3 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
                 >
                   Понятно
                 </button>
