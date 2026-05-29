@@ -42,8 +42,13 @@ export default function GuestHeader() {
   }, []);
 
   useEffect(() => {
+    // Скрытие подсказки — только на текущую сессию (sessionStorage), а не
+    // навсегда. Иначе один случайный «крестик» прятал подсказку в браузере
+    // безвозвратно, и пользователь больше не получал подсказку в воронке.
+    // Подсказка всё равно исчезнет сама после подключения WhatsApp (см.
+    // условие showCta с !waConnected).
     setCoachmarkDismissed(
-      window.localStorage.getItem(COACHMARK_DISMISSED_KEY) === "1"
+      window.sessionStorage.getItem(COACHMARK_DISMISSED_KEY) === "1"
     );
     void refreshProgress();
 
@@ -67,7 +72,7 @@ export default function GuestHeader() {
 
   function dismissCoachmark() {
     setCoachmarkDismissed(true);
-    window.localStorage.setItem(COACHMARK_DISMISSED_KEY, "1");
+    window.sessionStorage.setItem(COACHMARK_DISMISSED_KEY, "1");
   }
 
   return (
