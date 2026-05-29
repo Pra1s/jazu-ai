@@ -278,7 +278,7 @@ export default function SettingsClient() {
               <h2 className="text-sm font-semibold">Личный номер для уведомлений</h2>
               <p className="mt-1.5 text-sm text-muted-foreground">
                 На этот номер бот будет писать в WhatsApp о новых лидах. Если он
-                совпадает с номером бизнес-WhatsApp — уведомления придут в чат
+                совпадет с номером WhatsApp для AI бота — уведомления придут в чат
                 «Сообщения себе». Формат +7XXXXXXXXXX (Казахстан / Россия).
               </p>
               {initialPhone && (
