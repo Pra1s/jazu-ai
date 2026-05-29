@@ -133,12 +133,12 @@ export default function LandingClient() {
       </div>
 
       {/* Footer */}
-      <footer className="mt-12 border-t border-border pt-6 sm:mt-16">
-        <div className="flex flex-col items-center gap-3 text-center sm:flex-row sm:justify-between sm:text-left">
+      <footer className="mt-12 border-t border-border pt-6 pb-6 sm:mt-16">
+        <div className="flex flex-col items-center gap-3 text-center">
           <p className="text-xs text-muted-foreground">
             © {new Date().getFullYear()} Jazu · ТОО «FINTECH IT»
           </p>
-          <nav className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
+          <nav className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
             {[
               { href: "/legal/oferta", label: "Публичный договор-оферта" },
               { href: "/legal/usloviya", label: "Условия использования" },
