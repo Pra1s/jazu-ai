@@ -103,12 +103,6 @@ export default function LandingClient() {
           </div>
           <div className="flex gap-2">
             <Button
-              variant="outline"
-              asChild
-            >
-              <a href="/auth">Войти</a>
-            </Button>
-            <Button
               onClick={() => void start()}
               disabled={busy || !business.trim()}
             >
@@ -137,6 +131,32 @@ export default function LandingClient() {
           </div>
         ))}
       </div>
+
+      {/* Footer */}
+      <footer className="mt-12 border-t border-border pt-6 sm:mt-16">
+        <div className="flex flex-col items-center gap-3 text-center sm:flex-row sm:justify-between sm:text-left">
+          <p className="text-xs text-muted-foreground">
+            © {new Date().getFullYear()} Jazu · ТОО «FINTECH IT»
+          </p>
+          <nav className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
+            {[
+              { href: "/legal/oferta", label: "Публичный договор-оферта" },
+              { href: "/legal/usloviya", label: "Условия использования" },
+              { href: "/legal/politika", label: "Политика конфиденциальности" }
+            ].map((link) => (
+              <a
+                key={link.href}
+                href={link.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+              >
+                {link.label}
+              </a>
+            ))}
+          </nav>
+        </div>
+      </footer>
     </div>
   );
 }

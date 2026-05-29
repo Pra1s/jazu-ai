@@ -58,6 +58,13 @@ function normalize(messages: ChatMessage[]): ChatMessage[] {
   return messages.map((m) => ({ ...m, parts: Array.isArray(m.parts) ? m.parts : [] }));
 }
 
+// Уведомляем гостевую шапку (GuestHeader), что промпт/правки могли
+// измениться — она перечитает /agent/progress и решит, показывать ли CTA
+// «Привязать WhatsApp».
+function notifyPromptProgress() {
+  window.dispatchEvent(new CustomEvent("jazu:promptProgress"));
+}
+
 function getActionButton(parts: ChatMessage["parts"]): ActionButton | undefined {
   return parts.find(
     (p): p is { type: string; action_button: ActionButton } =>
@@ -460,6 +467,7 @@ export default function ChatWorkspace() {
           setPrompt(turn.promptDraft);
         }
         await refreshPrompt();
+        notifyPromptProgress();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Ошибка при отправке");
         setBuilderMessages((prev) => prev.filter((m) => m.id !== sid));
@@ -522,6 +530,7 @@ export default function ChatWorkspace() {
       });
       setCorrection(null);
       await Promise.all([refreshPrompt(), refreshHistories()]);
+      notifyPromptProgress();
       // После правки из теста — переключаем юзера в чат Настройки, чтобы он
       // увидел зелёную карточку «Промпт обновлён» в основном месте правды.
       // В тесте всё подтянется само, если юзер сам туда вернётся.

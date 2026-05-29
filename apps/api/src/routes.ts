@@ -1287,6 +1287,30 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
+  // Прогресс настройки бота для текущей сессии (работает и для гостя через
+  // сессионного агента). Используется гостевой шапкой, чтобы решить, когда
+  // показывать CTA «Привязать WhatsApp»: промпт собран, сделано >=2 правок,
+  // WhatsApp ещё не подключён.
+  app.get("/agent/progress", async (request, reply) => {
+    const agent = await getCurrentAgent(request, reply);
+    if (!agent) {
+      return { hasPrompt: false, correctionsCount: 0, waConnected: false };
+    }
+    const [promptVersionsCount, correctionsCount, wa] = await Promise.all([
+      prisma.promptVersion.count({ where: { agentId: agent.id } }),
+      prisma.promptVersion.count({ where: { agentId: agent.id, source: "correction" } }),
+      prisma.waConnection.findUnique({
+        where: { agentId: agent.id },
+        select: { status: true }
+      })
+    ]);
+    return {
+      hasPrompt: promptVersionsCount > 0,
+      correctionsCount,
+      waConnected: wa?.status === "connected"
+    };
+  });
+
   // Глобальный «выключатель» бота для текущего агента пользователя.
   // Используется на странице «Диалоги»: пауза/возобновление ответов WA-бота.
   // Не трогает Status — это разные оси (active/draft/archived vs paused/live).

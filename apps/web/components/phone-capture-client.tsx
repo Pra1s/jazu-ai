@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowRight, Bell, Phone } from "lucide-react";
 import { apiFetch, apiJson } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { FormAlert } from "@/components/ui/form-alert";
 import { cn } from "@/lib/cn";
 import { resetAuthStatus } from "@/lib/use-auth-status";
+import { consumePersistedNext, sanitizeNext } from "@/lib/safe-next";
 
 const PHONE_HINT = "Например: +7 701 123 45 67";
 
@@ -24,6 +25,14 @@ function formatPhoneInput(raw: string): string {
 
 export default function PhoneCaptureClient() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // Куда вернуть после ввода номера: query ?next=… (от /auth) или
+  // сохранённый в sessionStorage (Google-OAuth раундтрип). Только
+  // безопасные внутренние пути. Вычисляем один раз: consumePersistedNext()
+  // очищает storage, поэтому нельзя дёргать его на каждом рендере.
+  const [nextTarget] = useState<string>(
+    () => sanitizeNext(searchParams.get("next")) ?? consumePersistedNext() ?? "/dashboard"
+  );
   const [phone, setPhone] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -41,7 +50,7 @@ export default function PhoneCaptureClient() {
           return;
         }
         if (res.needsPhone === false) {
-          router.replace("/dashboard");
+          router.replace(nextTarget);
           return;
         }
         setChecking(false);
@@ -53,7 +62,7 @@ export default function PhoneCaptureClient() {
     return () => {
       cancelled = true;
     };
-  }, [router]);
+  }, [router, nextTarget]);
 
   // Пока юзер на этой странице (то есть телефона ещё нет), предупреждаем
   // о закрытии вкладки. Браузер сам покажет нативный диалог подтверждения.
@@ -95,7 +104,7 @@ export default function PhoneCaptureClient() {
       // Сбрасываем кэш /auth/me, чтобы SideNav сразу показал навигацию,
       // а PhoneRequiredGuard больше не считал нас обязанным вводить номер.
       resetAuthStatus();
-      router.replace("/dashboard");
+      router.replace(nextTarget);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось сохранить номер");
     } finally {

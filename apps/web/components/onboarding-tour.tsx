@@ -8,10 +8,12 @@ type TourStep =
   | "switch_to_test"
   | "write_client_message"
   | "correct_reply"
+  // Legacy-значение: шаг подключения вынесен в подсказку в шапке (coachmark).
+  // Если придёт из сервера/localStorage — трактуем как завершённый тур.
   | "connect_whatsapp"
   | "done";
 
-const steps: Record<Exclude<TourStep, "done">, { title: string; body: string; action: string }> = {
+const steps: Record<Exclude<TourStep, "done" | "connect_whatsapp">, { title: string; body: string; action: string }> = {
   describe_business: {
     title: "Шаг 1. Опишите бизнес",
     body: "Чем подробнее вы расскажете о нише, услугах, ценах и ограничениях, тем точнее будет промпт. Начните прямо в поле ниже.",
@@ -29,12 +31,7 @@ const steps: Record<Exclude<TourStep, "done">, { title: string; body: string; ac
   },
   correct_reply: {
     title: "Шаг 4. Поправляйте ответы",
-    body: "Если бот ответил не так, нажмите «Поправить» и объясните, как нужно отвечать в следующий раз — промпт обновится автоматически.",
-    action: "Далее"
-  },
-  connect_whatsapp: {
-    title: "Шаг 5. Подключите WhatsApp",
-    body: "Когда бот готов, перейдите в раздел WhatsApp, отсканируйте QR — и агент начнёт отвечать реальным клиентам.",
+    body: "Если бот ответил не так, нажмите «Поправить» и объясните, как нужно отвечать в следующий раз — промпт обновится автоматически. Когда всё готово — кнопка «Привязать WhatsApp» появится в шапке.",
     action: "Понятно"
   }
 };
@@ -44,7 +41,6 @@ const STEP_ORDER: TourStep[] = [
   "switch_to_test",
   "write_client_message",
   "correct_reply",
-  "connect_whatsapp",
   "done"
 ];
 
@@ -64,7 +60,11 @@ export default function OnboardingTour() {
 
   useEffect(() => {
     const local = window.localStorage.getItem(storageKey);
-    if (local === "done") {
+    // Legacy: шаг connect_whatsapp удалён из тура (его роль взяла подсказка
+    // в шапке). Если юзер был на нём — считаем тур завершённым.
+    if (local === "done" || local === "connect_whatsapp") {
+      window.localStorage.setItem(storageKey, "done");
+      setStep("done");
       setLoaded(true);
       return;
     }
@@ -84,7 +84,11 @@ export default function OnboardingTour() {
         }
 
         const serverStep = me.user?.onboardingState?.step;
-        if (serverStep === "done" || local === "done") {
+        if (
+          serverStep === "done" ||
+          serverStep === "connect_whatsapp" ||
+          local === "done"
+        ) {
           window.localStorage.setItem(storageKey, "done");
           setStep("done");
           return;
@@ -121,7 +125,8 @@ export default function OnboardingTour() {
     }).catch(() => {});
   }, [step, loaded]);
 
-  if (!loaded || step === "done") {
+  // connect_whatsapp — legacy-шаг без карточки (вынесен в подсказку шапки).
+  if (!loaded || step === "done" || step === "connect_whatsapp") {
     return null;
   }
 

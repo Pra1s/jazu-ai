@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { Toaster } from "sonner";
 import "./globals.css";
-import { SideNav } from "@/components/side-nav";
+import AppShell from "@/components/app-shell";
 import PhoneRequiredGuard from "@/components/phone-required-guard";
 import { PostHogIdentify } from "@/components/posthog-identify";
 
@@ -30,12 +30,9 @@ export default function RootLayout({
         style={{ fontFamily: "var(--font-inter), system-ui, sans-serif" }}
       >
         <PostHogIdentify />
-        <div className="flex h-dvh flex-col lg:flex-row">
-          <SideNav />
-          <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            <PhoneRequiredGuard>{children}</PhoneRequiredGuard>
-          </main>
-        </div>
+        <AppShell>
+          <PhoneRequiredGuard>{children}</PhoneRequiredGuard>
+        </AppShell>
         <Toaster position="bottom-right" richColors />
       </body>
     </html>

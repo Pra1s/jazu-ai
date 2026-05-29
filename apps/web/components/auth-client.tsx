@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { FormAlert } from "@/components/ui/form-alert";
 import { cn } from "@/lib/cn";
 import { resetAuthStatus } from "@/lib/use-auth-status";
+import { persistNext, sanitizeNext } from "@/lib/safe-next";
 
 const MAGIC_LINK_COOLDOWN_SECONDS = 30;
 const COOLDOWN_STORAGE_KEY = "jazu_magic_link_lock_until";
@@ -38,6 +39,9 @@ export default function AuthClient() {
   // кого-то открыта старая ссылка в почте — она должна сработать.
   const token = searchParams.get("token");
   const errorParam = searchParams.get("error");
+  // Куда вернуть юзера после входа (например, на /whatsapp из воронки
+  // привязки). Принимаем только безопасные внутренние пути.
+  const nextParam = sanitizeNext(searchParams.get("next"));
   const [stage, setStage] = useState<Stage>("email");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -66,6 +70,13 @@ export default function AuthClient() {
     if (!token) return;
     window.location.href = `${API_BASE_URL}/auth/callback?token=${encodeURIComponent(token)}`;
   }, [token]);
+
+  // Сохраняем next из query в sessionStorage сразу — чтобы он пережил
+  // любой раундтрип (Google-OAuth, reload), даже если юзер пришёл по
+  // email-коду.
+  useEffect(() => {
+    if (nextParam) persistNext(nextParam);
+  }, [nextParam]);
 
   useEffect(() => {
     void apiJson<{ googleEnabled: boolean }>("/auth/config", { method: "GET" })
@@ -183,7 +194,14 @@ export default function AuthClient() {
 
       // Сбрасываем кэш /auth/me, чтобы SideNav и гарды сразу увидели вход.
       resetAuthStatus();
-      router.replace(data.needsPhone ? "/auth/phone" : "/dashboard");
+      if (data.needsPhone) {
+        // Номер ещё не введён — прокидываем next дальше, чтобы после
+        // /auth/phone вернуть юзера в исходную точку (например, /whatsapp).
+        const target = nextParam ? `/auth/phone?next=${encodeURIComponent(nextParam)}` : "/auth/phone";
+        router.replace(target);
+      } else {
+        router.replace(nextParam || "/dashboard");
+      }
     } catch (err) {
       setCodeError(err instanceof Error ? err.message : "Не удалось проверить код");
     } finally {
@@ -227,6 +245,10 @@ export default function AuthClient() {
               variant="outline"
               className="w-full gap-2"
               onClick={() => {
+                // Google делает редирект на провайдера и обратно на
+                // /dashboard|/auth/phone — query-параметр next до нас не
+                // доедет, поэтому кладём его в sessionStorage.
+                persistNext(nextParam);
                 window.location.href = `${API_BASE_URL}/auth/google/start`;
               }}
             >

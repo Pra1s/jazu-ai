@@ -19,7 +19,7 @@ import SidebarUserMenu from "@/components/sidebar-user-menu";
 import { useAuthStatus } from "@/lib/use-auth-status";
 
 const navItems = [
-  { href: "/", icon: Home, label: "Главная", hideWhenAuthed: true },
+  { href: "/", icon: Home, label: "Главная" },
   { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/chats", icon: MessageSquare, label: "Диалоги" },
   { href: "/whatsapp", icon: Smartphone, label: "WhatsApp" },
@@ -29,12 +29,10 @@ const navItems = [
 
 function NavList({
   pathname,
-  isAuthed,
   needsPhone,
   onNavigate
 }: {
   pathname: string;
-  isAuthed: boolean;
   needsPhone: boolean;
   onNavigate?: () => void;
 }) {
@@ -48,10 +46,9 @@ function NavList({
       </div>
     );
   }
-  const items = navItems.filter((item) => !(item.hideWhenAuthed && isAuthed));
   return (
     <nav className="flex flex-col gap-0.5 p-2 pt-3">
-      {items.map(({ href, icon: Icon, label }) => {
+      {navItems.map(({ href, icon: Icon, label }) => {
         const active = pathname === href || (href !== "/" && pathname.startsWith(href));
         return (
           <Link
@@ -89,7 +86,6 @@ export function SideNav() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const authStatus = useAuthStatus();
-  const isAuthed = authStatus?.ok ?? false;
   // Если у залогиненного юзера нет телефона — глобальный гард удержит его
   // на /auth/phone, а навигация должна это визуально подтверждать:
   // никаких ссылок, кроме самого требования ввести номер.
@@ -154,7 +150,6 @@ export function SideNav() {
         </div>
         <NavList
           pathname={pathname}
-          isAuthed={isAuthed}
           needsPhone={needsPhone}
           onNavigate={() => setOpen(false)}
         />
@@ -168,7 +163,7 @@ export function SideNav() {
         <div className="flex h-14 items-center border-b border-border px-4">
           <Logo />
         </div>
-        <NavList pathname={pathname} isAuthed={isAuthed} needsPhone={needsPhone} />
+        <NavList pathname={pathname} needsPhone={needsPhone} />
         <div className="mt-auto">
           <SidebarUserMenu />
         </div>
