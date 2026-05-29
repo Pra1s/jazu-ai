@@ -2075,12 +2075,15 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     // «доконнектными».
     const existing = await prisma.waConnection.findUnique({
       where: { agentId: body.agentId },
-      select: { botRespondsSince: true }
+      select: { botRespondsSince: true, status: true }
     });
     const newBotRespondsSince =
       body.botRespondsSince && !existing?.botRespondsSince
         ? new Date(body.botRespondsSince)
         : undefined;
+    // Переход в connected (раньше был не connected) — это «привязка
+    // завершена». Фиксируем как audit-событие (оно зеркалится в PostHog).
+    const justConnected = body.status === "connected" && existing?.status !== "connected";
 
     await prisma.waConnection.upsert({
       where: { agentId: body.agentId },
@@ -2105,6 +2108,22 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         botRespondsSince: body.botRespondsSince ? new Date(body.botRespondsSince) : null
       }
     });
+
+    if (justConnected) {
+      // Подтягиваем владельца агента для distinctId в PostHog.
+      const agent = await prisma.agent.findUnique({
+        where: { id: body.agentId },
+        select: { userId: true }
+      });
+      if (agent?.userId) {
+        await recordAudit({
+          event: "wa.connected",
+          userId: agent.userId,
+          request,
+          metadata: { agentId: body.agentId, phone: body.phone ?? null }
+        });
+      }
+    }
 
     return { ok: true };
   });

@@ -9,12 +9,21 @@ import { apiFetch } from "@/lib/api";
  * стреляли бы дважды на каждый рендер.
  *
  * Состояния:
- *   null                              — ещё не загрузили
- *   { ok: false }                     — гость
- *   { ok: true, needsPhone: boolean } — авторизован
+ *   null              — ещё не загрузили
+ *   { ok: false }     — гость
+ *   { ok: true, ... } — авторизован (с userId/email/name для PostHog identify)
  */
 
-type AuthStatus = { ok: false } | { ok: true; needsPhone: boolean } | null;
+type AuthStatus =
+  | { ok: false }
+  | {
+      ok: true;
+      needsPhone: boolean;
+      userId: string;
+      email: string | null;
+      name: string | null;
+    }
+  | null;
 
 let cached: AuthStatus = null;
 let inflight: Promise<AuthStatus> | null = null;
@@ -24,9 +33,19 @@ async function fetchStatus(): Promise<AuthStatus> {
   try {
     const res = await apiFetch("/auth/me", { method: "GET" });
     if (res.status === 401) return { ok: false };
-    const data = (await res.json()) as { success?: boolean; needsPhone?: boolean };
-    if (!data.success) return { ok: false };
-    return { ok: true, needsPhone: Boolean(data.needsPhone) };
+    const data = (await res.json()) as {
+      success?: boolean;
+      needsPhone?: boolean;
+      user?: { id?: string; email?: string | null; name?: string | null } | null;
+    };
+    if (!data.success || !data.user?.id) return { ok: false };
+    return {
+      ok: true,
+      needsPhone: Boolean(data.needsPhone),
+      userId: data.user.id,
+      email: data.user.email ?? null,
+      name: data.user.name ?? null
+    };
   } catch {
     return { ok: false };
   }

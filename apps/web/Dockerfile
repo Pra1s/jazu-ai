@@ -28,6 +28,11 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # NEXT_PUBLIC_* зашиваются в бандл на этапе билда. Передавайте через --build-arg.
 ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:3001/api
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
+# PostHog: токен публичный (phc_...), зашивается в клиентский бандл.
+ARG NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN
+ARG NEXT_PUBLIC_POSTHOG_HOST
+ENV NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN=$NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN
+ENV NEXT_PUBLIC_POSTHOG_HOST=$NEXT_PUBLIC_POSTHOG_HOST
 
 COPY --from=deps /app/node_modules            ./node_modules
 COPY --from=deps /app/apps/web/node_modules   ./apps/web/node_modules

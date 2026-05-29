@@ -11,9 +11,11 @@ import {
 import {
   captureError,
   closeSentry,
+  initPostHog,
   initSentry,
   installProcessErrorHandlers,
-  runReadiness
+  runReadiness,
+  shutdownPostHog
 } from "@jazu/observability";
 import { env } from "./env.js";
 import { handleWaInbound } from "./handlers/wa-inbound.js";
@@ -26,6 +28,7 @@ initSentry({
   environment: env.NODE_ENV,
   ...(env.RELEASE_VERSION ? { release: env.RELEASE_VERSION } : {})
 });
+initPostHog({ token: env.POSTHOG_PROJECT_TOKEN, host: env.POSTHOG_HOST });
 installProcessErrorHandlers("jobs");
 
 logger.info(
@@ -139,6 +142,11 @@ async function shutdown(signal: string): Promise<void> {
     await closeSentry();
   } catch (err) {
     logger.error({ err }, "error closing sentry");
+  }
+  try {
+    await shutdownPostHog();
+  } catch (err) {
+    logger.error({ err }, "error closing posthog");
   }
   clearTimeout(hardExitTimer);
   logger.info("jobs worker stopped");

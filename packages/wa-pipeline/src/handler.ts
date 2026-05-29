@@ -63,6 +63,9 @@ export type WaInboundResult =
       shouldHandoff: boolean;
       actionButton?: ActionButton | undefined;
       usage?: UsageView | undefined;
+      /** Владелец агента (для аналитики lead_created в jobs). null у
+       *  анонимных агентов без привязанного юзера. */
+      agentOwnerUserId: string | null;
     }
   | {
       status: "deduplicated";
@@ -422,6 +425,7 @@ export async function processWaInbound(
     conversationId: conversation.id,
     shouldHandoff: runtimeTurn.shouldHandoff,
     ...(runtimeTurn.actionButton ? { actionButton: runtimeTurn.actionButton } : {}),
-    usage: trackResult.ok ? trackResult.usage : undefined
+    usage: trackResult.ok ? trackResult.usage : undefined,
+    agentOwnerUserId: agent.userId ?? null
   };
 }

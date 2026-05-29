@@ -4,6 +4,7 @@ import { Toaster } from "sonner";
 import "./globals.css";
 import { SideNav } from "@/components/side-nav";
 import PhoneRequiredGuard from "@/components/phone-required-guard";
+import { PostHogIdentify } from "@/components/posthog-identify";
 
 const inter = Inter({
   subsets: ["latin", "cyrillic"],
@@ -25,6 +26,7 @@ export default function RootLayout({
         className="h-dvh overflow-hidden bg-background text-foreground"
         style={{ fontFamily: "var(--font-inter), system-ui, sans-serif" }}
       >
+        <PostHogIdentify />
         <div className="flex h-dvh flex-col lg:flex-row">
           <SideNav />
           <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">

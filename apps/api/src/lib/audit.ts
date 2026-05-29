@@ -1,5 +1,6 @@
 import type { FastifyRequest } from "fastify";
 import { prisma, type Prisma } from "@jazu/db";
+import { capturePostHog } from "@jazu/observability";
 
 /**
  * Перечень всех аудируемых событий. Жёсткий список (без свободной строки),
@@ -16,6 +17,7 @@ export type AuditEvent =
   | "phone.updated"
   | "wa.pair_requested"
   | "wa.paired"
+  | "wa.connected"
   | "wa.disconnected"
   | "wa.phone_claimed"
   | "wa.phone_claim_rejected"
@@ -60,5 +62,16 @@ export async function recordAudit(options: AuditOptions): Promise<void> {
     });
   } catch (err) {
     console.error("[audit] failed to write log:", err instanceof Error ? err.message : err);
+  }
+
+  // Зеркалируем событие в PostHog. Только если userId задан — PostHog
+  // требует distinctId, а гостевые события (login.failed и т.п.) к юзеру
+  // не привязаны. capturePostHog — no-op без инициализации и не бросает.
+  if (options.userId) {
+    capturePostHog({
+      distinctId: options.userId,
+      event: options.event,
+      ...(options.metadata !== undefined ? { properties: options.metadata } : {})
+    });
   }
 }

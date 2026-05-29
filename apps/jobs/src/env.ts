@@ -32,6 +32,9 @@ const schema = z.object({
   JOBS_HEALTH_PORT: z.coerce.number().int().positive().default(4002),
   SENTRY_DSN: z.string().url().optional().or(z.literal("").transform(() => undefined)),
   RELEASE_VERSION: z.string().optional(),
+  // PostHog аналитика. Если токен не задан — capture становится no-op.
+  POSTHOG_PROJECT_TOKEN: z.string().optional(),
+  POSTHOG_HOST: z.string().url().optional().or(z.literal("").transform(() => undefined)),
   /**
    * Retention в днях для логов: дальше WaMessage и LlmCallLog старше N дней
    * удаляются ночью cron-задачей. 0 = выключено.

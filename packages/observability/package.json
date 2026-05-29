@@ -16,7 +16,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@sentry/node": "7.120.4"
+    "@sentry/node": "7.120.4",
+    "posthog-node": "^5.35.5"
   },
   "devDependencies": {
     "@types/node": "25.9.1",

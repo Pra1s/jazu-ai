@@ -119,6 +119,9 @@ services:
       # NEXT_PUBLIC_* читается в браузере, поэтому ссылается на :3001 на хосте,
       # а не на api-сервис внутри docker network.
       NEXT_PUBLIC_API_BASE_URL: http://localhost:3001/api
+      # PostHog: next dev читает из process.env, маппим из .env-переменных.
+      NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN: ${POSTHOG_PROJECT_TOKEN:-}
+      NEXT_PUBLIC_POSTHOG_HOST: ${POSTHOG_HOST:-}
     volumes:
       - ./:/app
       - dev_root_modules:/app/node_modules

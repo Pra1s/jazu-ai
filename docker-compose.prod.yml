@@ -50,6 +50,8 @@ services:
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
       SENTRY_DSN: ${SENTRY_DSN:-}
       RELEASE_VERSION: ${RELEASE_VERSION:-}
+      POSTHOG_PROJECT_TOKEN: ${POSTHOG_PROJECT_TOKEN:-}
+      POSTHOG_HOST: ${POSTHOG_HOST:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,6 +80,8 @@ services:
         # NEXT_PUBLIC_* зашиваются на этапе билда. Если меняете домен —
         # пересоберите образ.
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
+        NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN: ${POSTHOG_PROJECT_TOKEN:-}
+        NEXT_PUBLIC_POSTHOG_HOST: ${POSTHOG_HOST:-}
     image: ${JAZU_WEB_IMAGE:-jazu-web:latest}
     restart: unless-stopped
     environment:
@@ -154,6 +158,8 @@ services:
       RETENTION_DAYS: ${RETENTION_DAYS:-90}
       SENTRY_DSN: ${SENTRY_DSN:-}
       RELEASE_VERSION: ${RELEASE_VERSION:-}
+      POSTHOG_PROJECT_TOKEN: ${POSTHOG_PROJECT_TOKEN:-}
+      POSTHOG_HOST: ${POSTHOG_HOST:-}
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,5 +1,6 @@
 import { getOutboundQueue, type Job, type WaInboundJob, type WaOutboundJob } from "@jazu/queue";
 import { processWaInbound } from "@jazu/wa-pipeline";
+import { capturePostHog } from "@jazu/observability";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 
@@ -40,6 +41,15 @@ export async function handleWaInbound(job: Job<WaInboundJob>): Promise<void> {
         ...(requestId ? { requestId } : {})
       };
       await getOutboundQueue().add("wa-outbound", outbound);
+    }
+    // Аналитика: новый лид. shouldHandoff = AI решил передать менеджеру на
+    // этом ходу (момент «горячего» лида). distinctId — владелец агента.
+    if (result.shouldHandoff && result.leadId && result.agentOwnerUserId) {
+      capturePostHog({
+        distinctId: result.agentOwnerUserId,
+        event: "lead_created",
+        properties: { agentId, leadId: result.leadId }
+      });
     }
     log.info(
       { chatId, elapsedMs, leadId: result.leadId, handoff: result.shouldHandoff },

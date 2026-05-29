@@ -1,5 +1,11 @@
 import { closeAllQueues, closeRedisWriter } from "@jazu/queue";
-import { closeSentry, initSentry, installProcessErrorHandlers } from "@jazu/observability";
+import {
+  closeSentry,
+  initPostHog,
+  initSentry,
+  installProcessErrorHandlers,
+  shutdownPostHog
+} from "@jazu/observability";
 import { env } from "./env.js";
 import { buildServer } from "./server.js";
 
@@ -9,6 +15,7 @@ initSentry({
   environment: env.NODE_ENV,
   ...(env.RELEASE_VERSION ? { release: env.RELEASE_VERSION } : {})
 });
+initPostHog({ token: env.POSTHOG_PROJECT_TOKEN, host: env.POSTHOG_HOST });
 installProcessErrorHandlers("api");
 
 const server = await buildServer();
@@ -60,6 +67,11 @@ async function shutdown(signal: string): Promise<void> {
     await closeSentry();
   } catch (err) {
     server.log.error({ err }, "error closing sentry");
+  }
+  try {
+    await shutdownPostHog();
+  } catch (err) {
+    server.log.error({ err }, "error closing posthog");
   }
 
   clearTimeout(hardExit);

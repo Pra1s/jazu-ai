@@ -35,7 +35,10 @@ const baseSchema = z.object({
   GOOGLE_REDIRECT_URI: z.string().url().optional(),
   // Sentry: если не задан — observability работает в no-op режиме (только stderr).
   SENTRY_DSN: z.string().url().optional().or(z.literal("").transform(() => undefined)),
-  RELEASE_VERSION: z.string().optional()
+  RELEASE_VERSION: z.string().optional(),
+  // PostHog аналитика. Если токен не задан — capture становится no-op.
+  POSTHOG_PROJECT_TOKEN: z.string().optional(),
+  POSTHOG_HOST: z.string().url().optional().or(z.literal("").transform(() => undefined))
 });
 
 const envSchema = baseSchema.superRefine((value, ctx) => {
