@@ -107,12 +107,12 @@ export default function LandingClient() {
           )}
           placeholder="Например: мы занимаемся оценкой ущерба после ДТП, пожара и затопления. Нужен бот, который подробно расспрашивает клиента и передаёт горячие заявки."
         />
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="mt-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Sparkles className="h-3.5 w-3.5 text-[#25D366]" />
+            <Sparkles className="h-3.5 w-3.5 shrink-0 text-[#25D366]" />
             Настройка и тест бота — бесплатно
           </div>
-          <div className="flex gap-2">
+          <div className="flex shrink-0 gap-2">
             <Button
               onClick={() => void start()}
               disabled={busy || !business.trim()}
