@@ -12,7 +12,10 @@ import {
   LogIn,
   MessageSquare,
   Settings,
-  ArrowRight
+  ArrowRight,
+  Copy,
+  HelpCircle,
+  X
 } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch, apiJson } from "@/lib/api";
@@ -69,6 +72,7 @@ export default function WhatsappWizard() {
   const [requestingQr, setRequestingQr] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const effectiveStatus =
@@ -425,7 +429,16 @@ export default function WhatsappWizard() {
   // ── Основной экран с вкладками
   return (
     <div className="space-y-6">
-      <div className="rounded-2xl border border-border bg-card p-6 sm:p-8">
+      <div className="relative rounded-2xl border border-border bg-card p-6 sm:p-8">
+        <button
+          type="button"
+          onClick={() => setHelpOpen(true)}
+          className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-secondary hover:text-foreground"
+          aria-label="Помощь с подключением"
+          title="Как подключить WhatsApp"
+        >
+          <HelpCircle className="h-5 w-5" />
+        </button>
         <Tabs value={mode} onValueChange={(v) => setMode(v as "qr" | "code")}>
           <TabsList className="!flex w-full">
             <TabsTrigger value="code" className="gap-2">
@@ -489,6 +502,17 @@ export default function WhatsappWizard() {
                   <div className="mt-2 text-4xl font-mono font-semibold tracking-[0.3em] text-emerald-900 sm:text-5xl">
                     {pairCode}
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void navigator.clipboard?.writeText(pairCode.replace(/\s+/g, ""));
+                      toast.success("Код скопирован");
+                    }}
+                    className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-emerald-300 bg-white px-3 py-1.5 text-xs font-medium text-emerald-800 transition hover:bg-emerald-100"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    Скопировать код
+                  </button>
                 </div>
 
                 <ol className="space-y-2 text-sm text-foreground">
@@ -606,6 +630,49 @@ export default function WhatsappWizard() {
             <b className="text-foreground">«Сбросить и заново»</b>. Просто запросить новый код
             не поможет: WhatsApp удерживает старую сессию, нужно её сбросить.
           </p>
+        </div>
+      )}
+
+      {/* Модалка помощи: мануал-скринкаст сверху, кнопка хелпдеска снизу */}
+      {helpOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-foreground/40 backdrop-blur-sm"
+            onClick={() => setHelpOpen(false)}
+            aria-hidden
+          />
+          <div className="relative z-10 w-full max-w-lg rounded-2xl border border-border bg-card p-6 shadow-2xl">
+            <button
+              type="button"
+              onClick={() => setHelpOpen(false)}
+              className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-secondary hover:text-foreground"
+              aria-label="Закрыть"
+            >
+              <X className="h-4 w-4" />
+            </button>
+            <h2 className="text-base font-semibold text-foreground">Как подключить WhatsApp</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Короткое видео покажет все шаги подключения по коду или QR.
+            </p>
+
+            <div className="mt-4 flex aspect-video w-full items-center justify-center rounded-xl border border-border bg-secondary/50 text-sm text-muted-foreground">
+              {/* TODO: заменить на встроенный скринкаст (видео/iframe) */}
+              <div className="flex flex-col items-center gap-2">
+                <QrCode className="h-8 w-8 opacity-50" />
+                Скринкаст скоро появится здесь
+              </div>
+            </div>
+
+            <a
+              href="https://wa.me/77000000000"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-full bg-[#25D366] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#1ebe5c]"
+            >
+              <MessageSquare className="h-4 w-4" />
+              Написать в поддержку
+            </a>
+          </div>
         </div>
       )}
     </div>

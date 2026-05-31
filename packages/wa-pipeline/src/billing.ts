@@ -18,61 +18,120 @@ type PrismaClient = typeof Prisma;
  * При quotaUsed >= quotaTotal бот блокируется полностью (block_all).
  */
 
-export const PRICE_PER_DIALOG_KZT = 45;
+// Цена за диалог хранится во внутренней валюте — долларовых центах (целое).
+// Цены тарифов показываем в тенге. PRICE_PER_DIALOG_KZT оставлен для обратной
+// совместимости со старым API (= цена докупки по дефолтному тарифу).
+export const PRICE_PER_DIALOG_KZT = 60;
 
 export const FREE_TRIAL_DIALOGS = 35;
 
-export type PlanId = "free" | "basic" | "pro" | "max" | "custom";
+export type PlanId = "free" | "start" | "business" | "scale" | "enterprise" | "custom"
+  // legacy id из старых Purchase-записей
+  | "basic" | "pro" | "max";
 
 export type Plan = {
   id: PlanId;
   label: string;
   description: string;
+  audience?: string;
   conversations: number | null;
+  // Месячная цена тарифа в тенге (null для enterprise/custom).
+  monthlyPriceKzt: number | null;
+  // Цена одного диалога во внутренней валюте — USD-центах.
+  pricePerDialogUsdCents: number;
+  // Расчётная цена за диалог в тенге (для отображения «~X тг за диалог»).
+  pricePerDialogKzt: number;
+  // Тариф-подписка (месячный лимит) или заявка (enterprise).
+  kind: "subscription" | "enterprise";
+  popular?: boolean;
+  features?: string[];
+  // Совместимость со старым API/UI.
   pricePerOne: number;
   totalPrice: number | null;
-  popular?: boolean;
 };
 
+// Курс для конвертации тенге -> USD-центы (≈ 1 USD = 500 KZT). Только для
+// внутреннего хранения цены за диалог; для пользователя всё в тенге.
+const KZT_PER_USD = 500;
+function kztPerDialogToUsdCents(kzt: number): number {
+  return Math.round((kzt / KZT_PER_USD) * 100);
+}
+
+function buildPlan(p: {
+  id: PlanId;
+  label: string;
+  description: string;
+  audience: string;
+  conversations: number | null;
+  monthlyPriceKzt: number | null;
+  kind: "subscription" | "enterprise";
+  popular?: boolean;
+  features?: string[];
+}): Plan {
+  const perDialogKzt = p.conversations && p.monthlyPriceKzt
+    ? Math.round(p.monthlyPriceKzt / p.conversations)
+    : PRICE_PER_DIALOG_KZT;
+  return {
+    ...p,
+    pricePerDialogKzt: perDialogKzt,
+    pricePerDialogUsdCents: kztPerDialogToUsdCents(perDialogKzt),
+    pricePerOne: perDialogKzt,
+    totalPrice: p.monthlyPriceKzt
+  };
+}
+
 export const PLANS: Plan[] = [
-  {
-    id: "basic",
+  buildPlan({
+    id: "start",
     label: "Старт",
-    description: "Для индивидуальных предпринимателей и небольших магазинов.",
-    conversations: 150,
-    pricePerOne: PRICE_PER_DIALOG_KZT,
-    totalPrice: 150 * PRICE_PER_DIALOG_KZT
-  },
-  {
-    id: "pro",
+    description: "Микробизнес: бьюти-мастера, частные консультанты.",
+    audience: "Микробизнес",
+    conversations: 250,
+    monthlyPriceKzt: 14990,
+    kind: "subscription"
+  }),
+  buildPlan({
+    id: "business",
     label: "Бизнес",
-    description: "Самый популярный для активных продаж в WhatsApp.",
+    description: "Активные Instagram-магазины, сфера услуг, СТО.",
+    audience: "Малый бизнес",
     conversations: 500,
-    pricePerOne: PRICE_PER_DIALOG_KZT,
-    totalPrice: 500 * PRICE_PER_DIALOG_KZT,
+    monthlyPriceKzt: 24990,
+    kind: "subscription",
     popular: true
-  },
-  {
-    id: "max",
+  }),
+  buildPlan({
+    id: "scale",
     label: "Масштаб",
-    description: "Когда диалогов реально много и нужен запас.",
+    description: "E-commerce, клиники, агентства недвижимости.",
+    audience: "Растущий бизнес",
     conversations: 1000,
-    pricePerOne: PRICE_PER_DIALOG_KZT,
-    totalPrice: 1000 * PRICE_PER_DIALOG_KZT
-  },
-  {
-    id: "custom",
-    label: "Свой объём",
-    description: "Выберите ползунком сколько диалогов хотите купить.",
+    monthlyPriceKzt: 44990,
+    kind: "subscription"
+  }),
+  buildPlan({
+    id: "enterprise",
+    label: "Enterprise",
+    description: "Выделенный сервер, персональный менеджер по настройке промптов, приоритетная поддержка.",
+    audience: "Безлимит / 1000+ диалогов",
     conversations: null,
-    pricePerOne: PRICE_PER_DIALOG_KZT,
-    totalPrice: null
-  }
+    monthlyPriceKzt: null,
+    kind: "enterprise",
+    features: ["Выделенный сервер", "Персональный менеджер", "Приоритетная поддержка"]
+  })
 ];
 
-export const CUSTOM_MIN = 100;
+// Тарифы-подписки (без enterprise) — для выбора плана и расчёта докупки.
+export const SUBSCRIPTION_PLANS = PLANS.filter((p) => p.kind === "subscription");
+
+export function getPlan(id: string): Plan | undefined {
+  return PLANS.find((p) => p.id === id);
+}
+
+// Кастомная докупка диалогов идёт по цене текущего тарифа пользователя.
+export const CUSTOM_MIN = 50;
 export const CUSTOM_MAX = 5000;
-export const CUSTOM_STEP = 2;
+export const CUSTOM_STEP = 10;
 
 export function currentPeriodKey(d: Date = new Date()): string {
   const year = d.getUTCFullYear();
@@ -87,17 +146,46 @@ export type UsageView = {
   exhausted: boolean;
   trialActive: boolean;
   periodKey: string;
+  planId: string | null;
+  planLabel: string | null;
+  subscriptionEndsAt: string | null;
+  daysLeft: number | null;
+  // Нужно ли показать предупреждение (за 3 дня до конца / при низком остатке).
+  warnExpiring: boolean;
+  warnLowDialogs: boolean;
 };
 
-export function buildUsageView(user: { quotaTotal: number; quotaUsed: number }, totalPurchased: number): UsageView {
+type UsageUserFields = {
+  quotaTotal: number;
+  quotaUsed: number;
+  planId?: string | null;
+  subscriptionEndsAt?: Date | null;
+};
+
+const LOW_DIALOGS_THRESHOLD = 10;
+const EXPIRY_WARN_DAYS = 3;
+
+export function buildUsageView(user: UsageUserFields, totalPurchased: number): UsageView {
   const remaining = Math.max(0, user.quotaTotal - user.quotaUsed);
+  const endsAt = user.subscriptionEndsAt ?? null;
+  let daysLeft: number | null = null;
+  if (endsAt) {
+    daysLeft = Math.max(0, Math.ceil((endsAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000)));
+  }
+  const plan = user.planId ? getPlan(user.planId) : undefined;
   return {
     total: user.quotaTotal,
     used: user.quotaUsed,
     remaining,
     exhausted: remaining <= 0,
-    trialActive: totalPurchased === 0,
-    periodKey: currentPeriodKey()
+    trialActive: totalPurchased === 0 && !user.planId,
+    periodKey: currentPeriodKey(),
+    planId: user.planId ?? null,
+    planLabel: plan?.label ?? null,
+    subscriptionEndsAt: endsAt ? endsAt.toISOString() : null,
+    daysLeft,
+    warnExpiring: daysLeft !== null && daysLeft <= EXPIRY_WARN_DAYS,
+    warnLowDialogs: remaining > 0 && remaining <= LOW_DIALOGS_THRESHOLD
   };
 }
 
@@ -115,7 +203,7 @@ export async function trackConversationUsage(
     return {
       ok: true,
       counted: false,
-      usage: { total: 0, used: 0, remaining: 0, exhausted: false, trialActive: true, periodKey: currentPeriodKey() }
+      usage: buildUsageView({ quotaTotal: 0, quotaUsed: 0 }, 0)
     };
   }
 
@@ -130,7 +218,7 @@ export async function trackConversationUsage(
   if (existing) {
     const user = await prisma.user.findUnique({
       where: { id: agentOwnerUserId },
-      select: { quotaTotal: true, quotaUsed: true }
+      select: { quotaTotal: true, quotaUsed: true, planId: true, subscriptionEndsAt: true }
     });
     if (!user) return { ok: false, reason: "no_owner" };
     return {
@@ -144,7 +232,7 @@ export async function trackConversationUsage(
     const result = await prisma.$transaction(async (tx: Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0]) => {
       const user = await tx.user.findUnique({
         where: { id: agentOwnerUserId },
-        select: { quotaTotal: true, quotaUsed: true }
+        select: { quotaTotal: true, quotaUsed: true, planId: true, subscriptionEndsAt: true }
       });
       if (!user) {
         return { kind: "no_owner" as const };
@@ -164,7 +252,7 @@ export async function trackConversationUsage(
       });
       const fresh = await tx.user.findUniqueOrThrow({
         where: { id: agentOwnerUserId },
-        select: { quotaTotal: true, quotaUsed: true }
+        select: { quotaTotal: true, quotaUsed: true, planId: true, subscriptionEndsAt: true }
       });
       return { kind: "ok" as const, user: fresh };
     });
@@ -185,7 +273,7 @@ export async function trackConversationUsage(
     if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "P2002") {
       const user = await prisma.user.findUnique({
         where: { id: agentOwnerUserId },
-        select: { quotaTotal: true, quotaUsed: true }
+        select: { quotaTotal: true, quotaUsed: true, planId: true, subscriptionEndsAt: true }
       });
       if (!user) return { ok: false, reason: "no_owner" };
       return {
@@ -212,7 +300,7 @@ export async function getUsageView(
 ): Promise<UsageView | null> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { quotaTotal: true, quotaUsed: true }
+    select: { quotaTotal: true, quotaUsed: true, planId: true, subscriptionEndsAt: true }
   });
   if (!user) return null;
   const totalPurchased = await sumPurchased(prisma, userId);

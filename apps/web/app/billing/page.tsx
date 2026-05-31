@@ -1,4 +1,5 @@
 import BillingClient from "@/components/billing-client";
+import FaqSection from "@/components/faq-section";
 import { PageContainer } from "@/components/page-container";
 
 export default function BillingPage() {
@@ -9,10 +10,11 @@ export default function BillingPage() {
           Тарифы
         </h1>
         <p className="mt-1.5 text-sm text-muted-foreground">
-          Платите за уникального клиента в месяц.
+          Месячная подписка с лимитом диалогов. Платите за уникального клиента.
         </p>
       </div>
       <BillingClient />
+      <FaqSection />
     </PageContainer>
   );
 }

@@ -278,6 +278,41 @@ export async function runJsonCallWithTelemetry<T>(
   }
 }
 
+/**
+ * Транскрипция аудио через OpenAI Whisper (speech-to-text).
+ * Принимает байты аудио + имя файла, возвращает распознанный текст.
+ */
+export async function transcribeAudio(
+  audio: ArrayBuffer | Uint8Array,
+  options: { filename?: string; mimeType?: string; language?: string } = {}
+): Promise<string> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return "";
+
+  const filename = options.filename || "audio.webm";
+  const mimeType = options.mimeType || "audio/webm";
+  const blob = new Blob([audio as BlobPart], { type: mimeType });
+
+  const form = new FormData();
+  form.append("file", blob, filename);
+  form.append("model", process.env.OPENAI_STT_MODEL || "whisper-1");
+  if (options.language) form.append("language", options.language);
+
+  const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenAI transcription failed: ${response.status} ${errorText}`);
+  }
+
+  const data = (await response.json()) as { text?: string };
+  return (data.text ?? "").trim();
+}
+
 async function safeOnCall(telemetry: LlmTelemetryHooks | undefined, record: LlmCallTelemetry): Promise<void> {
   if (!telemetry?.onCall) return;
   try {

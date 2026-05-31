@@ -10,7 +10,8 @@ import {
   buildRuntimeTurn,
   createInitialProfile,
   mergeProfile,
-  summarizeLead
+  summarizeLead,
+  transcribeAudio
 } from "@jazu/ai";
 import { env } from "./env.js";
 import {
@@ -48,11 +49,11 @@ import {
   FREE_TRIAL_DIALOGS,
   PLANS,
   PRICE_PER_DIALOG_KZT,
+  getPlan,
   buildLlmTelemetry,
   getDailyTokenUsage,
   getUsageView,
-  processWaInbound,
-  type PlanId
+  processWaInbound
 } from "@jazu/wa-pipeline";
 import { getInboundQueue } from "@jazu/queue";
 import { sendMagicCodeEmail, sendTelegramLead } from "./lib/notifications.js";
@@ -913,7 +914,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
   }));
 
   // ─── Billing ────────────────────────────────────────────────────────────
-  // Публичный список пакетов + цены — фронт читает один раз на /billing.
+  // Публичный список тарифов + цены — фронт читает один раз на /billing.
   app.get("/billing/plans", async () => ({
     pricePerDialog: PRICE_PER_DIALOG_KZT,
     currency: "KZT",
@@ -947,12 +948,18 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true, ...status };
   });
 
-  // Stub-оплата: создаём Purchase, увеличиваем quotaTotal. Без реальной
-  // платёжки. Когда подключим Kaspi/CloudPayments — добавим pending → paid.
-  const purchaseBodySchema = z.object({
-    packageId: z.enum(["basic", "pro", "max", "custom"]),
-    customCount: z.number().int().min(CUSTOM_MIN).max(CUSTOM_MAX).optional()
+  // Подписка на тариф (subscribe) и докупка диалогов в рамках тарифа (topup).
+  // Оплата сейчас — заглушка (Purchase сразу paid). Реальный Kaspi Pay позже.
+  const subscribeBodySchema = z.object({
+    action: z.literal("subscribe"),
+    planId: z.enum(["start", "business", "scale"])
   });
+  const topupBodySchema = z.object({
+    action: z.literal("topup"),
+    count: z.number().int().min(CUSTOM_MIN).max(CUSTOM_MAX)
+  });
+  const purchaseBodySchema = z.union([subscribeBodySchema, topupBodySchema]);
+
   app.post("/billing/purchase", async (request, reply) => {
     const user = await getUserFromRequest(request);
     if (!user) {
@@ -961,33 +968,77 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     }
     const body = purchaseBodySchema.parse(request.body);
 
-    let conversations: number;
-    if (body.packageId === "custom") {
-      if (!body.customCount) {
+    if (body.action === "subscribe") {
+      const plan = getPlan(body.planId);
+      if (!plan || plan.kind !== "subscription" || plan.conversations === null || plan.monthlyPriceKzt === null) {
         reply.code(400);
-        return { ok: false, error: "customCount обязателен для пакета custom" };
+        return { ok: false, error: "Unknown plan" };
       }
-      // Округляем до шага.
-      conversations = Math.round(body.customCount / CUSTOM_STEP) * CUSTOM_STEP;
-      conversations = Math.max(CUSTOM_MIN, Math.min(CUSTOM_MAX, conversations));
-    } else {
-      const plan = PLANS.find((p) => p.id === (body.packageId as PlanId));
-      if (!plan || plan.conversations === null) {
-        reply.code(400);
-        return { ok: false, error: "Unknown package" };
-      }
-      conversations = plan.conversations;
+      const conversations = plan.conversations;
+      const amount = plan.monthlyPriceKzt;
+      const endsAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+      const purchase = await prisma.$transaction(async (tx) => {
+        const created = await tx.purchase.create({
+          data: {
+            userId: user.id,
+            packageId: plan.id,
+            conversations,
+            pricePerOne: plan.pricePerDialogKzt,
+            amount,
+            currency: "KZT",
+            status: "paid"
+          }
+        });
+        // Подписка задаёт месячный лимит поверх текущего использования
+        // (quotaUsed не сбрасывается — это счётчик уникальных клиентов).
+        const fresh = await tx.user.findUniqueOrThrow({
+          where: { id: user.id },
+          select: { quotaUsed: true }
+        });
+        await tx.user.update({
+          where: { id: user.id },
+          data: {
+            planId: plan.id,
+            subscriptionEndsAt: endsAt,
+            quotaTotal: fresh.quotaUsed + conversations
+          }
+        });
+        return created;
+      });
+
+      await recordAudit({
+        event: "purchase.completed",
+        userId: user.id,
+        request,
+        metadata: { purchaseId: purchase.id, planId: plan.id, conversations, amount, currency: "KZT", kind: "subscribe" }
+      });
+
+      const usage = await getUsageView(prisma, user.id);
+      return { ok: true, purchase, usage };
     }
 
-    const amount = conversations * PRICE_PER_DIALOG_KZT;
+    // topup — докупка диалогов по цене текущего тарифа.
+    const fresh = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+      select: { planId: true, subscriptionEndsAt: true }
+    });
+    if (!fresh.planId) {
+      reply.code(409);
+      return { ok: false, error: "Сначала оформите тариф, потом можно докупать диалоги." };
+    }
+    const plan = getPlan(fresh.planId);
+    const perDialogKzt = plan?.pricePerDialogKzt ?? PRICE_PER_DIALOG_KZT;
+    const count = Math.max(CUSTOM_MIN, Math.min(CUSTOM_MAX, Math.round(body.count / CUSTOM_STEP) * CUSTOM_STEP));
+    const amount = count * perDialogKzt;
 
     const purchase = await prisma.$transaction(async (tx) => {
       const created = await tx.purchase.create({
         data: {
           userId: user.id,
-          packageId: body.packageId,
-          conversations,
-          pricePerOne: PRICE_PER_DIALOG_KZT,
+          packageId: `topup_${fresh.planId}`,
+          conversations: count,
+          pricePerOne: perDialogKzt,
           amount,
           currency: "KZT",
           status: "paid"
@@ -995,7 +1046,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       });
       await tx.user.update({
         where: { id: user.id },
-        data: { quotaTotal: { increment: conversations } }
+        data: { quotaTotal: { increment: count } }
       });
       return created;
     });
@@ -1004,13 +1055,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       event: "purchase.completed",
       userId: user.id,
       request,
-      metadata: {
-        purchaseId: purchase.id,
-        packageId: body.packageId,
-        conversations,
-        amount,
-        currency: "KZT"
-      }
+      metadata: { purchaseId: purchase.id, count, amount, currency: "KZT", kind: "topup" }
     });
 
     const usage = await getUsageView(prisma, user.id);
@@ -1297,6 +1342,149 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true, phone: normalized };
   });
 
+  // ─── Верификация личного номера через код с номера WhatsApp-бота ─────────
+  // Шаг 1: пользователь вводит личный номер. Сравниваем с номером бота.
+  // Если совпадает — считаем верифицированным сразу (код не нужен).
+  // Если отличается — генерим код и шлём его с номера бота на личный номер.
+  app.post("/auth/phone/verify-start", {
+    config: { rateLimit: { max: 5, timeWindow: "1 minute" } }
+  }, async (request, reply) => {
+    const user = await getUserFromRequest(request);
+    if (!user) {
+      reply.code(401);
+      return { ok: false, error: "Authentication required" };
+    }
+    const { phone } = phoneBodySchema.parse(request.body);
+    const normalized = normalizeKzRuPhone(phone);
+    if (!normalized) {
+      reply.code(400);
+      return { ok: false, error: "Введите номер в формате +7XXXXXXXXXX" };
+    }
+
+    const owner = await prisma.user.findUnique({ where: { phone: normalized } });
+    if (owner && owner.id !== user.id) {
+      reply.code(409);
+      return { ok: false, error: "Этот номер уже привязан к другому аккаунту" };
+    }
+
+    // Ищем подключённого бота этого пользователя, чтобы (а) сравнить номер,
+    // (б) иметь канал для отправки кода.
+    const connectedAgent = await prisma.agent.findFirst({
+      where: { userId: user.id, waConnections: { some: { status: "connected" } } },
+      select: {
+        id: true,
+        waConnections: { where: { status: "connected" }, select: { phone: true }, take: 1 }
+      }
+    });
+    const botPhone = connectedAgent?.waConnections?.[0]?.phone ?? null;
+    const botNormalized = botPhone ? normalizeKzRuPhone(botPhone) : null;
+
+    // Личный номер совпадает с номером бота — верификация не нужна.
+    if (botNormalized && botNormalized === normalized) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          phone: normalized,
+          phoneVerifiedAt: new Date(),
+          phonePending: null,
+          phoneVerifyCode: null,
+          phoneVerifyExpiresAt: null,
+          phoneVerifyAttempts: 0
+        }
+      });
+      return { ok: true, verified: true };
+    }
+
+    // Номер отличается — нужен код. Без подключённого бота отправить нельзя.
+    if (!connectedAgent) {
+      reply.code(409);
+      return { ok: false, error: "Сначала подключите WhatsApp — код придёт с номера бота." };
+    }
+
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        phonePending: normalized,
+        phoneVerifyCode: code,
+        phoneVerifyExpiresAt: expiresAt,
+        phoneVerifyAttempts: 0
+      }
+    });
+
+    const targetDigits = normalized.replace(/\D+/g, "");
+    try {
+      await sendWorkerMessage(connectedAgent.id, {
+        chatId: `${targetDigits}@s.whatsapp.net`,
+        text: `Jazu: ваш код подтверждения — ${code}. Введите его в кабинете, чтобы получать уведомления о лидах. Код действует 10 минут.`
+      });
+    } catch (err) {
+      request.log.error({ err, userId: user.id }, "phone verify code send failed");
+      reply.code(502);
+      return { ok: false, error: "Не удалось отправить код. Попробуйте ещё раз." };
+    }
+
+    return { ok: true, verified: false, codeSent: true };
+  });
+
+  // Шаг 2: пользователь вводит код. Проверяем и переносим phonePending в phone.
+  app.post("/auth/phone/verify-confirm", {
+    config: { rateLimit: { max: 10, timeWindow: "1 minute" } }
+  }, async (request, reply) => {
+    const user = await getUserFromRequest(request);
+    if (!user) {
+      reply.code(401);
+      return { ok: false, error: "Authentication required" };
+    }
+    const { code } = z.object({ code: z.string().min(4).max(8) }).parse(request.body);
+
+    const fresh = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: {
+        phonePending: true,
+        phoneVerifyCode: true,
+        phoneVerifyExpiresAt: true,
+        phoneVerifyAttempts: true
+      }
+    });
+    if (!fresh?.phoneVerifyCode || !fresh.phonePending || !fresh.phoneVerifyExpiresAt) {
+      reply.code(400);
+      return { ok: false, error: "Код не запрошен. Начните заново." };
+    }
+    if (fresh.phoneVerifyExpiresAt.getTime() < Date.now()) {
+      reply.code(400);
+      return { ok: false, error: "Код истёк. Запросите новый." };
+    }
+    if (fresh.phoneVerifyAttempts >= 5) {
+      reply.code(429);
+      return { ok: false, error: "Слишком много попыток. Запросите новый код." };
+    }
+    if (fresh.phoneVerifyCode !== code.trim()) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { phoneVerifyAttempts: { increment: 1 } }
+      });
+      reply.code(400);
+      return { ok: false, error: "Неверный код" };
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        phone: fresh.phonePending,
+        phoneVerifiedAt: new Date(),
+        phonePending: null,
+        phoneVerifyCode: null,
+        phoneVerifyExpiresAt: null,
+        phoneVerifyAttempts: 0
+      }
+    });
+
+    await recordAudit({ event: "phone.verified", userId: user.id, request, metadata: {} });
+    return { ok: true, verified: true };
+  });
+
   app.get("/agent/history", async (request, reply) => {
     const agent = await getCurrentAgent(request, reply);
     if (!agent) {
@@ -1327,6 +1515,73 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       prompt: promptVersion?.content || agent.currentPrompt || buildFallbackPrompt(profile),
       businessProfile: profile
     };
+  });
+
+  // Доп-данные бизнеса: структурированный ввод (ссылки, прайс, скрипт, адреса,
+  // часы, ограничения). Мерджим в businessProfile поверх собранного чатом.
+  const extraDataSchema = z.object({
+    links: z.string().max(2000).optional(),
+    pricing: z.string().max(4000).optional(),
+    script: z.string().max(4000).optional(),
+    addresses: z.string().max(2000).optional(),
+    hours: z.string().max(1000).optional(),
+    restrictions: z.string().max(2000).optional()
+  });
+  app.post("/agent/extra-data", async (request, reply) => {
+    const { agent } = await buildWriteSessionView(request, reply);
+    const body = extraDataSchema.parse(request.body);
+    const profile = await ensureAgentProfile(agent.id);
+
+    const splitLines = (s?: string) =>
+      (s ?? "").split(/[\n;]+/).map((x) => x.trim()).filter(Boolean);
+
+    const patch: Partial<typeof profile> = {};
+    if (body.pricing !== undefined) patch.pricingPolicy = body.pricing.trim();
+    if (body.hours !== undefined) patch.hours = body.hours.trim();
+    if (body.addresses !== undefined) patch.addressPolicy = body.addresses.trim();
+    if (body.restrictions !== undefined) patch.notAllowed = splitLines(body.restrictions);
+    // Ссылки и скрипт складываем в notes/integrations как доп-контекст.
+    const noteParts: string[] = [];
+    if (body.links) noteParts.push(`Ссылки: ${body.links.trim()}`);
+    if (body.script) noteParts.push(`Скрипт/сценарий: ${body.script.trim()}`);
+    if (noteParts.length > 0) patch.notes = noteParts.join("\n");
+
+    const merged = mergeProfile(profile, patch);
+    await prisma.businessProfile.upsert({
+      where: { agentId: agent.id },
+      update: { data: merged },
+      create: { agentId: agent.id, data: merged }
+    });
+
+    return { ok: true, businessProfile: merged };
+  });
+
+  // Голосовой ввод: распознавание речи (STT). Аудио приходит как base64 в JSON,
+  // чтобы не тянуть multipart-плагин. Лимит размера защищает от больших файлов.
+  const transcribeSchema = z.object({
+    audioBase64: z.string().min(1).max(8_000_000), // ~6 МБ аудио в base64
+    mimeType: z.string().max(100).optional(),
+    language: z.string().max(10).optional()
+  });
+  app.post("/transcribe", {
+    config: { rateLimit: { max: 30, timeWindow: "1 minute" } }
+  }, async (request, reply) => {
+    const user = await getUserFromRequest(request);
+    // Доступно и гостю (для тест-чата), и авторизованному.
+    const body = transcribeSchema.parse(request.body);
+    try {
+      const buffer = Buffer.from(body.audioBase64, "base64");
+      const text = await transcribeAudio(buffer, {
+        mimeType: body.mimeType ?? "audio/webm",
+        filename: "voice.webm",
+        language: body.language ?? "ru"
+      });
+      return { ok: true, text };
+    } catch (err) {
+      request.log.error({ err, userId: user?.id ?? null }, "transcribe failed");
+      reply.code(502);
+      return { ok: false, error: "Не удалось распознать речь" };
+    }
   });
 
   // Прогресс настройки бота для текущей сессии (работает и для гостя через

@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Home,
   LayoutDashboard,
   MessageSquare,
   Smartphone,
@@ -18,8 +17,8 @@ import { cn } from "@/lib/cn";
 import SidebarUserMenu from "@/components/sidebar-user-menu";
 import { useAuthStatus } from "@/lib/use-auth-status";
 
+// «Главная» убрана из меню авторизованного — лендинг только для гостей.
 const navItems = [
-  { href: "/", icon: Home, label: "Главная" },
   { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/chats", icon: MessageSquare, label: "Диалоги" },
   { href: "/whatsapp", icon: Smartphone, label: "WhatsApp" },

@@ -21,6 +21,7 @@ import { env } from "./env.js";
 import { handleWaInbound } from "./handlers/wa-inbound.js";
 import { logger } from "./logger.js";
 import { startRetentionCron } from "./retention.js";
+import { startSubscriptionRemindersCron } from "./subscription-reminders.js";
 
 initSentry({
   service: "jobs",
@@ -64,6 +65,9 @@ waInboundWorker.worker.on("failed", (job, err) => {
 
 // Daily retention sweep — чистит WaMessage / LlmCallLog старше N дней.
 const stopRetention = startRetentionCron(env.RETENTION_DAYS);
+
+// Daily — напоминания об окончании тарифа / исчерпании диалогов (WA + email).
+const stopSubReminders = startSubscriptionRemindersCron();
 
 // Маленький Fastify-сервер для k8s/Compose healthcheck'ов. Только /healthz и /readyz.
 const health = Fastify({ logger: false, trustProxy: true });
@@ -121,6 +125,7 @@ async function shutdown(signal: string): Promise<void> {
   hardExitTimer.unref();
 
   stopRetention();
+  stopSubReminders();
 
   try {
     await health.close();

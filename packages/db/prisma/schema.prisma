@@ -13,6 +13,14 @@ model User {
   name            String?
   phone           String?     @unique
   phoneVerifiedAt DateTime?
+  // Верификация личного номера кодом, отправленным с номера WhatsApp-бота.
+  // Код хранится временно (TTL ~10 мин) с ограничением попыток ввода.
+  phoneVerifyCode      String?
+  phoneVerifyExpiresAt DateTime?
+  phoneVerifyAttempts  Int       @default(0)
+  // Кандидат-номер: вводится до верификации, переносится в phone только
+  // после успешного подтверждения (чтобы unique-номер не «занимался» зря).
+  phonePending         String?
   googleId        String?     @unique
   avatarUrl       String?
   telegramChatId  String?
@@ -23,6 +31,10 @@ model User {
   // При исчерпании quotaUsed >= quotaTotal бот перестаёт отвечать (block_all).
   quotaTotal      Int         @default(35)
   quotaUsed       Int         @default(0)
+  // Подписка: текущий тариф и дата окончания месяца. null = только free trial.
+  // Авто-продления нет (платёжный шлюз пока заглушка) — продление вручную.
+  planId             String?
+  subscriptionEndsAt DateTime?
   // Дневной лимит токенов LLM (sum input+output) — защита от взрыва счёта
   // на OpenAI. По умолчанию 50_000 для free trial (~10-15 диалогов в день).
   // У платных пользователей увеличивается в момент покупки пакета.

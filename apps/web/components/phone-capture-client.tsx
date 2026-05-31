@@ -37,6 +37,10 @@ export default function PhoneCaptureClient() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(true);
+  // Двухэтапная верификация: phone -> (если номер != номер бота) -> code.
+  const [stage, setStage] = useState<"phone" | "code">("phone");
+  const [code, setCode] = useState("");
+  const [info, setInfo] = useState<string | null>(null);
 
   // Если юзер уже залогинен и у него уже есть phone — сразу в dashboard.
   // Если не залогинен — на /auth (логин).
@@ -83,30 +87,60 @@ export default function PhoneCaptureClient() {
     if (!phone.trim() || busy) return;
     setBusy(true);
     setError(null);
+    setInfo(null);
     try {
-      // apiFetch вместо apiJson: нужно прочитать { error } даже при 409.
-      const response = await apiFetch("/auth/phone", {
+      // verify-start: бэк сравнивает номер с номером бота. Если совпал —
+      // сразу верифицирован. Если нет — шлёт код с номера бота и просит ввод.
+      const response = await apiFetch("/auth/phone/verify-start", {
         method: "POST",
         body: JSON.stringify({ phone: phone.trim() })
+      });
+      const data = (await response.json().catch(() => null)) as
+        | { ok?: boolean; error?: string; verified?: boolean; codeSent?: boolean }
+        | null;
+      if (!response.ok || !data?.ok) {
+        setError(data?.error ?? "Не удалось сохранить номер");
+        if (response.status === 409) setPhone("");
+        return;
+      }
+      if (data.verified) {
+        // Номер совпал с номером бота — верификация не нужна.
+        resetAuthStatus();
+        router.replace(nextTarget);
+        return;
+      }
+      // Код отправлен — переходим к вводу.
+      setStage("code");
+      setInfo("Мы отправили код на ваш WhatsApp с номера бота.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось сохранить номер");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmCode() {
+    const trimmed = code.replace(/\D+/g, "");
+    if (!trimmed || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await apiFetch("/auth/phone/verify-confirm", {
+        method: "POST",
+        body: JSON.stringify({ code: trimmed })
       });
       const data = (await response.json().catch(() => null)) as
         | { ok?: boolean; error?: string }
         | null;
       if (!response.ok || !data?.ok) {
-        setError(data?.error ?? "Не удалось сохранить номер");
-        // Конфликт по чужому номеру — очищаем ввод, чтобы было видно,
-        // что значение не принято.
-        if (response.status === 409) {
-          setPhone("");
-        }
+        setError(data?.error ?? "Неверный код");
+        setCode("");
         return;
       }
-      // Сбрасываем кэш /auth/me, чтобы SideNav сразу показал навигацию,
-      // а PhoneRequiredGuard больше не считал нас обязанным вводить номер.
       resetAuthStatus();
       router.replace(nextTarget);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось сохранить номер");
+      setError(err instanceof Error ? err.message : "Не удалось проверить код");
     } finally {
       setBusy(false);
     }
@@ -127,12 +161,63 @@ export default function PhoneCaptureClient() {
           <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-foreground">
             <Phone className="h-5 w-5 text-background" />
           </div>
-          <h1 className="text-lg font-semibold">Добавьте личный номер</h1>
+          <h1 className="text-lg font-semibold">
+            {stage === "code" ? "Подтвердите номер" : "Добавьте личный номер"}
+          </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            На этот номер мы будем писать в WhatsApp о новых лидах от вашего бота.
+            {stage === "code"
+              ? "Мы отправили код на ваш WhatsApp с номера бота."
+              : "На этот номер мы будем писать в WhatsApp о новых лидах от вашего бота."}
           </p>
         </div>
 
+        {stage === "code" ? (
+          <div className="space-y-3">
+            <div>
+              <label htmlFor="verify-code" className="block text-sm font-medium text-foreground">
+                Код из WhatsApp
+              </label>
+              <p className="mt-1 mb-1.5 text-xs text-muted-foreground">
+                Введите 6-значный код, который пришёл на {phone} с номера бота.
+              </p>
+              <input
+                id="verify-code"
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={code}
+                onChange={(e) => {
+                  setCode(e.target.value.replace(/\D+/g, "").slice(0, 6));
+                  if (error) setError(null);
+                }}
+                onKeyDown={(e) => e.key === "Enter" && void confirmCode()}
+                placeholder="123456"
+                className={cn(
+                  "mt-1.5 w-full rounded-lg border bg-background px-3.5 py-2.5 text-center text-lg font-mono tracking-[0.4em] text-foreground outline-none transition placeholder:text-muted-foreground/50",
+                  error
+                    ? "border-red-400 focus:border-red-500 focus:ring-1 focus:ring-red-500/20"
+                    : "border-border focus:border-foreground focus:ring-1 focus:ring-foreground/10"
+                )}
+              />
+            </div>
+            <Button className="w-full" onClick={() => void confirmCode()} disabled={busy || code.length < 4}>
+              {busy ? "Проверяем…" : "Подтвердить"}
+              {!busy && <ArrowRight className="h-4 w-4" />}
+            </Button>
+            <button
+              type="button"
+              onClick={() => { setStage("phone"); setCode(""); setError(null); setInfo(null); }}
+              className="w-full text-center text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Изменить номер
+            </button>
+            {info && (
+              <FormAlert variant="success" className="mt-1">
+                {info}
+              </FormAlert>
+            )}
+          </div>
+        ) : (
         <div className="space-y-3">
           <div>
             <label htmlFor="phone" className="block text-sm font-medium text-foreground">
@@ -168,22 +253,25 @@ export default function PhoneCaptureClient() {
             onClick={() => void submit()}
             disabled={busy || !phone.trim()}
           >
-            {busy ? "Сохраняем…" : "Сохранить"}
+            {busy ? "Проверяем…" : "Продолжить"}
             {!busy && <ArrowRight className="h-4 w-4" />}
           </Button>
         </div>
+        )}
 
-        <div className="mt-5 rounded-lg border border-border bg-secondary/40 px-4 py-3 text-xs leading-5 text-muted-foreground">
-          <div className="mb-1.5 flex items-center gap-1.5 font-medium text-foreground">
-            <Bell className="h-3.5 w-3.5" />
-            Что мы будем сюда присылать
+        {stage === "phone" && (
+          <div className="mt-5 rounded-lg border border-border bg-secondary/40 px-4 py-3 text-xs leading-5 text-muted-foreground">
+            <div className="mb-1.5 flex items-center gap-1.5 font-medium text-foreground">
+              <Bell className="h-3.5 w-3.5" />
+              Что мы будем сюда присылать
+            </div>
+            <ul className="space-y-1 pl-1">
+              <li>• уведомления о новых лидах от бота;</li>
+              <li>• статус подключения WhatsApp и важные алерты;</li>
+              <li>• ничего рекламного, без спама.</li>
+            </ul>
           </div>
-          <ul className="space-y-1 pl-1">
-            <li>• уведомления о новых лидах от бота;</li>
-            <li>• статус подключения WhatsApp и важные алерты;</li>
-            <li>• ничего рекламного, без спама.</li>
-          </ul>
-        </div>
+        )}
 
         {error && (
           <FormAlert variant="error" className="mt-4">

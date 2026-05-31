@@ -53,6 +53,9 @@ export default function AuthDialog({
   const [codeError, setCodeError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [googleEnabled, setGoogleEnabled] = useState(false);
+  // Email-вход — вторичный путь: показываем форму только по запросу,
+  // чтобы Google оставался главным заметным CTA.
+  const [showEmail, setShowEmail] = useState(false);
   const [lockUntil, setLockUntil] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const codeInputRef = useRef<HTMLInputElement>(null);
@@ -189,24 +192,35 @@ export default function AuthDialog({
         {stage === "email" && googleEnabled && (
           <>
             <Button
-              variant="outline"
-              className="w-full gap-2"
+              className="h-12 w-full gap-2.5 text-base font-semibold"
               onClick={() => {
                 persistNext(nextPath ?? null);
                 window.location.href = `${API_BASE_URL}/auth/google/start`;
               }}
             >
-              Войти через Google
+              <GoogleLogo className="h-5 w-5" />
+              Продолжить через Google
             </Button>
-            <div className="my-4 flex items-center gap-3 text-xs text-muted-foreground">
-              <div className="h-px flex-1 bg-border" />
-              <span>или</span>
-              <div className="h-px flex-1 bg-border" />
-            </div>
+            {!showEmail && (
+              <button
+                type="button"
+                onClick={() => setShowEmail(true)}
+                className="mt-3 w-full text-center text-xs text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Или войти по email
+              </button>
+            )}
+            {showEmail && (
+              <div className="my-4 flex items-center gap-3 text-xs text-muted-foreground">
+                <div className="h-px flex-1 bg-border" />
+                <span>вход по email</span>
+                <div className="h-px flex-1 bg-border" />
+              </div>
+            )}
           </>
         )}
 
-        {stage === "email" ? (
+        {stage === "email" && (showEmail || !googleEnabled) ? (
           <div className="space-y-3">
             <div>
               <label htmlFor="auth-dialog-email" className="block text-sm font-medium text-foreground">
@@ -244,7 +258,9 @@ export default function AuthDialog({
               {!busy && !cooldownActive && <ArrowRight className="h-4 w-4" />}
             </Button>
           </div>
-        ) : (
+        ) : null}
+
+        {stage === "code" && (
           <div className="space-y-3">
             <div>
               <label htmlFor="auth-dialog-code" className="block text-sm font-medium text-foreground">
@@ -323,5 +339,16 @@ export default function AuthDialog({
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+function GoogleLogo({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path fill="#4285F4" d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.45c-.28 1.49-1.12 2.75-2.39 3.6v3h3.87c2.26-2.09 3.56-5.17 3.56-8.84z" />
+      <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.87-3c-1.08.72-2.45 1.15-4.06 1.15-3.12 0-5.77-2.11-6.71-4.95H1.29v3.11C3.26 21.31 7.31 24 12 24z" />
+      <path fill="#FBBC05" d="M5.29 14.29A7.2 7.2 0 014.9 12c0-.79.14-1.56.39-2.29V6.6H1.29A12 12 0 000 12c0 1.94.47 3.77 1.29 5.4l4-3.11z" />
+      <path fill="#EA4335" d="M12 4.77c1.76 0 3.34.61 4.59 1.8l3.43-3.43C17.95 1.18 15.24 0 12 0 7.31 0 3.26 2.69 1.29 6.6l4 3.11C6.23 6.88 8.88 4.77 12 4.77z" />
+    </svg>
   );
 }

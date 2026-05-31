@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Send, RotateCcw, Mic, Pencil, Play, FileText } from "lucide-react";
+import { ChevronDown, ChevronRight, Send, RotateCcw, Mic, Pencil, Play, FileText, Smartphone } from "lucide-react";
 import {
   type ActionButton,
   type BusinessProfile,
@@ -23,6 +23,7 @@ import { renderMarkdown } from "@/lib/render-markdown";
 import { toast } from "sonner";
 import { useAuthStatus } from "@/lib/use-auth-status";
 import AuthDialog from "@/components/auth-dialog";
+import ExtraDataDialog from "@/components/extra-data-dialog";
 
 type AssistantPart = {
   type: string;
@@ -356,13 +357,15 @@ function MessageRow({
       {actionButton && !isStreaming && (
         <div>
           <Button
-            size="sm"
+            size="lg"
             onClick={() => {
               if (actionButton.type === "switch_to_test") {
                 window.dispatchEvent(new CustomEvent("jazu:switchToTest"));
               }
             }}
+            className="gap-2 bg-[#25D366] text-base font-semibold text-white shadow-lg shadow-[#25D366]/30 transition hover:bg-[#1ebe5c] hover:shadow-[#25D366]/40"
           >
+            <Play className="h-4 w-4 fill-current" />
             {actionButton.label}
           </Button>
         </div>
@@ -402,10 +405,74 @@ export default function ChatWorkspace() {
   const [busy, setBusy] = useState(false);
   const [correction, setCorrection] = useState<CorrectionState | null>(null);
   const [promptDrawerOpen, setPromptDrawerOpen] = useState(false);
+  const [extraDataOpen, setExtraDataOpen] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
   const [inputDisabled, setInputDisabled] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const connectBtnRef = useRef<HTMLButtonElement>(null);
+  const extraDataBtnRef = useRef<HTMLButtonElement>(null);
+
+  // ── Голосовой ввод (STT) ────────────────────────────────────────────────
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+
+  async function toggleRecording() {
+    if (recording) {
+      mediaRecorderRef.current?.stop();
+      return;
+    }
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      toast.error("Браузер не поддерживает запись голоса");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        void transcribeBlob(blob, recorder.mimeType || "audio/webm");
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+    } catch {
+      toast.error("Нет доступа к микрофону");
+    }
+  }
+
+  async function transcribeBlob(blob: Blob, mimeType: string) {
+    setRecording(false);
+    if (blob.size === 0) return;
+    setTranscribing(true);
+    try {
+      const buf = await blob.arrayBuffer();
+      let binary = "";
+      const bytes = new Uint8Array(buf);
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+      const audioBase64 = btoa(binary);
+      const res = await apiJson<{ ok: boolean; text?: string; error?: string }>("/transcribe", {
+        method: "POST",
+        body: JSON.stringify({ audioBase64, mimeType, language: "ru" })
+      });
+      if (res.ok && res.text) {
+        setInput((prev) => (prev ? `${prev} ${res.text}` : res.text ?? ""));
+      } else {
+        toast.error(res.error ?? "Не удалось распознать речь");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Ошибка распознавания");
+    } finally {
+      setTranscribing(false);
+    }
+  }
 
   // ── Триггеры регистрации гостя в тестовом чате ──────────────────────────
   // Срабатывают ТОЛЬКО для неавторизованного пользователя и взаимоисключающи:
@@ -417,13 +484,17 @@ export default function ChatWorkspace() {
   const triggerFiredRef = useRef(false);
   const correctionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const userMessageCountRef = useRef(0);
-  const [authModal, setAuthModal] = useState<{ title: string; description: string; unlockOnClose: boolean } | null>(null);
+  const [authModal, setAuthModal] = useState<{ title: string; description: string } | null>(null);
+  // Непропускаемая подсказка у кнопки «Привязать ватсап»: появляется, когда
+  // гость закрыл модалку регистрации. Блокирует всё, кроме клика по кнопке.
+  const [stickyHint, setStickyHint] = useState<{ title: string; description: string } | null>(null);
 
   function markTriggerFired() {
     triggerFiredRef.current = true;
   }
 
-  function openAuthModal(opts: { title: string; description: string; unlockOnClose: boolean }) {
+  function openAuthModal(opts: { title: string; description: string }) {
+    setStickyHint(null);
     setAuthModal(opts);
   }
 
@@ -577,8 +648,7 @@ export default function ChatWorkspace() {
       openAuthModal({
         title: "Ваш бот только что закрыл тестового лида! ⚡️",
         description:
-          "Готовы получать такие же заявки от реальных клиентов? Авторизуйтесь в 1 клик, чтобы сохранить бота и получить QR-код для WhatsApp.",
-        unlockOnClose: false
+          "Готовы получать такие же заявки от реальных клиентов? Привяжите WhatsApp в 1 клик, чтобы сохранить бота и подключить его к реальным клиентам."
       });
       return;
     }
@@ -591,8 +661,7 @@ export default function ChatWorkspace() {
       openAuthModal({
         title: "Ваш ИИ-продавец отлично держит удар! 🥊",
         description:
-          "Система полностью готова к бою. Авторизуйтесь в 1 клик, чтобы забрать этого бота себе и протестировать на реальных клиентах.",
-        unlockOnClose: true
+          "Система полностью готова к бою. Привяжите WhatsApp в 1 клик, чтобы забрать этого бота себе и подключить к реальным клиентам."
       });
     }
   }
@@ -618,19 +687,19 @@ export default function ChatWorkspace() {
       setCorrection(null);
       await Promise.all([refreshPrompt(), refreshHistories()]);
       notifyPromptProgress();
-      // Trigger 2 — успешная правка из теста. Откладываем модалку на 2.5с,
+      // Trigger 2 — успешная правка из теста. Откладываем модалку на 5с,
       // чтобы юзер увидел результат правки. Читаем актуальный ref в колбэке.
       if (wasInTest && !isAuth && !triggerFiredRef.current) {
         correctionTimerRef.current = setTimeout(() => {
           if (triggerFiredRef.current) return;
           markTriggerFired();
+          setInputDisabled(true);
           openAuthModal({
             title: "Идеально! Бот усвоил ваши правила.",
             description:
-              "Сохраните прогресс, чтобы ваши настройки не потерялись, и подключите бота к реальному WhatsApp.",
-            unlockOnClose: false
+              "Сохраните прогресс, чтобы настройки не потерялись — привяжите WhatsApp и подключите бота к реальным клиентам."
           });
-        }, 2500);
+        }, 5000);
       }
       // После правки из теста — переключаем юзера в чат Настройки, чтобы он
       // увидел зелёную карточку «Промпт обновлён» в основном месте правды.
@@ -700,6 +769,26 @@ export default function ChatWorkspace() {
 
         {isTest && (
           <div className="flex items-center gap-1">
+            {!isAuth && (
+              <button
+                ref={connectBtnRef}
+                type="button"
+                onClick={() =>
+                  openAuthModal({
+                    title: "Привяжите WhatsApp",
+                    description:
+                      "Войдите и подключите WhatsApp, чтобы бот начал отвечать вашим реальным клиентам."
+                  })
+                }
+                className={cn(
+                  "relative z-50 flex items-center gap-1 rounded-full bg-[#25D366] px-3 py-1 text-xs font-semibold text-white shadow-sm transition hover:bg-[#1ebe5c]",
+                  stickyHint && "ring-4 ring-[#25D366]/30"
+                )}
+              >
+                <Smartphone className="h-3.5 w-3.5" />
+                Привязать WhatsApp
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setPromptDrawerOpen(true)}
@@ -717,6 +806,21 @@ export default function ChatWorkspace() {
             >
               <RotateCcw className="h-3.5 w-3.5" />
               Сбросить
+            </button>
+          </div>
+        )}
+
+        {!isTest && (
+          <div className="flex items-center gap-1">
+            <button
+              ref={extraDataBtnRef}
+              type="button"
+              onClick={() => setExtraDataOpen(true)}
+              className="flex items-center gap-1 rounded-full bg-secondary px-2.5 py-1 text-xs font-medium text-foreground transition hover:bg-secondary/70"
+              title="Добавить данные о бизнесе"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              Доп. данные
             </button>
           </div>
         )}
@@ -751,6 +855,14 @@ export default function ChatWorkspace() {
             />
           ))
         )}
+          {!isTest && (
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 pb-28 text-[11px] text-muted-foreground">
+              <a href="/legal/oferta" target="_blank" rel="noopener noreferrer" className="underline-offset-2 hover:text-foreground hover:underline">Оферта</a>
+              <a href="/legal/usloviya" target="_blank" rel="noopener noreferrer" className="underline-offset-2 hover:text-foreground hover:underline">Условия</a>
+              <a href="/legal/politika" target="_blank" rel="noopener noreferrer" className="underline-offset-2 hover:text-foreground hover:underline">Политика</a>
+              <a href="mailto:hello@jazu.chat" className="underline-offset-2 hover:text-foreground hover:underline">hello@jazu.chat</a>
+            </div>
+          )}
           <div ref={bottomRef} />
         </div>
       </div>
@@ -777,7 +889,11 @@ export default function ChatWorkspace() {
             rows={1}
             disabled={busy || inputDisabled}
             placeholder={
-              mode === "setup"
+              recording
+                ? "Идёт запись… нажмите микрофон, чтобы остановить"
+                : transcribing
+                ? "Распознаём речь…"
+                : mode === "setup"
                 ? "Опишите бизнес или поправьте бота…"
                 : "Напишите от лица клиента…"
             }
@@ -806,23 +922,29 @@ export default function ChatWorkspace() {
               />
             </div>
 
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
               <button
                 type="button"
-                disabled
-                className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground/60"
-                title="Голосовой ввод — скоро"
+                onClick={() => void toggleRecording()}
+                disabled={busy || inputDisabled || transcribing}
+                className={cn(
+                  "flex h-10 w-10 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+                  recording
+                    ? "animate-pulse bg-red-500 text-white"
+                    : "bg-secondary text-foreground hover:bg-secondary/70"
+                )}
+                title={recording ? "Остановить запись" : "Голосовой ввод"}
                 aria-label="Голосовой ввод"
               >
-                <Mic className="h-4 w-4" />
+                <Mic className="h-5 w-5" />
               </button>
               <button
                 type="button"
                 onClick={() => void submitMessage()}
-                disabled={busy || inputDisabled || !input.trim()}
+                disabled={busy || inputDisabled || transcribing || !input.trim()}
                 aria-label="Отправить"
                 className={cn(
-                  "flex h-9 w-9 items-center justify-center rounded-full text-white transition-colors",
+                  "flex h-10 w-10 items-center justify-center rounded-full text-white transition-colors",
                   "disabled:cursor-not-allowed disabled:opacity-50",
                   isTest
                     ? "bg-[#25D366] hover:bg-[#1ebe5c]"
@@ -908,24 +1030,59 @@ export default function ChatWorkspace() {
         </DialogContent>
       </Dialog>
 
-      {/* Регистрация гостя — триггеры лояльности */}
+      {/* Регистрация гостя — триггеры лояльности. После входа ведём в воронку
+          привязки WhatsApp (nextPath=/whatsapp). */}
       {authModal && (
         <AuthDialog
           open
           title={authModal.title}
           description={authModal.description}
-          nextPath="/dashboard"
+          nextPath="/whatsapp"
           onClose={() => {
-            const unlock = authModal.unlockOnClose;
+            // Закрытие крестиком НЕ снимает блокировку: переводим в
+            // непропускаемую подсказку у кнопки «Привязать ватсап».
+            const hint = authModal;
             setAuthModal(null);
-            if (unlock) setInputDisabled(false);
+            setStickyHint({ title: hint.title, description: hint.description });
           }}
           onSuccess={() => {
             // Вход выполнен — снимаем блокировку и подтягиваем историю/промпт.
             setInputDisabled(false);
+            setStickyHint(null);
             void Promise.all([refreshPrompt(), refreshHistories()]);
           }}
         />
+      )}
+
+      {/* Доп-данные о бизнесе (структурированный ввод) */}
+      <ExtraDataDialog
+        open={extraDataOpen}
+        onClose={() => setExtraDataOpen(false)}
+        onSaved={() => void refreshPrompt()}
+      />
+
+      {/* Непропускаемая подсказка у кнопки «Привязать WhatsApp». Оверлей
+          блокирует всё (z-40), сама кнопка в хедере поднята над ним (z-50)
+          и остаётся единственным кликабельным элементом. */}
+      {stickyHint && !authModal && (
+        <div className="absolute inset-0 z-40">
+          <div className="absolute inset-0 bg-foreground/40 backdrop-blur-[1px]" aria-hidden />
+          <div className="absolute right-3 top-14 z-50 w-[min(20rem,calc(100vw-1.5rem))] rounded-2xl border border-[#25D366]/30 bg-card p-4 shadow-2xl">
+            <div className="absolute -top-2 right-8 h-4 w-4 rotate-45 border-l border-t border-[#25D366]/30 bg-card" aria-hidden />
+            <p className="text-sm font-semibold text-foreground">{stickyHint.title}</p>
+            <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{stickyHint.description}</p>
+            <button
+              type="button"
+              onClick={() =>
+                openAuthModal({ title: stickyHint.title, description: stickyHint.description })
+              }
+              className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-full bg-[#25D366] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#1ebe5c]"
+            >
+              <Smartphone className="h-3.5 w-3.5" />
+              Привязать WhatsApp
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Prompt drawer */}

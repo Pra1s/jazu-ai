@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { LogIn, LogOut, ChevronUp, UserCircle, CreditCard, Zap } from "lucide-react";
+import { LogIn, LogOut, ChevronUp, Zap } from "lucide-react";
 import { apiFetch, apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { resetAuthStatus, subscribeAuthStatus } from "@/lib/use-auth-status";
@@ -263,40 +263,6 @@ export default function SidebarUserMenu({ collapsed = false }: { collapsed?: boo
                 </div>
               )}
             </div>
-
-            <DropdownMenu.Separator className="my-1 h-px bg-border" />
-
-            <DropdownMenu.Item asChild>
-              <Link
-                href="/settings"
-                className="flex cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-sm text-foreground outline-none focus:bg-secondary"
-              >
-                <UserCircle className="h-4 w-4" />
-                Профиль и настройки
-              </Link>
-            </DropdownMenu.Item>
-
-            <DropdownMenu.Item asChild>
-              <Link
-                href="/billing"
-                className="flex cursor-pointer items-center justify-between gap-2 rounded-md px-3 py-2 text-sm text-foreground outline-none focus:bg-secondary"
-              >
-                <span className="flex items-center gap-2">
-                  <CreditCard className="h-4 w-4" />
-                  Тарифы и диалоги
-                </span>
-                {usage && (
-                  <span
-                    className={cn(
-                      "tabular-nums text-[11px]",
-                      usage.exhausted ? "text-destructive font-semibold" : "text-muted-foreground"
-                    )}
-                  >
-                    {fmt(usage.remaining)}
-                  </span>
-                )}
-              </Link>
-            </DropdownMenu.Item>
 
             <DropdownMenu.Separator className="my-1 h-px bg-border" />
 

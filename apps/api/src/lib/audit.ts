@@ -15,6 +15,7 @@ export type AuditEvent =
   | "magic_link.expired"
   | "google.linked"
   | "phone.updated"
+  | "phone.verified"
   | "wa.pair_requested"
   | "wa.paired"
   | "wa.connected"

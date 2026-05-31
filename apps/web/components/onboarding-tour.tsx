@@ -1,48 +1,69 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { apiJson } from "@/lib/api";
 
 type TourStep =
+  | "extra_data"
+  | "test_mode"
+  | "chats"
+  | "whatsapp"
+  | "billing"
+  // Legacy-значения (из старого тура / сервера) — трактуем как завершённый тур.
   | "describe_business"
   | "switch_to_test"
   | "write_client_message"
   | "correct_reply"
-  // Legacy-значение: шаг подключения вынесен в подсказку в шапке (coachmark).
-  // Если придёт из сервера/localStorage — трактуем как завершённый тур.
   | "connect_whatsapp"
   | "done";
 
-const steps: Record<Exclude<TourStep, "done" | "connect_whatsapp">, { title: string; body: string; action: string }> = {
-  describe_business: {
-    title: "Шаг 1. Опишите бизнес",
-    body: "Чем подробнее вы расскажете о нише, услугах, ценах и ограничениях, тем точнее будет промпт. Начните прямо в поле ниже.",
-    action: "Далее"
+type StepDef = { title: string; body: string; action: string; href?: string };
+
+// Обзор-тур по кабинету. Начинается с кнопки доп-данных на дашборде, дальше
+// ведёт по вкладкам — каждый «Далее» авто-переходит на нужную страницу.
+const steps: Record<Exclude<TourStep, "done" | "describe_business" | "switch_to_test" | "write_client_message" | "correct_reply" | "connect_whatsapp">, StepDef> = {
+  extra_data: {
+    title: "Шаг 1. Данные о бизнесе",
+    body: "Нажмите «Доп. данные» в шапке, чтобы добавить прайс, адреса, часы работы, ссылки и ограничения - бот будет использовать их в ответах.",
+    action: "Далее",
+    href: "/dashboard"
   },
-  switch_to_test: {
-    title: "Шаг 2. Переключитесь в Тест",
-    body: "Когда база собрана, переключитесь в Тест и отправьте сообщение от лица клиента.",
-    action: "Далее"
+  test_mode: {
+    title: "Шаг 2. Протестируйте бота",
+    body: "Переключитесь в «Тест» и напишите как клиент. Если ответ не нравится - нажмите «Поправить».",
+    action: "Далее",
+    href: "/dashboard"
   },
-  write_client_message: {
-    title: "Шаг 3. Пишите как клиент",
-    body: "Не формулируйте правила — просто напишите обычный вопрос, будто вам пишет реальный клиент в WhatsApp.",
-    action: "Далее"
+  chats: {
+    title: "Шаг 3. Диалоги и лиды",
+    body: "Здесь видны переписки клиентов с ботом и горячие лиды. Бота можно поставить на паузу.",
+    action: "Далее",
+    href: "/chats"
   },
-  correct_reply: {
-    title: "Шаг 4. Поправляйте ответы",
-    body: "Если бот ответил не так, нажмите «Поправить» и объясните, как нужно отвечать в следующий раз — промпт обновится автоматически. Когда всё готово — кнопка «Привязать WhatsApp» появится в шапке.",
-    action: "Понятно"
+  whatsapp: {
+    title: "Шаг 4. Подключите WhatsApp",
+    body: "На этой странице привяжите номер по коду или QR - и бот начнёт отвечать реальным клиентам.",
+    action: "Далее",
+    href: "/whatsapp"
+  },
+  billing: {
+    title: "Шаг 5. Тарифы и диалоги",
+    body: "Следите за остатком диалогов, продлевайте тариф и докупайте диалоги здесь.",
+    action: "Понятно",
+    href: "/billing"
   }
 };
 
-const STEP_ORDER: TourStep[] = [
+const STEP_ORDER: TourStep[] = ["extra_data", "test_mode", "chats", "whatsapp", "billing", "done"];
+
+const LEGACY_STEPS = new Set<string>([
   "describe_business",
   "switch_to_test",
   "write_client_message",
   "correct_reply",
-  "done"
-];
+  "connect_whatsapp"
+]);
 
 const storageKey = "jazu_onboarding_step";
 
@@ -55,25 +76,23 @@ type SettingsResponse = {
 };
 
 export default function OnboardingTour() {
+  const router = useRouter();
   const [step, setStep] = useState<TourStep>("done");
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     const local = window.localStorage.getItem(storageKey);
-    // Legacy: шаг connect_whatsapp удалён из тура (его роль взяла подсказка
-    // в шапке). Если юзер был на нём — считаем тур завершённым.
-    if (local === "done" || local === "connect_whatsapp") {
+    // Завершённый тур или любой legacy-шаг — считаем тур пройденным.
+    if (local === "done" || (local && LEGACY_STEPS.has(local))) {
       window.localStorage.setItem(storageKey, "done");
       setStep("done");
       setLoaded(true);
       return;
     }
 
-    // Try to sync with server state for authenticated users
     apiJson<SettingsResponse>("/settings")
       .then((me) => {
         if (!me.success) {
-          // Guest — use localStorage only
           const initial = STEP_ORDER[0];
           if (!local && initial) {
             setStep(initial);
@@ -84,53 +103,36 @@ export default function OnboardingTour() {
         }
 
         const serverStep = me.user?.onboardingState?.step;
-        if (
-          serverStep === "done" ||
-          serverStep === "connect_whatsapp" ||
-          local === "done"
-        ) {
+        if (serverStep === "done" || (serverStep && LEGACY_STEPS.has(serverStep)) || local === "done") {
           window.localStorage.setItem(storageKey, "done");
           setStep("done");
           return;
         }
 
-        const resolved = (serverStep || local || "describe_business") as TourStep;
-        if (STEP_ORDER.includes(resolved)) {
-          setStep(resolved);
-        } else {
-          const initial = STEP_ORDER[0];
-          if (initial) {
-            setStep(initial);
-          }
-        }
+        const resolved = (serverStep || local || STEP_ORDER[0]) as TourStep;
+        setStep(STEP_ORDER.includes(resolved) ? resolved : (STEP_ORDER[0] as TourStep));
       })
       .catch(() => {
-        const resolved = (local || "describe_business") as TourStep;
-        setStep(STEP_ORDER.includes(resolved) ? resolved : "describe_business");
+        const resolved = (local || STEP_ORDER[0]) as TourStep;
+        setStep(STEP_ORDER.includes(resolved) ? resolved : (STEP_ORDER[0] as TourStep));
       })
       .finally(() => setLoaded(true));
   }, []);
 
   useEffect(() => {
-    if (!loaded) {
-      return;
-    }
-
+    if (!loaded) return;
     window.localStorage.setItem(storageKey, step);
-
-    // Only save to server for authenticated users — silent fail for guests
     apiJson("/settings", {
       method: "PATCH",
       body: JSON.stringify({ onboardingState: { step, updatedAt: new Date().toISOString() } })
     }).catch(() => {});
   }, [step, loaded]);
 
-  // connect_whatsapp — legacy-шаг без карточки (вынесен в подсказку шапки).
-  if (!loaded || step === "done" || step === "connect_whatsapp") {
+  if (!loaded || step === "done" || LEGACY_STEPS.has(step)) {
     return null;
   }
 
-  const current = steps[step];
+  const current = (steps as Record<string, StepDef>)[step];
   if (!current) {
     return null;
   }
@@ -139,19 +141,24 @@ export default function OnboardingTour() {
     const idx = STEP_ORDER.indexOf(step);
     const next = STEP_ORDER[idx + 1] ?? "done";
     setStep(next);
+    // Авто-переход на страницу следующего шага.
+    if (next !== "done") {
+      const nextDef = (steps as Record<string, StepDef>)[next];
+      if (nextDef?.href) router.push(nextDef.href);
+    }
   }
 
   return (
     <div className="fixed left-1/2 bottom-[calc(env(safe-area-inset-bottom,0px)+7rem)] z-40 w-[min(92vw,22rem)] -translate-x-1/2 rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl sm:left-auto sm:right-4 sm:bottom-4 sm:translate-x-0">
       <div className="flex items-center justify-between gap-3">
         <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-          Обучение · {STEP_ORDER.indexOf(step)}/{STEP_ORDER.length - 1}
+          Обзор · {STEP_ORDER.indexOf(step) + 1}/{STEP_ORDER.length - 1}
         </div>
         <button
           type="button"
           onClick={() => setStep("done")}
           className="text-xs text-slate-400 hover:text-slate-600"
-          aria-label="Закрыть онбординг"
+          aria-label="Закрыть обзор"
         >
           ✕
         </button>

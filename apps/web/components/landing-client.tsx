@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Bot, MessageSquare, Zap } from "lucide-react";
+import { ArrowRight, Bot, MessageSquare, Sparkles, Zap } from "lucide-react";
 import { apiJson, apiSse } from "@/lib/api";
 import { type ActionButton } from "@jazu/shared";
 import { Button } from "@/components/ui/button";
 import { FormAlert } from "@/components/ui/form-alert";
 import { cn } from "@/lib/cn";
+import { useAuthStatus } from "@/lib/use-auth-status";
+import SiteFooter from "@/components/site-footer";
 
 type BuilderTurn = {
   assistantText: string;
@@ -36,9 +38,17 @@ const features = [
 
 export default function LandingClient() {
   const router = useRouter();
+  const authStatus = useAuthStatus();
   const [business, setBusiness] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Лендинг — только для гостей. Авторизованного сразу уводим в кабинет.
+  useEffect(() => {
+    if (authStatus?.ok === true) {
+      router.replace("/dashboard");
+    }
+  }, [authStatus, router]);
 
   async function start() {
     if (!business.trim() || busy) return;
@@ -98,8 +108,9 @@ export default function LandingClient() {
           placeholder="Например: мы занимаемся оценкой ущерба после ДТП, пожара и затопления. Нужен бот, который подробно расспрашивает клиента и передаёт горячие заявки."
         />
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="text-xs text-muted-foreground">
-            ⌘+Enter для отправки
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Sparkles className="h-3.5 w-3.5 text-[#25D366]" />
+            Настройка и тест бота — бесплатно
           </div>
           <div className="flex gap-2">
             <Button
@@ -132,31 +143,7 @@ export default function LandingClient() {
         ))}
       </div>
 
-      {/* Footer */}
-      <footer className="mt-12 border-t border-border pt-6 pb-6 sm:mt-16">
-        <div className="flex flex-col items-center gap-3 text-center">
-          <p className="text-xs text-muted-foreground">
-            © {new Date().getFullYear()} Jazu · ТОО «FINTECH IT»
-          </p>
-          <nav className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
-            {[
-              { href: "/legal/oferta", label: "Публичный договор-оферта" },
-              { href: "/legal/usloviya", label: "Условия использования" },
-              { href: "/legal/politika", label: "Политика конфиденциальности" }
-            ].map((link) => (
-              <a
-                key={link.href}
-                href={link.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
-              >
-                {link.label}
-              </a>
-            ))}
-          </nav>
-        </div>
-      </footer>
+      <SiteFooter className="mt-12 sm:mt-16" />
     </div>
   );
 }

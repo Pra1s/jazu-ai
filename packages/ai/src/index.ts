@@ -559,6 +559,7 @@ export {
   calcCostMicroUsd,
   completeJsonWithUsage,
   runJsonCallWithTelemetry,
+  transcribeAudio,
   type LlmUsage,
   type LlmCallTelemetry,
   type LlmTelemetryHooks
