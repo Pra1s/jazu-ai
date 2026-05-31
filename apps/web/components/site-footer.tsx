@@ -17,7 +17,7 @@ export default function SiteFooter({ className = "" }: { className?: string }) {
     <footer className={`border-t border-border py-6 ${className}`}>
       <div className="flex flex-col items-center gap-3 text-center">
         <p className="text-xs text-muted-foreground">
-          © {new Date().getFullYear()} Jazu
+          © {new Date().getFullYear()} Jazu. Все права защищены.
         </p>
         <nav className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
           {LEGAL_LINKS.map((link) => (
