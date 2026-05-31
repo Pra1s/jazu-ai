@@ -41,6 +41,8 @@ export const promptCardSchema = z.object({
   addedLines: z.array(z.string()).default([]),
   removedLines: z.array(z.string()).default([]),
   changeSummary: z.string().optional(),
+  correctionType: z.string().optional(),
+  sectionEdited: z.string().optional(),
   charCount: z.number().int().nonnegative(),
   editsCount: z.number().int().nonnegative()
 });

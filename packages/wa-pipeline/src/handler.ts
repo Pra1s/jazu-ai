@@ -162,6 +162,25 @@ async function getOrCreateConversation(prisma: PrismaClient, agentId: string, ch
   });
 }
 
+type HandoffType = "hot_lead" | "complaint" | "out_of_scope" | "requested" | null;
+
+// Заголовок уведомления зависит от типа передачи: жалоба и горячий лид
+// требуют более явного/срочного сигнала владельцу, чем стандартная передача.
+function handoffNotificationTitle(handoffType: HandoffType): { plain: string; html: string } {
+  switch (handoffType) {
+    case "hot_lead":
+      return { plain: "🔥 Горячий лид", html: "<b>🔥 Горячий лид</b>" };
+    case "complaint":
+      return { plain: "⚠️ Жалоба — срочно", html: "<b>⚠️ Жалоба — срочно</b>" };
+    case "out_of_scope":
+      return { plain: "❓ Нестандартный вопрос", html: "<b>❓ Нестандартный вопрос</b>" };
+    case "requested":
+      return { plain: "📞 Просят менеджера", html: "<b>📞 Просят менеджера</b>" };
+    default:
+      return { plain: "🔔 Новый лид", html: "<b>Новый лид</b>" };
+  }
+}
+
 async function writeLeadIfNeeded(
   prisma: PrismaClient,
   agentId: string,
@@ -169,7 +188,8 @@ async function writeLeadIfNeeded(
   summary: string,
   message: string,
   shouldCreate: boolean,
-  options: WaInboundOptions
+  options: WaInboundOptions,
+  handoffType: HandoffType = null
 ): Promise<string | null> {
   if (!shouldCreate) return null;
   const existing = await prisma.lead.findFirst({
@@ -184,7 +204,8 @@ async function writeLeadIfNeeded(
       niche: null,
       fields: {
         sourceMessage: message,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        ...(handoffType ? { handoffType } : {})
       },
       status: "new"
     }
@@ -194,6 +215,8 @@ async function writeLeadIfNeeded(
     where: { id: agentId },
     include: { user: true, waConnections: { orderBy: { createdAt: "desc" }, take: 1 } }
   });
+
+  const title = handoffNotificationTitle(handoffType);
 
   // Канал 1 (основной): WhatsApp на личный номер владельца через его бота.
   // Шлём только если бот подключён (есть activный WaConnection) и у юзера
@@ -211,7 +234,7 @@ async function writeLeadIfNeeded(
       agentId: agent.id,
       personalPhone: agent.user.phone,
       botPhone: waConnection.phone,
-      text: [`🔔 Новый лид`, summary, `Агент: ${agent.name}`].join("\n\n")
+      text: [title.plain, summary, `Агент: ${agent.name}`].join("\n\n")
     });
   }
 
@@ -220,7 +243,7 @@ async function writeLeadIfNeeded(
     void sendTelegramLead(
       options.telegramBotToken,
       agent.user.telegramChatId,
-      [`<b>Новый лид</b>`, summary, `Agent: ${agent.name}`].join("\n")
+      [title.html, summary, `Agent: ${agent.name}`].join("\n")
     );
   }
 
@@ -385,7 +408,11 @@ export async function processWaInbound(
         role: item.direction === "out" ? "assistant" : "user",
         content: item.body
       })),
-    { systemOverride, telemetry }
+    {
+      systemOverride,
+      ...(agent.carcass ? { carcass: agent.carcass as "booking" | "inspection" | "sales" } : {}),
+      telemetry
+    }
   );
 
   await prisma.waMessage.create({
@@ -414,7 +441,8 @@ export async function processWaInbound(
     summary,
     input.message,
     runtimeTurn.shouldHandoff,
-    options
+    options,
+    runtimeTurn.handoffType ?? null
   );
 
   return {

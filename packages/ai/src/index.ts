@@ -19,6 +19,8 @@ import {
 
 export type PromptEventKind = "skip" | "create" | "edit";
 
+export type Carcass = "booking" | "inspection" | "sales";
+
 export type BuilderTurn = {
   assistantText: string;
   profilePatch: Partial<BusinessProfile>;
@@ -26,6 +28,7 @@ export type BuilderTurn = {
   promptDraft?: string;
   promptEvent?: PromptEventKind;
   promptSummary?: string;
+  carcass?: Carcass | null;
   actionButton?: ActionButton | undefined;
   readyToTest?: boolean;
   notes?: string[] | undefined;
@@ -168,6 +171,7 @@ export async function buildBuilderTurn(
       promptDraft?: string;
       promptEvent?: PromptEventKind;
       promptSummary?: string;
+      carcass?: Carcass | null;
       readyToTest?: boolean;
       notes?: string[];
       actionButton?: ActionButton;
@@ -290,6 +294,11 @@ export async function buildBuilderTurn(
       ? completion.promptSummary.trim()
       : undefined;
 
+    const allowedCarcass: Carcass[] = ["booking", "inspection", "sales"];
+    const carcass: Carcass | null = allowedCarcass.includes(completion.carcass as Carcass)
+      ? (completion.carcass as Carcass)
+      : null;
+
     return {
       assistantText: sanitizeAssistantText(
         completion.assistantText ||
@@ -302,6 +311,7 @@ export async function buildBuilderTurn(
       promptDraft,
       promptEvent,
       ...(promptSummary ? { promptSummary } : {}),
+      carcass,
       readyToTest: completion.readyToTest ?? nextQuestions.length === 0,
       ...(actionButton ? { actionButton } : {}),
       notes: completion.notes
@@ -345,7 +355,7 @@ export async function buildRuntimeTurn(
   profile: BusinessProfile,
   userText: string,
   history: Array<{ role: "user" | "assistant"; content: string }> = [],
-  options: { systemOverride?: string | null; telemetry?: LlmTelemetryHooks } = {}
+  options: { systemOverride?: string | null; carcass?: Carcass; telemetry?: LlmTelemetryHooks } = {}
 ): Promise<RuntimeTurn> {
   const summary = summarizeLead(profile, userText);
   const handoff = identifyLeadNeed(userText);
@@ -354,7 +364,10 @@ export async function buildRuntimeTurn(
     : null;
   const systemPrompt = override ?? buildRuntimePrompt(profile);
 
-  const runtimeSystem = buildRuntimeEnvelope(systemPrompt);
+  // ПОРЯДОК ВАЖЕН: сначала бизнес-промпт (ниша, оффер, ограничения из БД или
+  // fallback), и только ПОСЛЕ него — envelope (роль/формат/воронка/handoff).
+  // Бот сначала осознаёт нишу и границы, затем получает команды поведения.
+  const runtimeSystem = `${systemPrompt}\n\n${buildRuntimeEnvelope(options.carcass)}`;
 
   try {
     const wrapper = await runJsonCallWithTelemetry<{

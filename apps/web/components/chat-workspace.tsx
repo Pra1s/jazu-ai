@@ -21,6 +21,8 @@ import {
 import { cn } from "@/lib/cn";
 import { renderMarkdown } from "@/lib/render-markdown";
 import { toast } from "sonner";
+import { useAuthStatus } from "@/lib/use-auth-status";
+import AuthDialog from "@/components/auth-dialog";
 
 type AssistantPart = {
   type: string;
@@ -28,6 +30,8 @@ type AssistantPart = {
   action_button?: ActionButton;
   prompt_card?: PromptCard;
 };
+
+type HandoffType = "hot_lead" | "complaint" | "out_of_scope" | "requested" | null;
 
 type TurnResponse = {
   assistantText?: string;
@@ -37,6 +41,7 @@ type TurnResponse = {
   readyToTest?: boolean;
   nextQuestions?: string[];
   shouldHandoff?: boolean;
+  handoffType?: HandoffType;
   summary?: string;
   assistantParts?: AssistantPart[];
   promptCard?: PromptCard;
@@ -88,6 +93,17 @@ function isStale(parts: ChatMessage["parts"]): boolean {
         (p as { stale?: boolean }).stale === true)
   );
 }
+
+const correctionTypeLabel: Record<string, string> = {
+  tone: "Тон",
+  scenario: "Сценарий",
+  restriction: "Запрет",
+  fact: "Факт",
+  handoff: "Передача",
+  objection: "Возражение",
+  multi: "Несколько правил",
+  other: "Другое"
+};
 
 function PromptCardInline({ card, animate = false }: { card: PromptCard; animate?: boolean }) {
   const isCorrection = card.kind === "correction" || card.changeKind === "correction";
@@ -196,6 +212,18 @@ function PromptCardInline({ card, animate = false }: { card: PromptCard; animate
         </span>
       </button>
 
+      {isCorrection && (card.correctionType || card.sectionEdited) && (
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-emerald-200/70 px-3 py-2">
+          {card.correctionType && correctionTypeLabel[card.correctionType] && (
+            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
+              {correctionTypeLabel[card.correctionType]}
+            </span>
+          )}
+          {card.sectionEdited && (
+            <span className="text-[11px] text-emerald-800/80">{card.sectionEdited}</span>
+          )}
+        </div>
+      )}
       {isCorrection && card.changeSummary && (
         <div className="border-t border-emerald-200/70 px-3 py-2 text-xs leading-5 text-emerald-900">
           {card.changeSummary}
@@ -375,8 +403,29 @@ export default function ChatWorkspace() {
   const [correction, setCorrection] = useState<CorrectionState | null>(null);
   const [promptDrawerOpen, setPromptDrawerOpen] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [inputDisabled, setInputDisabled] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // ── Триггеры регистрации гостя в тестовом чате ──────────────────────────
+  // Срабатывают ТОЛЬКО для неавторизованного пользователя и взаимоисключающи:
+  // первый сработавший блокирует остальные в этой сессии.
+  const authStatus = useAuthStatus();
+  const isAuth = authStatus?.ok === true;
+  // triggerFired — через ref: колбэк setTimeout (Trigger 2) должен читать
+  // актуальное значение, а не захваченное на момент создания таймера.
+  const triggerFiredRef = useRef(false);
+  const correctionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const userMessageCountRef = useRef(0);
+  const [authModal, setAuthModal] = useState<{ title: string; description: string; unlockOnClose: boolean } | null>(null);
+
+  function markTriggerFired() {
+    triggerFiredRef.current = true;
+  }
+
+  function openAuthModal(opts: { title: string; description: string; unlockOnClose: boolean }) {
+    setAuthModal(opts);
+  }
 
   async function refreshPrompt() {
     try {
@@ -482,6 +531,8 @@ export default function ChatWorkspace() {
     const placeholder: ChatMessage = { id: sid, role: "assistant", content: "", parts: [], createdAt: new Date().toISOString() };
     setTestMessages((prev) => [...prev, opt, placeholder]);
     setInput("");
+    // Считаем сообщения пользователя для Trigger 3 (лимит).
+    userMessageCountRef.current += 1;
 
     try {
       const turn = await apiSse<TurnResponse>("/test-chat/chat", { message: text }, (token) => {
@@ -503,12 +554,46 @@ export default function ChatWorkspace() {
           };
         })
       );
+      maybeFireChatTriggers(turn);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка");
       setTestMessages((prev) => prev.filter((m) => m.id !== sid));
     } finally {
       setBusy(false);
       setStreamingId(null);
+    }
+  }
+
+  // Триггеры на ответ из /test-chat/chat. Приоритет: 1 (hot_lead) > 3 (лимит).
+  // Оба могут «хотеть» сработать на одном ответе — порядок строгий.
+  function maybeFireChatTriggers(turn: TurnResponse) {
+    if (isAuth || triggerFiredRef.current) return;
+
+    // Trigger 1 — горячий лид (наивысший приоритет).
+    if (turn.shouldHandoff && turn.handoffType === "hot_lead") {
+      markTriggerFired();
+      if (correctionTimerRef.current) clearTimeout(correctionTimerRef.current);
+      setInputDisabled(true);
+      openAuthModal({
+        title: "Ваш бот только что закрыл тестового лида! ⚡️",
+        description:
+          "Готовы получать такие же заявки от реальных клиентов? Авторизуйтесь в 1 клик, чтобы сохранить бота и получить QR-код для WhatsApp.",
+        unlockOnClose: false
+      });
+      return;
+    }
+
+    // Trigger 3 — лимит сообщений.
+    if (userMessageCountRef.current >= 8) {
+      markTriggerFired();
+      if (correctionTimerRef.current) clearTimeout(correctionTimerRef.current);
+      setInputDisabled(true);
+      openAuthModal({
+        title: "Ваш ИИ-продавец отлично держит удар! 🥊",
+        description:
+          "Система полностью готова к бою. Авторизуйтесь в 1 клик, чтобы забрать этого бота себе и протестировать на реальных клиентах.",
+        unlockOnClose: true
+      });
     }
   }
 
@@ -522,6 +607,8 @@ export default function ChatWorkspace() {
         ok: boolean;
         assistantText?: string;
         changeSummary?: string;
+        correctionType?: string;
+        sectionEdited?: string;
         regenerated?: { id: string; content: string } | null;
         staleMessageId?: string | null;
       }>(endpoint, {
@@ -531,6 +618,20 @@ export default function ChatWorkspace() {
       setCorrection(null);
       await Promise.all([refreshPrompt(), refreshHistories()]);
       notifyPromptProgress();
+      // Trigger 2 — успешная правка из теста. Откладываем модалку на 2.5с,
+      // чтобы юзер увидел результат правки. Читаем актуальный ref в колбэке.
+      if (wasInTest && !isAuth && !triggerFiredRef.current) {
+        correctionTimerRef.current = setTimeout(() => {
+          if (triggerFiredRef.current) return;
+          markTriggerFired();
+          openAuthModal({
+            title: "Идеально! Бот усвоил ваши правила.",
+            description:
+              "Сохраните прогресс, чтобы ваши настройки не потерялись, и подключите бота к реальному WhatsApp.",
+            unlockOnClose: false
+          });
+        }, 2500);
+      }
       // После правки из теста — переключаем юзера в чат Настройки, чтобы он
       // увидел зелёную карточку «Промпт обновлён» в основном месте правды.
       // В тесте всё подтянется само, если юзер сам туда вернётся.
@@ -674,7 +775,7 @@ export default function ChatWorkspace() {
               }
             }}
             rows={1}
-            disabled={busy}
+            disabled={busy || inputDisabled}
             placeholder={
               mode === "setup"
                 ? "Опишите бизнес или поправьте бота…"
@@ -718,7 +819,7 @@ export default function ChatWorkspace() {
               <button
                 type="button"
                 onClick={() => void submitMessage()}
-                disabled={busy || !input.trim()}
+                disabled={busy || inputDisabled || !input.trim()}
                 aria-label="Отправить"
                 className={cn(
                   "flex h-9 w-9 items-center justify-center rounded-full text-white transition-colors",
@@ -806,6 +907,26 @@ export default function ChatWorkspace() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Регистрация гостя — триггеры лояльности */}
+      {authModal && (
+        <AuthDialog
+          open
+          title={authModal.title}
+          description={authModal.description}
+          nextPath="/dashboard"
+          onClose={() => {
+            const unlock = authModal.unlockOnClose;
+            setAuthModal(null);
+            if (unlock) setInputDisabled(false);
+          }}
+          onSuccess={() => {
+            // Вход выполнен — снимаем блокировку и подтягиваем историю/промпт.
+            setInputDisabled(false);
+            void Promise.all([refreshPrompt(), refreshHistories()]);
+          }}
+        />
+      )}
 
       {/* Prompt drawer */}
       {promptDrawerOpen && (

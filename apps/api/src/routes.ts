@@ -225,9 +225,19 @@ function diffPromptVersions(prev: string | null, next: string): { added: string[
 function buildPromptCard(
   prev: string | null,
   next: string,
-  options: { changeKind?: "create" | "edit" | "correction"; changeSummary?: string } = {}
+  options: {
+    changeKind?: "create" | "edit" | "correction";
+    changeSummary?: string;
+    correctionType?: string;
+    sectionEdited?: string;
+  } = {}
 ): PromptCard | undefined {
   if (!next) return undefined;
+  const meta = {
+    ...(options.changeSummary ? { changeSummary: options.changeSummary } : {}),
+    ...(options.correctionType ? { correctionType: options.correctionType } : {}),
+    ...(options.sectionEdited ? { sectionEdited: options.sectionEdited } : {})
+  };
   if (!prev) {
     return {
       kind: "update",
@@ -237,7 +247,7 @@ function buildPromptCard(
       removedLines: [],
       charCount: next.length,
       editsCount: 0,
-      ...(options.changeSummary ? { changeSummary: options.changeSummary } : {})
+      ...meta
     };
   }
   if (prev === next) {
@@ -253,7 +263,7 @@ function buildPromptCard(
     removedLines: removed,
     charCount: next.length,
     editsCount: added.length + removed.length,
-    ...(options.changeSummary ? { changeSummary: options.changeSummary } : {})
+    ...meta
   };
 }
 
@@ -338,7 +348,12 @@ async function ensureAgentProfile(agentId: string) {
   return profile;
 }
 
-async function savePromptVersion(agentId: string, content: string, source: "create" | "edit" | "correction") {
+async function savePromptVersion(
+  agentId: string,
+  content: string,
+  source: "create" | "edit" | "correction",
+  meta?: { correctionType?: string | null; sectionEdited?: string | null }
+) {
   const previous = await prisma.promptVersion.findFirst({
     where: { agentId },
     orderBy: { createdAt: "desc" }
@@ -351,6 +366,8 @@ async function savePromptVersion(agentId: string, content: string, source: "crea
       charCount: content.length,
       source,
       createdBy: "ai",
+      correctionType: meta?.correctionType ?? null,
+      sectionEdited: meta?.sectionEdited ?? null,
       parentId: previous?.id ?? null,
       metadata: {
         updatedAt: new Date().toISOString()
@@ -367,7 +384,31 @@ async function savePromptVersion(agentId: string, content: string, source: "crea
   });
 }
 
-async function writeLeadIfNeeded(agentId: string, conversationId: string, summary: string, message: string, shouldCreate: boolean) {
+type HandoffType = "hot_lead" | "complaint" | "out_of_scope" | "requested" | null;
+
+function handoffNotificationTitle(handoffType: HandoffType): string {
+  switch (handoffType) {
+    case "hot_lead":
+      return "<b>🔥 Горячий лид</b>";
+    case "complaint":
+      return "<b>⚠️ Жалоба — срочно</b>";
+    case "out_of_scope":
+      return "<b>❓ Нестандартный вопрос</b>";
+    case "requested":
+      return "<b>📞 Просят менеджера</b>";
+    default:
+      return "<b>Новый лид</b>";
+  }
+}
+
+async function writeLeadIfNeeded(
+  agentId: string,
+  conversationId: string,
+  summary: string,
+  message: string,
+  shouldCreate: boolean,
+  handoffType: HandoffType = null
+) {
   if (!shouldCreate) {
     return null;
   }
@@ -387,7 +428,8 @@ async function writeLeadIfNeeded(agentId: string, conversationId: string, summar
       niche: null,
       fields: {
         sourceMessage: message,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        ...(handoffType ? { handoffType } : {})
       },
       status: "new"
     }
@@ -401,7 +443,7 @@ async function writeLeadIfNeeded(agentId: string, conversationId: string, summar
   if (agent?.user?.telegramChatId) {
     sendTelegramLead(
       agent.user.telegramChatId,
-      [`<b>Новый лид</b>`, summary, `Agent: ${agent.name}`].join("\n")
+      [handoffNotificationTitle(handoffType), summary, `Agent: ${agent.name}`].join("\n")
     ).catch((err: unknown) => {
       console.error("Telegram notification failed (non-fatal):", err instanceof Error ? err.message : err);
     });
@@ -1414,6 +1456,15 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         create: { agentId: agent.id, data: mergedProfile }
       });
 
+      // Сохраняем каркас воронки, как только билдер его определил, и если у
+      // агента он ещё не зафиксирован. Каркас задаётся один раз — по нише.
+      if (turn.carcass && !agent.carcass) {
+        await prisma.agent.update({
+          where: { id: agent.id },
+          data: { carcass: turn.carcass }
+        });
+      }
+
       const existingPrompt = await prisma.promptVersion.findFirst({
         where: { agentId: agent.id },
         orderBy: { createdAt: "desc" }
@@ -1556,9 +1607,14 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
 
     const promptCard = buildPromptCard(currentPrompt, result.newPrompt, {
       changeKind: "correction",
-      changeSummary: result.changeSummary
+      changeSummary: result.changeSummary,
+      ...(result.correctionType ? { correctionType: result.correctionType } : {}),
+      ...(result.sectionEdited ? { sectionEdited: result.sectionEdited } : {})
     });
-    await savePromptVersion(agent.id, result.newPrompt, "correction");
+    await savePromptVersion(agent.id, result.newPrompt, "correction", {
+      correctionType: result.correctionType ?? null,
+      sectionEdited: result.sectionEdited ?? null
+    });
 
     await prisma.builderMessage.create({
       data: {
@@ -1582,6 +1638,8 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       assistantText: result.assistantText,
       promptDraft: result.newPrompt,
       changeSummary: result.changeSummary,
+      correctionType: result.correctionType ?? "other",
+      sectionEdited: result.sectionEdited ?? "",
       promptCard
     };
   });
@@ -1651,9 +1709,14 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
 
     const promptCard = buildPromptCard(currentPrompt, result.newPrompt, {
       changeKind: "correction",
-      changeSummary: result.changeSummary
+      changeSummary: result.changeSummary,
+      ...(result.correctionType ? { correctionType: result.correctionType } : {}),
+      ...(result.sectionEdited ? { sectionEdited: result.sectionEdited } : {})
     });
-    await savePromptVersion(agent.id, result.newPrompt, "correction");
+    await savePromptVersion(agent.id, result.newPrompt, "correction", {
+      correctionType: result.correctionType ?? null,
+      sectionEdited: result.sectionEdited ?? null
+    });
 
     if (targetMessage?.role === "assistant") {
       const existingParts = Array.isArray(targetMessage.parts) ? (targetMessage.parts as unknown[]) : [];
@@ -1722,6 +1785,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
           })),
           {
             systemOverride: result.newPrompt,
+            ...(agent.carcass ? { carcass: agent.carcass as "booking" | "inspection" | "sales" } : {}),
             telemetry: buildLlmTelemetry({
               route: "test-regenerate",
               userId: agent.userId ?? null,
@@ -1751,6 +1815,8 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       assistantText: result.assistantText,
       promptDraft: result.newPrompt,
       changeSummary: result.changeSummary,
+      correctionType: result.correctionType ?? "other",
+      sectionEdited: result.sectionEdited ?? "",
       promptCard,
       staleMessageId: targetMessage?.id ?? null,
       regenerated
@@ -1789,6 +1855,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         })),
         {
           systemOverride: agent.currentPrompt,
+          ...(agent.carcass ? { carcass: agent.carcass as "booking" | "inspection" | "sales" } : {}),
           telemetry: buildLlmTelemetry({
             route: "test-chat",
             userId: agent.userId ?? null,
@@ -1817,7 +1884,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
           TEST_CONVERSATION_CHAT_ID,
           "Test client"
         );
-        await writeLeadIfNeeded(agent.id, conversation.id, turn.summary || summarizeLead(profile, message), message, true);
+        await writeLeadIfNeeded(agent.id, conversation.id, turn.summary || summarizeLead(profile, message), message, true, turn.handoffType ?? null);
       }
 
       stream.writeEvent("done", turn);
