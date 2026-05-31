@@ -5,9 +5,9 @@ import { Mail } from "lucide-react";
 const SUPPORT_EMAIL = "hello@jazu.chat";
 
 const LEGAL_LINKS = [
-  { href: "/legal/oferta", label: "Публичный договор-оферта" },
-  { href: "/legal/usloviya", label: "Условия использования" },
-  { href: "/legal/politika", label: "Политика конфиденциальности" }
+  { href: "/legal/oferta", label: "Оферта" },
+  { href: "/legal/usloviya", label: "Условия" },
+  { href: "/legal/politika", label: "Политика" }
 ];
 
 // Единый футер: легал-ссылки + email поддержки. Используется на лендинге и
@@ -17,7 +17,7 @@ export default function SiteFooter({ className = "" }: { className?: string }) {
     <footer className={`border-t border-border py-6 ${className}`}>
       <div className="flex flex-col items-center gap-3 text-center">
         <p className="text-xs text-muted-foreground">
-          © {new Date().getFullYear()} Jazu · ТОО «FINTECH IT»
+          © {new Date().getFullYear()} Jazu
         </p>
         <nav className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
           {LEGAL_LINKS.map((link) => (
