@@ -85,6 +85,7 @@ export default function BillingClient() {
     [data, usage]
   );
   const topupPricePerDialog = currentPlan?.pricePerDialogKzt ?? data?.pricePerDialog ?? 0;
+  const topupPricePerDialogCents = currentPlan?.pricePerDialogUsdCents ?? 0;
   const topupPrice = topupCount * topupPricePerDialog;
 
   // Оплата идёт через Kaspi Pay: открываем платёжную ссылку в новой вкладке.
@@ -197,7 +198,7 @@ export default function BillingClient() {
                 Докупить диалоги
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                По цене вашего тарифа - {fmt(topupPricePerDialog)} ₸ за диалог.
+                По цене вашего тарифа - ~{topupPricePerDialogCents}¢ за диалог.
               </p>
               <div className="mt-3 flex items-baseline gap-2">
                 <span className="text-3xl font-semibold tracking-tight tabular-nums text-foreground">
@@ -282,13 +283,13 @@ function PlanCard({
 
       <div className="mt-2 text-sm text-foreground">
         {fmt(plan.conversations ?? 0)} диалогов
-        <span className="text-muted-foreground"> · ~{fmt(plan.pricePerDialogKzt)} ₸ за диалог</span>
+        <span className="text-muted-foreground"> · ~{plan.pricePerDialogUsdCents}¢ за диалог</span>
       </div>
 
       {plan.audience && <p className="mt-1 text-xs text-muted-foreground">{plan.description}</p>}
 
       <Button
-        variant={plan.popular ? "default" : "outline"}
+        variant="default"
         size="lg"
         className="mt-7 w-full rounded-full"
         onClick={onSubscribe}
