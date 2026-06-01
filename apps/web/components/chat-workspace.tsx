@@ -389,6 +389,10 @@ function MessageRow({
 export default function ChatWorkspace() {
   const [mode, setMode] = useState<Mode>("setup");
   const [prompt, setPrompt] = useState("");
+  // Истинный признак «бот настроен» — есть сохранённая версия промпта в БД
+  // (как у кнопки «Подключить WhatsApp»). Локальный prompt всегда непустой
+  // из-за fallback-промпта, поэтому для гейтов используем именно hasPrompt.
+  const [hasPrompt, setHasPrompt] = useState(false);
   const [, setProfile] = useState<BusinessProfile>(() => businessProfileSchema.parse({}));
   const [builderMessages, setBuilderMessages] = useState<ChatMessage[]>([]);
   const [testMessages, setTestMessages] = useState<ChatMessage[]>([]);
@@ -512,6 +516,10 @@ export default function ChatWorkspace() {
       const data = await apiJson<PromptResponse>("/agent/prompt");
       setPrompt(data.prompt);
       setProfile(businessProfileSchema.parse(data.businessProfile));
+    } catch { /* non-critical */ }
+    try {
+      const progress = await apiJson<{ hasPrompt: boolean }>("/agent/progress");
+      setHasPrompt(progress.hasPrompt);
     } catch { /* non-critical */ }
   }
 
@@ -830,7 +838,7 @@ export default function ChatWorkspace() {
         <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4">
         {messages.length === 0 ? (
           <div className="flex flex-1 items-center justify-center">
-            {mode === "test" && !prompt ? (
+            {mode === "test" && !hasPrompt ? (
               <div className="flex flex-col items-center gap-4 text-center">
                 <p className="text-sm text-muted-foreground">
                   Сначала настройте вашего AI-менеджера
