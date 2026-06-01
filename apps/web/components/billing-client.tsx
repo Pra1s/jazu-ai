@@ -48,6 +48,11 @@ function fmt(n: number) {
   return n.toLocaleString("ru-RU");
 }
 
+// Цена за диалог в долларах из внутренних центов: 12 -> "$0.12".
+function usd(cents: number) {
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
 // Платёжная ссылка Kaspi Pay. Пока единая для всех тарифов и докупки:
 // после оплаты диалоги/тариф зачисляются вручную.
 const KASPI_PAY_URL = "https://pay.kaspi.kz/pay/ugtxcmxz";
@@ -198,7 +203,7 @@ export default function BillingClient() {
                 Докупить диалоги
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                По цене вашего тарифа - ~{topupPricePerDialogCents}¢ за диалог.
+                По цене вашего тарифа - ~{usd(topupPricePerDialogCents)} за диалог.
               </p>
               <div className="mt-3 flex items-baseline gap-2">
                 <span className="text-3xl font-semibold tracking-tight tabular-nums text-foreground">
@@ -283,7 +288,7 @@ function PlanCard({
 
       <div className="mt-2 text-sm text-foreground">
         {fmt(plan.conversations ?? 0)} диалогов
-        <span className="text-muted-foreground"> · ~{plan.pricePerDialogUsdCents}¢ за диалог</span>
+        <span className="text-muted-foreground"> · ~{usd(plan.pricePerDialogUsdCents)} за диалог</span>
       </div>
 
       {plan.audience && <p className="mt-1 text-xs text-muted-foreground">{plan.description}</p>}
