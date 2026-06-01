@@ -817,10 +817,10 @@ export default function ChatWorkspace() {
               type="button"
               onClick={() => setExtraDataOpen(true)}
               className="flex items-center gap-1 rounded-full bg-secondary px-2.5 py-1 text-xs font-medium text-foreground transition hover:bg-secondary/70"
-              title="Добавить данные о бизнесе"
+              title="Добавить данные о бизнесе: ссылки, прайс, адреса, часы работы"
             >
               <FileText className="h-3.5 w-3.5" />
-              Доп. данные
+              Данные о бизнесе
             </button>
           </div>
         )}
