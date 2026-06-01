@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Zap } from "lucide-react";
+import { Zap, X } from "lucide-react";
 import { persistNext } from "@/lib/safe-next";
 
 function WhatsAppIcon({ className }: { className?: string }) {
@@ -38,6 +38,7 @@ export default function GuestHeader() {
   const router = useRouter();
   const [progress, setProgress] = useState<ProgressResponse | null>(null);
   const [notReadyOpen, setNotReadyOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const refreshProgress = useCallback(async () => {
     try {
@@ -79,14 +80,25 @@ export default function GuestHeader() {
 
       <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
         {showWaCta && (
-          <button
-            type="button"
-            onClick={handleConnectClick}
-            className="flex items-center gap-1.5 whitespace-nowrap rounded-full bg-[#25D366] px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#1ebe5c] sm:gap-2 sm:px-4 sm:text-sm"
-          >
-            <WhatsAppIcon className="h-4 w-4 shrink-0" />
-            Подключить WhatsApp
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={() => setHelpOpen(true)}
+              className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition hover:bg-secondary hover:text-foreground"
+              title="Помощь"
+              aria-label="Помощь"
+            >
+              <span className="text-sm font-semibold leading-none">?</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleConnectClick}
+              className="flex items-center gap-1.5 whitespace-nowrap rounded-full bg-[#25D366] px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#1ebe5c] sm:gap-2 sm:px-4 sm:text-sm"
+            >
+              <WhatsAppIcon className="h-4 w-4 shrink-0" />
+              Подключить WhatsApp
+            </button>
+          </>
         )}
 
         {!showWaCta && !isAuthPath && (
@@ -125,6 +137,47 @@ export default function GuestHeader() {
             >
               Понятно
             </button>
+          </div>
+        </div>
+      )}
+      {/* Модалка: помощь */}
+      {helpOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
+          onClick={() => setHelpOpen(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-t-2xl border border-border bg-card p-6 shadow-2xl sm:rounded-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-start justify-between">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#25D366]/10">
+                <WhatsAppIcon className="h-5 w-5 text-[#25D366]" />
+              </div>
+              <button
+                type="button"
+                onClick={() => setHelpOpen(false)}
+                className="rounded-full p-1 text-muted-foreground transition hover:bg-secondary hover:text-foreground"
+                aria-label="Закрыть"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <h2 className="text-base font-semibold text-foreground">Нужна помощь?</h2>
+            <p className="mt-2 text-sm leading-5 text-muted-foreground">
+              Напишите нам в WhatsApp — поможем настроить бота, разобраться с
+              подключением или решить любой вопрос.
+            </p>
+            <a
+              href="https://wa.me/77000000000"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-[#25D366] py-2.5 text-sm font-semibold text-white transition hover:bg-[#1ebe5c]"
+              onClick={() => setHelpOpen(false)}
+            >
+              <WhatsAppIcon className="h-4 w-4" />
+              Написать в WhatsApp
+            </a>
           </div>
         </div>
       )}
