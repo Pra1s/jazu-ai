@@ -830,11 +830,26 @@ export default function ChatWorkspace() {
         <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4">
         {messages.length === 0 ? (
           <div className="flex flex-1 items-center justify-center">
-            <p className="max-w-md text-center text-sm text-muted-foreground">
-              {mode === "setup"
-                ? "Опишите бизнес одним сообщением, AI соберёт промпт и предложит уточнения."
-                : "Напишите как ваш клиент, проверьте, как менеджер ответит."}
-            </p>
+            {mode === "test" && !prompt ? (
+              <div className="flex flex-col items-center gap-4 text-center">
+                <p className="text-sm text-muted-foreground">
+                  Сначала настройте вашего AI-менеджера
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setMode("setup")}
+                  className="rounded-xl bg-brand px-5 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
+                >
+                  Настроить
+                </button>
+              </div>
+            ) : (
+              <p className="max-w-md text-center text-sm text-muted-foreground">
+                {mode === "setup"
+                  ? "Опишите бизнес одним сообщением, AI соберёт промпт и предложит уточнения."
+                  : "Напишите как ваш клиент, проверьте, как менеджер ответит."}
+              </p>
+            )}
           </div>
         ) : (
           messages.map((msg) => (
