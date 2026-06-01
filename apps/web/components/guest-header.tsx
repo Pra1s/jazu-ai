@@ -111,9 +111,6 @@ export default function GuestHeader() {
             className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-secondary text-2xl">
-              ✨
-            </div>
             <h2 className="text-base font-semibold text-foreground">
               Сначала доделайте бота
             </h2>
