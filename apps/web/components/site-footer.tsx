@@ -14,8 +14,8 @@ const LEGAL_LINKS = [
 // в кабинете (страница настройки).
 export default function SiteFooter({ className = "" }: { className?: string }) {
   return (
-    <footer className={`border-t border-border py-6 ${className}`}>
-      <div className="flex flex-col items-center gap-3 text-center">
+    <footer className={`border-t border-border py-8 ${className}`}>
+      <div className="flex flex-col items-center justify-center gap-3 text-center">
         <p className="text-xs text-muted-foreground">
           © {new Date().getFullYear()} Jazu. Все права защищены.
         </p>
