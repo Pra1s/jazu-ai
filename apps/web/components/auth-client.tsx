@@ -234,7 +234,9 @@ export default function AuthClient() {
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {stage === "email"
-              ? "Без пароля, отправим 6-значный код на ваш email"
+              ? googleEnabled
+                ? "Быстрый вход через Google. Или по коду на email."
+                : "Без пароля, отправим 6-значный код на ваш email"
               : `Отправили на ${email.trim()}`}
           </p>
         </div>
