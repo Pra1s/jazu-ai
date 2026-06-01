@@ -73,6 +73,7 @@ export default function GuestHeader() {
   }
 
   return (
+    <>
     <header className="relative z-30 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border bg-background/95 px-3 backdrop-blur sm:px-6">
       <Logo />
 
@@ -98,7 +99,9 @@ export default function GuestHeader() {
         )}
       </div>
 
-      {/* Модалка: бот ещё не настроен */}
+    </header>
+
+      {/* Модалка: бот ещё не настроен — вне <header>, чтобы fixed корректно перекрывал экран */}
       {notReadyOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
@@ -128,6 +131,6 @@ export default function GuestHeader() {
           </div>
         </div>
       )}
-    </header>
+    </>
   );
 }
