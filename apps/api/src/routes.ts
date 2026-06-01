@@ -56,7 +56,7 @@ import {
   processWaInbound
 } from "@jazu/wa-pipeline";
 import { getInboundQueue } from "@jazu/queue";
-import { sendMagicCodeEmail, sendTelegramLead } from "./lib/notifications.js";
+import { sendMagicCodeEmail, sendTelegramLead, sendEnterpriseLeadEmail } from "./lib/notifications.js";
 import { recordAudit } from "./lib/audit.js";
 
 const magicLinkBodySchema = z.object({
@@ -912,6 +912,25 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
   app.get("/auth/config", async () => ({
     googleEnabled: isGoogleConfigured()
   }));
+
+  // ─── Enterprise lead ────────────────────────────────────────────────────
+  const enterpriseLeadSchema = z.object({
+    name: z.string().min(1).max(200),
+    contact: z.string().min(1).max(200),
+    comment: z.string().max(2000).optional().default("")
+  });
+
+  app.post("/enterprise/lead", async (request, reply) => {
+    const body = enterpriseLeadSchema.parse(request.body);
+    try {
+      await sendEnterpriseLeadEmail(body);
+      return { ok: true };
+    } catch (err) {
+      request.log.error({ err }, "enterprise lead email failed");
+      reply.code(500);
+      return { ok: false, error: "Не удалось отправить заявку" };
+    }
+  });
 
   // ─── Billing ────────────────────────────────────────────────────────────
   // Публичный список тарифов + цены — фронт читает один раз на /billing.

@@ -71,6 +71,45 @@ export async function sendMagicCodeEmail(email: string, code: string): Promise<v
   }
 }
 
+export async function sendEnterpriseLeadEmail(params: {
+  name: string;
+  contact: string;
+  comment: string;
+}): Promise<void> {
+  if (!env.RESEND_API_KEY || !env.FROM_EMAIL) {
+    return;
+  }
+
+  const html = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
+      <h1 style="font-size: 18px; margin: 0 0 16px 0;">Enterprise заявка</h1>
+      <table style="width: 100%; border-collapse: collapse; font-size: 15px;">
+        <tr><td style="padding: 8px 0; color: #888; width: 120px;">Имя</td><td style="padding: 8px 0; font-weight: 500;">${params.name}</td></tr>
+        <tr><td style="padding: 8px 0; color: #888;">Контакт</td><td style="padding: 8px 0; font-weight: 500;">${params.contact}</td></tr>
+        ${params.comment ? `<tr><td style="padding: 8px 0; color: #888; vertical-align: top;">Комментарий</td><td style="padding: 8px 0;">${params.comment}</td></tr>` : ""}
+      </table>
+    </div>
+  `;
+
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.RESEND_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: env.FROM_EMAIL,
+      to: ["hello@jazu.chat"],
+      subject: `Enterprise заявка от ${params.name}`,
+      html
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to send enterprise lead email: ${response.status} ${await response.text()}`);
+  }
+}
+
 export async function sendTelegramLead(chatId: string, text: string): Promise<void> {
   if (!env.TELEGRAM_BOT_TOKEN) {
     return;

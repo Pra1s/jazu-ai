@@ -72,17 +72,16 @@ function EnterpriseModal({ onClose }: { onClose: () => void }) {
     if (!name.trim() || !contact.trim()) return;
     setSending(true);
     try {
-      await fetch(`mailto:hello@jazu.chat?subject=${encodeURIComponent("Enterprise заявка")}&body=${encodeURIComponent(`Имя: ${name}\nКонтакт: ${contact}\nКомментарий: ${comment}`)}`);
-    } catch { /* ignore */ }
-    // Отправляем через формспри-подобный подход — fetch на mailto не работает,
-    // используем простой API эндпоинт или просто показываем успех.
-    // Реально шлём письмо через window.open для надёжности:
-    window.open(
-      `mailto:hello@jazu.chat?subject=${encodeURIComponent("Enterprise заявка от " + name)}&body=${encodeURIComponent(`Имя: ${name}\nКонтакт: ${contact}\nКомментарий: ${comment}`)}`,
-      "_blank"
-    );
-    setSending(false);
-    setSent(true);
+      await apiJson("/enterprise/lead", {
+        method: "POST",
+        body: JSON.stringify({ name: name.trim(), contact: contact.trim(), comment: comment.trim() })
+      });
+      setSent(true);
+    } catch {
+      alert("Не удалось отправить заявку. Попробуйте ещё раз.");
+    } finally {
+      setSending(false);
+    }
   }
 
   return (
