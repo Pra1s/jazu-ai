@@ -302,13 +302,15 @@ function MessageRow({
   mode,
   onCorrect,
   isStreaming = false,
-  animatePromptCard = false
+  animatePromptCard = false,
+  isLastActionButton = true
 }: {
   message: ChatMessage;
   mode: Mode;
   onCorrect?: (m: ChatMessage) => void;
   isStreaming?: boolean;
   animatePromptCard?: boolean;
+  isLastActionButton?: boolean;
 }) {
   const isUser = message.role === "user";
   const actionButton = getActionButton(message.parts);
@@ -354,7 +356,7 @@ function MessageRow({
         <PromptCardInline card={promptCard} animate={animatePromptCard} />
       )}
 
-      {actionButton && !isStreaming && (
+      {actionButton && !isStreaming && isLastActionButton && (
         <div>
           <Button
             size="sm"
@@ -745,6 +747,7 @@ export default function ChatWorkspace() {
 
   const messages = mode === "setup" ? builderMessages : testMessages;
   const isTest = mode === "test";
+  const lastActionButtonId = [...messages].reverse().find((m) => getActionButton(m.parts ?? []))?.id;
 
   if (!isHydrated) {
     return (
@@ -841,6 +844,7 @@ export default function ChatWorkspace() {
               mode={mode}
               isStreaming={msg.id === streamingId}
               animatePromptCard={msg.id === freshPromptCardId}
+              isLastActionButton={msg.id === lastActionButtonId}
               {...(mode === "test" && msg.role === "assistant"
                 ? { onCorrect: (m) => setCorrection({ messageId: m.id, text: m.content }) }
                 : {})}
