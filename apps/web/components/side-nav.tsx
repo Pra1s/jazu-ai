@@ -11,7 +11,8 @@ import {
   Zap,
   PanelLeft,
   X,
-  CreditCard
+  CreditCard,
+  HelpCircle
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import SidebarUserMenu from "@/components/sidebar-user-menu";
@@ -23,7 +24,8 @@ const navItems = [
   { href: "/chats", icon: MessageSquare, label: "Диалоги" },
   { href: "/whatsapp", icon: Smartphone, label: "WhatsApp" },
   { href: "/settings", icon: Settings, label: "Настройки" },
-  { href: "/billing", icon: CreditCard, label: "Тарифы" }
+  { href: "/billing", icon: CreditCard, label: "Тарифы" },
+  { href: "/faq", icon: HelpCircle, label: "Частые вопросы" }
 ];
 
 function NavList({

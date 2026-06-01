@@ -301,10 +301,6 @@ export default function BillingClient() {
         </div>
       )}
 
-      <p className="text-center text-xs text-muted-foreground">
-        Оплата через Kaspi Pay · продление и докупка вручную · без авто-списаний
-      </p>
-
       {(error || successMsg) && (
         <div className="flex justify-center">
           {error && (

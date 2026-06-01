@@ -1,5 +1,4 @@
 import BillingClient from "@/components/billing-client";
-import FaqSection from "@/components/faq-section";
 import { PageContainer } from "@/components/page-container";
 
 export default function BillingPage() {
@@ -14,7 +13,6 @@ export default function BillingPage() {
         </p>
       </div>
       <BillingClient />
-      <FaqSection />
     </PageContainer>
   );
 }
