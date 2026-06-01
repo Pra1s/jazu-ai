@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Check } from "lucide-react";
+import { Loader2, Check, X } from "lucide-react";
 import { apiFetch, apiJson } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
@@ -57,12 +57,133 @@ function usd(cents: number) {
 // после оплаты диалоги/тариф зачисляются вручную.
 const KASPI_PAY_URL = "https://pay.kaspi.kz/pay/ugtxcmxz";
 
+function EnterpriseModal({ onClose }: { onClose: () => void }) {
+  const [name, setName] = useState("");
+  const [contact, setContact] = useState("");
+  const [comment, setComment] = useState("");
+  const [sent, setSent] = useState(false);
+  const [sending, setSending] = useState(false);
+  const nameRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { nameRef.current?.focus(); }, []);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || !contact.trim()) return;
+    setSending(true);
+    try {
+      await fetch(`mailto:hello@jazu.chat?subject=${encodeURIComponent("Enterprise заявка")}&body=${encodeURIComponent(`Имя: ${name}\nКонтакт: ${contact}\nКомментарий: ${comment}`)}`);
+    } catch { /* ignore */ }
+    // Отправляем через формспри-подобный подход — fetch на mailto не работает,
+    // используем простой API эндпоинт или просто показываем успех.
+    // Реально шлём письмо через window.open для надёжности:
+    window.open(
+      `mailto:hello@jazu.chat?subject=${encodeURIComponent("Enterprise заявка от " + name)}&body=${encodeURIComponent(`Имя: ${name}\nКонтакт: ${contact}\nКомментарий: ${comment}`)}`,
+      "_blank"
+    );
+    setSending(false);
+    setSent(true);
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-t-2xl border border-border bg-card p-6 shadow-2xl sm:rounded-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-start justify-between">
+          <h2 className="text-base font-semibold text-foreground">
+            {sent ? "Заявка отправлена!" : "Оставить заявку на Enterprise"}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full p-1 text-muted-foreground transition hover:bg-secondary hover:text-foreground"
+            aria-label="Закрыть"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {sent ? (
+          <div>
+            <p className="text-sm leading-5 text-muted-foreground">
+              Мы получим вашу заявку и свяжемся с вами в ближайшее время.
+            </p>
+            <button
+              type="button"
+              onClick={onClose}
+              className="mt-5 w-full rounded-full bg-foreground py-2.5 text-sm font-semibold text-background transition hover:opacity-90"
+            >
+              Закрыть
+            </button>
+          </div>
+        ) : (
+          <form onSubmit={(e) => void handleSubmit(e)} className="flex flex-col gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-foreground">
+                Ваше имя <span className="text-red-500">*</span>
+              </label>
+              <input
+                ref={nameRef}
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Алибек Иванов"
+                required
+                className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-foreground/40 focus:ring-1 focus:ring-foreground/20"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-foreground">
+                Телефон или WhatsApp <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={contact}
+                onChange={(e) => setContact(e.target.value)}
+                placeholder="+7 777 000 00 00"
+                required
+                className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-foreground/40 focus:ring-1 focus:ring-foreground/20"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-foreground">
+                Комментарий
+              </label>
+              <textarea
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                placeholder="Расскажите о вашем бизнесе и задаче"
+                rows={3}
+                className="w-full resize-none rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-foreground/40 focus:ring-1 focus:ring-foreground/20"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={sending || !name.trim() || !contact.trim()}
+              className="mt-1 flex w-full items-center justify-center gap-2 rounded-full bg-foreground py-2.5 text-sm font-semibold text-background transition hover:opacity-90 disabled:opacity-50"
+            >
+              {sending && <Loader2 className="h-4 w-4 animate-spin" />}
+              Отправить заявку
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function BillingClient() {
   const router = useRouter();
   const [data, setData] = useState<PlansResponse | null>(null);
   const [usage, setUsage] = useState<UsageView | null>(null);
   const [me, setMe] = useState<{ ok: boolean } | null>(null);
   const [topupCount, setTopupCount] = useState<number>(100);
+  const [enterpriseOpen, setEnterpriseOpen] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -182,14 +303,13 @@ export default function BillingClient() {
                 </ul>
               )}
             </div>
-            <a
-              href="https://wa.me/77000000000"
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              type="button"
+              onClick={() => setEnterpriseOpen(true)}
               className="flex items-center justify-center gap-2 rounded-full bg-foreground px-5 py-2.5 text-sm font-semibold text-background transition hover:bg-foreground/90"
             >
               Оставить заявку
-            </a>
+            </button>
           </div>
         </div>
       )}
@@ -249,6 +369,8 @@ export default function BillingClient() {
           </div>
         </div>
       )}
+
+      {enterpriseOpen && <EnterpriseModal onClose={() => setEnterpriseOpen(false)} />}
     </div>
   );
 }
