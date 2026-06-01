@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Zap, X } from "lucide-react";
+import { persistNext } from "@/lib/safe-next";
 
 function WhatsAppIcon({ className }: { className?: string }) {
   return (
@@ -37,6 +38,7 @@ function Logo() {
 
 export default function GuestHeader() {
   const pathname = usePathname();
+  const router = useRouter();
   const [progress, setProgress] = useState<ProgressResponse | null>(null);
   const [coachmarkDismissed, setCoachmarkDismissed] = useState(true);
   // Когда в тесте срабатывает непропускаемая подсказка-триггер, прячем мягкий
@@ -100,8 +102,12 @@ export default function GuestHeader() {
       <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
         {!isAuthPath && showWaCta && (
           <div className="sm:relative">
-            <Link
-              href="/whatsapp"
+            <button
+              type="button"
+              onClick={() => {
+                persistNext("/whatsapp");
+                router.push("/auth?next=/whatsapp");
+              }}
               className={cn(
                 "flex items-center gap-1.5 whitespace-nowrap rounded-full bg-[#25D366] px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#1ebe5c] sm:gap-2 sm:px-4 sm:text-sm",
                 showCoachmark && "ring-2 ring-[#25D366]/40 ring-offset-2 ring-offset-background"
@@ -109,7 +115,7 @@ export default function GuestHeader() {
             >
               <WhatsAppIcon className="h-4 w-4 shrink-0" />
               Подключить WhatsApp
-            </Link>
+            </button>
 
             {showCoachmark && (
               <div
