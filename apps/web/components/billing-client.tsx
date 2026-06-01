@@ -57,6 +57,20 @@ function usd(cents: number) {
 // после оплаты диалоги/тариф зачисляются вручную.
 const KASPI_PAY_URL = "https://pay.kaspi.kz/pay/ugtxcmxz";
 
+function formatPhone(raw: string): string {
+  // Оставляем только цифры
+  const digits = raw.replace(/\D/g, "");
+  // Нормализуем: если начинается с 8 или 7 — заменяем на 7
+  const d = digits.startsWith("8") ? "7" + digits.slice(1) : digits.startsWith("7") ? digits : "7" + digits;
+  const n = d.slice(0, 11);
+  if (n.length === 0) return "";
+  if (n.length <= 1) return `+${n}`;
+  if (n.length <= 4) return `+${n[0]} (${n.slice(1)}`;
+  if (n.length <= 7) return `+${n[0]} (${n.slice(1, 4)}) ${n.slice(4)}`;
+  if (n.length <= 9) return `+${n[0]} (${n.slice(1, 4)}) ${n.slice(4, 7)}-${n.slice(7)}`;
+  return `+${n[0]} (${n.slice(1, 4)}) ${n.slice(4, 7)}-${n.slice(7, 9)}-${n.slice(9, 11)}`;
+}
+
 function EnterpriseModal({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState("");
   const [contact, setContact] = useState("");
@@ -141,10 +155,10 @@ function EnterpriseModal({ onClose }: { onClose: () => void }) {
                 Телефон или WhatsApp <span className="text-red-500">*</span>
               </label>
               <input
-                type="text"
+                type="tel"
                 value={contact}
-                onChange={(e) => setContact(e.target.value)}
-                placeholder="+7 777 000 00 00"
+                onChange={(e) => setContact(formatPhone(e.target.value))}
+                placeholder="+7 (777) 000-00-00"
                 required
                 className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-foreground/40 focus:ring-1 focus:ring-foreground/20"
               />
