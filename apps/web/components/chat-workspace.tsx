@@ -357,15 +357,15 @@ function MessageRow({
       {actionButton && !isStreaming && (
         <div>
           <Button
-            size="lg"
+            size="sm"
             onClick={() => {
               if (actionButton.type === "switch_to_test") {
                 window.dispatchEvent(new CustomEvent("jazu:switchToTest"));
               }
             }}
-            className="gap-2 bg-[#25D366] text-base font-semibold text-white shadow-lg shadow-[#25D366]/30 transition hover:bg-[#1ebe5c] hover:shadow-[#25D366]/40"
+            className="gap-1.5 rounded-full bg-[#25D366] px-4 py-2 text-sm font-semibold text-white shadow-md shadow-[#25D366]/25 transition hover:bg-[#1ebe5c] hover:shadow-[#25D366]/35 active:scale-95"
           >
-            <Play className="h-4 w-4 fill-current" />
+            <Play className="h-3.5 w-3.5 fill-current" />
             {actionButton.label}
           </Button>
         </div>
@@ -802,7 +802,7 @@ export default function ChatWorkspace() {
           </div>
         )}
 
-        {!isTest && (
+        {!isTest && isAuth && (
           <div className="flex items-center gap-1">
             <button
               ref={extraDataBtnRef}
