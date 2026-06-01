@@ -136,6 +136,9 @@ model Session {
   isGenerating   Boolean  @default(false)
   promptDraft    String   @default("")
   testBotStage   String   @default("")
+  // Буфер «потребности клиента» для теста (v2.3). Пишется при первом извлечении
+  // и при явной смене запроса (needChanged). Чистится на /test-chat/reset.
+  detectedNeed   String?
   createAgentHistory Json
   promptBuilderHistory Json
   testBotHistory  Json
@@ -173,6 +176,9 @@ model Agent {
   readyToFinalize Boolean          @default(false)
   botEnabled      Boolean          @default(true)
   carcass         String?
+  // Роль бота (v2.2): "admin" | "consultant" | "support" | "qualifier" | "salesman".
+  // Денормализована с BusinessProfile.data.botModel для быстрого чтения в рантайме.
+  botModel        String?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   user            User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -321,6 +327,9 @@ model Conversation {
   waChatId        String
   customerName    String?
   status          ConversationStatus @default(open)
+  // Буфер «потребности клиента» для боевого WhatsApp-диалога (v2.3). Пишется при
+  // первом извлечении и при явной смене запроса (needChanged).
+  detectedNeed    String?
   lastMessageAt   DateTime?    @default(now())
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt

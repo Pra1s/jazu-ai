@@ -1739,6 +1739,16 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
+      // Денормализуем РОЛЬ бота на Agent для быстрого чтения в рантайме.
+      // Независимо от create-гейта: модель определяется на шаге 1 воронки,
+      // задолго до сбора базы, и может меняться по ходу онбординга.
+      if (turn.botModel && turn.botModel !== agent.botModel) {
+        await prisma.agent.update({
+          where: { id: agent.id },
+          data: { botModel: turn.botModel }
+        });
+      }
+
       const existingPrompt = await prisma.promptVersion.findFirst({
         where: { agentId: agent.id },
         orderBy: { createdAt: "desc" }
@@ -1776,6 +1786,28 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         Boolean(mergedProfile.niche || mergedProfile.businessName)
       ) {
         effectiveEvent = "create";
+      }
+
+      // ГЕЙТ БАЗЫ (v2.2): не создаём промпт, пока не собраны услуги + гео + график.
+      // Конфликт с анти-зависанием/safety-net: если create форсирован к 6+ ходу,
+      // НЕ блокируем — добиваем недостающую базу плейсхолдерами "не указано"
+      // (только в памяти, профиль не перезаписываем), чтобы baseFilled стал
+      // честно true и упрямый владелец не залип навсегда. Преждевременный
+      // "давай тест" на 2-м ходу всё ещё блокируется.
+      const forcingCreate = effectiveEvent === "create" && userTurnsTotal >= 6;
+      if (forcingCreate) {
+        mergedProfile.geography ||= "не указано";
+        mergedProfile.hours ||= "не указано";
+        if (!(mergedProfile.servicesList?.length)) {
+          mergedProfile.servicesList = ["не указано"];
+        }
+      }
+      const baseFilled =
+        (mergedProfile.servicesList?.length ?? 0) > 0 &&
+        !!mergedProfile.geography &&
+        !!mergedProfile.hours;
+      if (effectiveEvent === "create" && !baseFilled) {
+        effectiveEvent = existingPrompt ? "edit" : "skip";
       }
 
       if (effectiveEvent !== "skip") {
@@ -1879,6 +1911,15 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       })
     });
 
+    // Смена РОЛИ бота (correctionType="model"): денормализуем новую модель на Agent,
+    // чтобы рантайм подхватил роль из authoritative-колонки.
+    if (result.newBotModel) {
+      await prisma.agent.update({
+        where: { id: agent.id },
+        data: { botModel: result.newBotModel }
+      });
+    }
+
     const promptCard = buildPromptCard(currentPrompt, result.newPrompt, {
       changeKind: "correction",
       changeSummary: result.changeSummary,
@@ -1936,7 +1977,9 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     await prisma.session.update({
       where: { id: session.id },
       data: {
-        testBotHistory: []
+        testBotHistory: [],
+        // Сбрасываем буфер потребности, иначе после reset бот «помнит» старую цель.
+        detectedNeed: null
       }
     });
     return { ok: true };
@@ -1944,7 +1987,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/test-chat/correct", async (request, reply) => {
     const { messageId, correction } = correctBodySchema.parse(request.body);
-    const { agent } = await buildWriteSessionView(request, reply);
+    const { session, agent } = await buildWriteSessionView(request, reply);
     const profile = await ensureAgentProfile(agent.id);
 
     const existingPrompt = await prisma.promptVersion.findFirst({
@@ -1980,6 +2023,15 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         agentId: agent.id
       })
     });
+
+    // Смена РОЛИ бота (correctionType="model"): денормализуем новую модель на Agent,
+    // чтобы рантайм подхватил роль из authoritative-колонки.
+    if (result.newBotModel) {
+      await prisma.agent.update({
+        where: { id: agent.id },
+        data: { botModel: result.newBotModel }
+      });
+    }
 
     const promptCard = buildPromptCard(currentPrompt, result.newPrompt, {
       changeKind: "correction",
@@ -2050,8 +2102,19 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         take: 16
       });
       try {
+        // Подмешиваем РОЛЬ/КАРКАС из authoritative-источника (Agent). Если правка
+        // только что сменила модель (newBotModel) — берём её, чтобы регенерация
+        // показала ответ под новую роль. detectedNeed читаем (чтобы учесть
+        // известную потребность), но на этом пути НЕ пишем — это реплей, не новый
+        // ход клиента, и needChanged мог бы ложно сработать.
+        const regenProfile = {
+          ...profile,
+          carcass: (agent.carcass ?? null) as "booking" | "inspection" | "sales" | null,
+          botModel: (result.newBotModel ?? agent.botModel ?? null) as
+            | "admin" | "consultant" | "support" | "qualifier" | "salesman" | null
+        } as typeof profile;
         const turn = await buildRuntimeTurn(
-          profile,
+          regenProfile,
           userMessage,
           history.map((item) => ({
             role: item.role === "assistant" ? "assistant" : "user",
@@ -2059,7 +2122,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
           })),
           {
             systemOverride: result.newPrompt,
-            ...(agent.carcass ? { carcass: agent.carcass as "booking" | "inspection" | "sales" } : {}),
+            detectedNeed: session.detectedNeed,
             telemetry: buildLlmTelemetry({
               route: "test-regenerate",
               userId: agent.userId ?? null,
@@ -2099,7 +2162,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/test-chat/chat", async (request, reply) => {
     const { message } = chatBodySchema.parse(request.body);
-    const { agent } = await buildWriteSessionView(request, reply);
+    const { session, agent } = await buildWriteSessionView(request, reply);
     const profile = await ensureAgentProfile(agent.id);
 
     await prisma.testMessage.create({
@@ -2120,8 +2183,16 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     const stream = startSseStream(request, reply);
 
     try {
+      // РОЛЬ/КАРКАС берём из authoritative-источника (Agent), а не из профиля,
+      // чтобы envelope не прочитал устаревшее значение из BusinessProfile.data.
+      const runtimeProfile = {
+        ...profile,
+        carcass: (agent.carcass ?? null) as "booking" | "inspection" | "sales" | null,
+        botModel: (agent.botModel ?? null) as
+          | "admin" | "consultant" | "support" | "qualifier" | "salesman" | null
+      } as typeof profile;
       const turn = await buildRuntimeTurn(
-        profile,
+        runtimeProfile,
         message,
         history.map((item) => ({
           role: item.role === "assistant" ? "assistant" : "user",
@@ -2129,7 +2200,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         })),
         {
           systemOverride: agent.currentPrompt,
-          ...(agent.carcass ? { carcass: agent.carcass as "booking" | "inspection" | "sales" } : {}),
+          detectedNeed: session.detectedNeed,
           telemetry: buildLlmTelemetry({
             route: "test-chat",
             userId: agent.userId ?? null,
@@ -2148,6 +2219,23 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
           parts: jsonInput(toAssistantParts(turn.reply, turn.actionButton))
         }
       });
+
+      // Буфер потребности: needChanged-перезапись проверяем ПЕРВОЙ, иначе при
+      // уже заполненном detectedNeed смена запроса не записалась бы.
+      {
+        let nextNeed: string | null = null;
+        if (turn.needChanged && turn.extractedNeed) {
+          nextNeed = turn.extractedNeed;
+        } else if (!session.detectedNeed && turn.extractedNeed) {
+          nextNeed = turn.extractedNeed;
+        }
+        if (nextNeed && nextNeed !== session.detectedNeed) {
+          await prisma.session.update({
+            where: { id: session.id },
+            data: { detectedNeed: nextNeed }
+          });
+        }
+      }
 
       if (turn.shouldHandoff) {
         // chatId фиксирован, чтобы все handoff из теста сливались в одну

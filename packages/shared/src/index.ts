@@ -11,6 +11,9 @@ export const businessProfileSchema = z.object({
   niche: z.string().optional(),
   description: z.string().optional(),
   offerings: z.array(z.string()).default([]),
+  // Конкретный перечень услуг/товаров бота (v2.2). Обязателен для create-гейта
+  // вместе с geography и hours. Живёт внутри BusinessProfile.data — без колонки.
+  servicesList: z.array(z.string()).default([]),
   targetAudience: z.string().optional(),
   geography: z.string().optional(),
   languages: z.array(z.string()).default(["ru"]),
@@ -28,6 +31,12 @@ export const businessProfileSchema = z.object({
   channels: z.array(z.string()).default(["whatsapp"]),
   integrations: z.array(z.string()).default([]),
   emergencyCases: z.array(z.string()).default([]),
+  // Роль бота (v2.2) — определяет цель и тон. Денормализуется на Agent.botModel
+  // для быстрого чтения в рантайме, но истина профиля хранится здесь.
+  botModel: z.enum(["admin", "consultant", "support", "qualifier", "salesman"]).optional(),
+  // Механика воронки. Истина — Agent.carcass; в схеме нужна, т.к. v2.3-envelope
+  // читает profile.carcass (значение подмешивается из Agent на вызове рантайма).
+  carcass: z.enum(["booking", "inspection", "sales"]).optional(),
   notes: z.string().optional()
 });
 

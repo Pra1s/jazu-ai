@@ -14,12 +14,15 @@ import {
   buildRuntimePrompt,
   getNextQuestions,
   mergeProfile,
-  summarizeLead
+  summarizeLead,
+  RUNTIME_FALLBACK
 } from "./prompts.js";
 
 export type PromptEventKind = "skip" | "create" | "edit";
 
 export type Carcass = "booking" | "inspection" | "sales";
+
+export type BotModel = "admin" | "consultant" | "support" | "qualifier" | "salesman";
 
 export type BuilderTurn = {
   assistantText: string;
@@ -29,6 +32,7 @@ export type BuilderTurn = {
   promptEvent?: PromptEventKind;
   promptSummary?: string;
   carcass?: Carcass | null;
+  botModel?: BotModel | null;
   actionButton?: ActionButton | undefined;
   readyToTest?: boolean;
   notes?: string[] | undefined;
@@ -39,6 +43,10 @@ export type RuntimeTurn = {
   shouldHandoff: boolean;
   handoffType?: "hot_lead" | "complaint" | "out_of_scope" | "requested" | null;
   summary?: string;
+  // Что бот понял про потребность клиента в этом ходе (буфер detectedNeed).
+  extractedNeed?: string;
+  // true ТОЛЬКО если клиент явно сменил запрос — триггер жёсткой перезаписи.
+  needChanged?: boolean;
   actionButton?: ActionButton | undefined;
 };
 
@@ -172,6 +180,7 @@ export async function buildBuilderTurn(
       promptEvent?: PromptEventKind;
       promptSummary?: string;
       carcass?: Carcass | null;
+      botModel?: BotModel | null;
       readyToTest?: boolean;
       notes?: string[];
       actionButton?: ActionButton;
@@ -238,7 +247,7 @@ export async function buildBuilderTurn(
     }
 
     const rawCompletionPatch = (completion.profilePatch ?? {}) as Record<string, unknown>;
-    const arrayKeys = ["offerings", "faq", "examples", "notAllowed", "channels", "integrations", "emergencyCases", "languages"] as const;
+    const arrayKeys = ["offerings", "servicesList", "faq", "examples", "notAllowed", "channels", "integrations", "emergencyCases", "languages"] as const;
     for (const key of arrayKeys) {
       const v = rawCompletionPatch[key];
       if (typeof v === "string") {
@@ -299,6 +308,11 @@ export async function buildBuilderTurn(
       ? (completion.carcass as Carcass)
       : null;
 
+    const allowedBotModels: BotModel[] = ["admin", "consultant", "support", "qualifier", "salesman"];
+    const botModel: BotModel | null = allowedBotModels.includes(completion.botModel as BotModel)
+      ? (completion.botModel as BotModel)
+      : null;
+
     return {
       assistantText: sanitizeAssistantText(
         completion.assistantText ||
@@ -312,6 +326,7 @@ export async function buildBuilderTurn(
       promptEvent,
       ...(promptSummary ? { promptSummary } : {}),
       carcass,
+      botModel,
       readyToTest: completion.readyToTest ?? nextQuestions.length === 0,
       ...(actionButton ? { actionButton } : {}),
       notes: completion.notes
@@ -355,7 +370,7 @@ export async function buildRuntimeTurn(
   profile: BusinessProfile,
   userText: string,
   history: Array<{ role: "user" | "assistant"; content: string }> = [],
-  options: { systemOverride?: string | null; carcass?: Carcass; telemetry?: LlmTelemetryHooks } = {}
+  options: { systemOverride?: string | null; detectedNeed?: string | null; telemetry?: LlmTelemetryHooks } = {}
 ): Promise<RuntimeTurn> {
   const summary = summarizeLead(profile, userText);
   const handoff = identifyLeadNeed(userText);
@@ -364,10 +379,10 @@ export async function buildRuntimeTurn(
     : null;
   const systemPrompt = override ?? buildRuntimePrompt(profile);
 
-  // ПОРЯДОК ВАЖЕН: сначала бизнес-промпт (ниша, оффер, ограничения из БД или
-  // fallback), и только ПОСЛЕ него — envelope (роль/формат/воронка/handoff).
-  // Бот сначала осознаёт нишу и границы, затем получает команды поведения.
-  const runtimeSystem = `${systemPrompt}\n\n${buildRuntimeEnvelope(options.carcass)}`;
+  // ПОРЯДОК ВАЖЕН: envelope v2.3 принимает бизнес-промпт первым аргументом и сам
+  // склеивает его с блоками роли/потребности/механики/handoff и контрактом.
+  // profile несёт botModel/carcass (подмешиваются вызывающим кодом из Agent).
+  const runtimeSystem = buildRuntimeEnvelope(systemPrompt, profile, options.detectedNeed ?? null);
 
   try {
     const wrapper = await runJsonCallWithTelemetry<{
@@ -375,6 +390,8 @@ export async function buildRuntimeTurn(
       shouldHandoff?: boolean;
       handoffType?: "hot_lead" | "complaint" | "out_of_scope" | "requested" | null;
       summary?: string;
+      extractedNeed?: string;
+      needChanged?: boolean;
       actionButton?: ActionButton;
     }>({
       system: runtimeSystem,
@@ -405,11 +422,20 @@ export async function buildRuntimeTurn(
       throw new Error("empty completion");
     }
 
+    // extractedNeed — строка (тримим), иначе пустая. needChanged — строго boolean
+    // true; всё прочее (включая строку "true") приводим к false.
+    const extractedNeed = typeof completion.extractedNeed === "string"
+      ? completion.extractedNeed.trim()
+      : "";
+    const needChanged = completion.needChanged === true;
+
     return {
       reply: sanitizeAssistantText(completion.reply),
       shouldHandoff: completion.shouldHandoff ?? handoff.handoff,
       ...(completion.handoffType !== undefined ? { handoffType: completion.handoffType } : {}),
       summary: completion.summary || summary,
+      extractedNeed,
+      needChanged,
       ...(completion.actionButton ? { actionButton: completion.actionButton } : {})
     };
   } catch (error) {
@@ -419,6 +445,15 @@ export async function buildRuntimeTurn(
         reply: "Передаю специалисту, чтобы он быстро помог с этим вопросом.",
         shouldHandoff: true,
         summary
+      };
+    }
+
+    // Модельный fallback: если роль бота известна — берём готовый текст под неё.
+    const fallbackModel = profile.botModel;
+    if (fallbackModel && RUNTIME_FALLBACK[fallbackModel]) {
+      return {
+        reply: RUNTIME_FALLBACK[fallbackModel],
+        shouldHandoff: false
       };
     }
 
@@ -450,6 +485,8 @@ export type CorrectionResult = {
   changeSummary: string;
   correctionType?: string;
   sectionEdited?: string;
+  // Новая роль бота при correctionType="model" — бэкенд обновит agent.botModel.
+  newBotModel?: BotModel;
 };
 
 export async function applyPromptCorrection(params: {
@@ -473,6 +510,7 @@ export async function applyPromptCorrection(params: {
       changeSummary?: string;
       correctionType?: string;
       sectionEdited?: string;
+      newBotModel?: BotModel | null;
     }>({
       system: buildCorrectionSystemPrompt(),
       messages: [
@@ -517,7 +555,10 @@ export async function applyPromptCorrection(params: {
       ),
       changeSummary: completion.changeSummary?.trim() || correctionText.slice(0, 120),
       ...(completion.correctionType ? { correctionType: completion.correctionType } : {}),
-      ...(completion.sectionEdited ? { sectionEdited: completion.sectionEdited } : {})
+      ...(completion.sectionEdited ? { sectionEdited: completion.sectionEdited } : {}),
+      ...(["admin", "consultant", "support", "qualifier", "salesman"].includes(completion.newBotModel as string)
+        ? { newBotModel: completion.newBotModel as BotModel }
+        : {})
     };
   } catch {
     const appended = `${base}\n\n## Уточнение от владельца (правка ${new Date().toISOString().slice(0, 10)})\n- ${correctionText}`;

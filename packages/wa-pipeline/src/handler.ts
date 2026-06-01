@@ -399,8 +399,17 @@ export async function processWaInbound(
     agentId: agent.id
   });
 
+  // РОЛЬ/КАРКАС берём из authoritative-источника (Agent), а не из профиля:
+  // BusinessProfile.data может отставать, а envelope читает profile.carcass/botModel.
+  const runtimeProfile = {
+    ...profile,
+    carcass: (agent.carcass ?? null) as "booking" | "inspection" | "sales" | null,
+    botModel: (agent.botModel ?? null) as
+      | "admin" | "consultant" | "support" | "qualifier" | "salesman" | null
+  } as typeof profile;
+
   const runtimeTurn = await buildRuntimeTurn(
-    profile,
+    runtimeProfile,
     input.message,
     history
       .slice(0, -1)
@@ -410,10 +419,27 @@ export async function processWaInbound(
       })),
     {
       systemOverride,
-      ...(agent.carcass ? { carcass: agent.carcass as "booking" | "inspection" | "sales" } : {}),
+      detectedNeed: conversation.detectedNeed,
       telemetry
     }
   );
+
+  // Буфер потребности: needChanged-перезапись проверяем ПЕРВОЙ, иначе при уже
+  // заполненном detectedNeed смена запроса клиентом не записалась бы.
+  {
+    let nextNeed: string | null = null;
+    if (runtimeTurn.needChanged && runtimeTurn.extractedNeed) {
+      nextNeed = runtimeTurn.extractedNeed;
+    } else if (!conversation.detectedNeed && runtimeTurn.extractedNeed) {
+      nextNeed = runtimeTurn.extractedNeed;
+    }
+    if (nextNeed && nextNeed !== conversation.detectedNeed) {
+      await prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { detectedNeed: nextNeed }
+      });
+    }
+  }
 
   await prisma.waMessage.create({
     data: {
