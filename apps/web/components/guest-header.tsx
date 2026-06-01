@@ -108,7 +108,7 @@ export default function GuestHeader() {
                 <div className="absolute -top-1.5 right-8 hidden h-3 w-3 rotate-45 border-l border-t border-slate-200 bg-white sm:block" />
                 <div className="flex items-start justify-between gap-3">
                   <h3 className="text-sm font-semibold leading-5 text-slate-900">
-                    Бот готов — подключите WhatsApp
+                    Бот готов, подключите WhatsApp
                   </h3>
                   <button
                     type="button"

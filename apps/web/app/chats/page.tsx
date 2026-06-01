@@ -14,7 +14,7 @@ export default function ChatsPage() {
             Inbox реальных клиентов
           </h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-            Подключите WhatsApp — переписки, лиды и ответы менеджера появятся здесь.
+            Подключите WhatsApp, переписки, лиды и ответы менеджера появятся здесь.
           </p>
         </div>
         <div className="sm:pt-1">

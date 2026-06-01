@@ -46,10 +46,10 @@ export default function SubscriptionBanner() {
   if (!show) return null;
 
   const text = usage.exhausted
-    ? "Диалоги закончились — бот не отвечает клиентам. Продлите тариф или докупите диалоги."
+    ? "Диалоги закончились, бот не отвечает клиентам. Продлите тариф или докупите диалоги."
     : usage.warnExpiring && usage.daysLeft !== null
-    ? `Тариф${usage.planLabel ? ` «${usage.planLabel}»` : ""} заканчивается ${usage.daysLeft === 0 ? "сегодня" : `через ${usage.daysLeft} дн.`} — продлите, чтобы бот не остановился.`
-    : `Осталось ${usage.remaining} диалогов — докупите, чтобы не прерывать работу бота.`;
+    ? `Тариф${usage.planLabel ? ` «${usage.planLabel}»` : ""} заканчивается ${usage.daysLeft === 0 ? "сегодня" : `через ${usage.daysLeft} дн.`}, продлите, чтобы бот не остановился.`
+    : `Осталось ${usage.remaining} диалогов, докупите, чтобы не прерывать работу бота.`;
 
   return (
     <div className="flex items-center gap-3 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">

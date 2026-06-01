@@ -697,7 +697,7 @@ export default function ChatWorkspace() {
           openAuthModal({
             title: "Идеально! Бот усвоил ваши правила.",
             description:
-              "Сохраните прогресс, чтобы настройки не потерялись — привяжите WhatsApp и подключите бота к реальным клиентам."
+              "Сохраните прогресс, чтобы настройки не потерялись, привяжите WhatsApp и подключите бота к реальным клиентам."
           });
         }, 5000);
       }
@@ -837,8 +837,8 @@ export default function ChatWorkspace() {
           <div className="flex flex-1 items-center justify-center">
             <p className="max-w-md text-center text-sm text-muted-foreground">
               {mode === "setup"
-                ? "Опишите бизнес одним сообщением — AI соберёт промпт и предложит уточнения."
-                : "Напишите как ваш клиент — проверьте, как менеджер ответит."}
+                ? "Опишите бизнес одним сообщением, AI соберёт промпт и предложит уточнения."
+                : "Напишите как ваш клиент, проверьте, как менеджер ответит."}
             </p>
           </div>
         ) : (
@@ -964,7 +964,7 @@ export default function ChatWorkspace() {
           <DialogHeader>
             <DialogTitle>Поправить ответ бота</DialogTitle>
             <DialogDescription>
-              Объясните, как бот должен отвечать в этом случае — промпт обновится автоматически.
+              Объясните, как бот должен отвечать в этом случае, промпт обновится автоматически.
             </DialogDescription>
           </DialogHeader>
 
@@ -1115,7 +1115,7 @@ export default function ChatWorkspace() {
                 </pre>
               ) : (
                 <div className="rounded-md border border-dashed border-border bg-secondary/40 px-4 py-8 text-center text-sm text-muted-foreground">
-                  Промпт ещё не собран. Опишите бизнес в режиме «Настройка» — он появится здесь.
+                  Промпт ещё не собран. Опишите бизнес в режиме «Настройка», он появится здесь.
                 </div>
               )}
             </div>

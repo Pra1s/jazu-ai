@@ -39,7 +39,7 @@ const EMPTY: Fields = {
 
 const FIELD_META: { key: keyof Fields; label: string; placeholder: string; rows: number }[] = [
   { key: "links", label: "Ссылки (Instagram, 2ГИС, сайт)", placeholder: "https://instagram.com/...\nhttps://2gis.kz/...", rows: 2 },
-  { key: "pricing", label: "Прайс / цены", placeholder: "Стрижка — 5000 ₸\nОкрашивание — от 15000 ₸", rows: 3 },
+  { key: "pricing", label: "Прайс / цены", placeholder: "Стрижка - 5000 ₸\nОкрашивание - от 15000 ₸", rows: 3 },
   { key: "script", label: "Скрипт / сценарий продаж", placeholder: "Как бот должен вести клиента к заявке", rows: 3 },
   { key: "addresses", label: "Адреса", placeholder: "г. Алматы, ул. Абая 10", rows: 2 },
   { key: "hours", label: "Время работы", placeholder: "Пн-Пт 9:00–20:00, Сб-Вс 10:00–18:00", rows: 1 },
@@ -79,7 +79,7 @@ export default function ExtraDataDialog({ open, onClose, onSaved }: ExtraDataDia
         method: "POST",
         body: JSON.stringify(fields)
       });
-      toast.success("Данные сохранены — бот будет их использовать");
+      toast.success("Данные сохранены, бот будет их использовать");
       onSaved?.();
       onClose();
     } catch (err) {
@@ -95,7 +95,7 @@ export default function ExtraDataDialog({ open, onClose, onSaved }: ExtraDataDia
         <DialogHeader>
           <DialogTitle>Данные о бизнесе</DialogTitle>
           <DialogDescription>
-            Добавьте детали — бот будет использовать их в ответах клиентам.
+            Добавьте детали, бот будет использовать их в ответах клиентам.
           </DialogDescription>
         </DialogHeader>
 

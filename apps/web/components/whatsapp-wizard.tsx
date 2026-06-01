@@ -255,7 +255,7 @@ export default function WhatsappWizard() {
       setPairCode(null);
       await refreshStatus();
       if (data.workerError) {
-        toast.warning("WhatsApp отключён локально. Воркер недоступен — это не помешает переподключению.");
+        toast.warning("WhatsApp отключён локально. Воркер недоступен, это не помешает переподключению.");
       } else {
         toast.success("WhatsApp отключён");
       }
@@ -291,7 +291,7 @@ export default function WhatsappWizard() {
         </div>
         <h2 className="text-lg font-semibold">Остался последний шаг</h2>
         <p className="mt-2 text-sm text-muted-foreground">
-          Чтобы привязать WhatsApp, пройдите быструю регистрацию — это займёт
+          Чтобы привязать WhatsApp, пройдите быструю регистрацию, это займёт
           минуту. Все ваши настройки бота сохранятся, и после входа вы сразу
           вернётесь на этот экран привязки.
         </p>
@@ -345,7 +345,7 @@ export default function WhatsappWizard() {
             <h2 className="text-lg font-semibold">WhatsApp подключён</h2>
             <p className="mt-1 text-sm text-muted-foreground">
               Бот отвечает клиентам с номера{" "}
-              <span className="font-medium text-foreground">{connectedPhone ?? "—"}</span>.
+              <span className="font-medium text-foreground">{connectedPhone ?? "-"}</span>.
             </p>
             <div className="mt-5 flex flex-wrap gap-2">
               <Button variant="outline" size="sm" onClick={() => void refreshStatus()}>
@@ -418,8 +418,8 @@ export default function WhatsappWizard() {
             Бот можно временно поставить на паузу в разделе{" "}
             <Link href="/chats" className="font-medium text-foreground underline-offset-2 hover:underline">
               «Диалоги»
-            </Link>{" "}
-            — он перестанет отвечать, пока вы не включите его снова.
+            </Link>
+            , он перестанет отвечать, пока вы не включите его снова.
           </p>
         </div>
       </div>
@@ -596,7 +596,7 @@ export default function WhatsappWizard() {
                   className="w-[260px] rounded-2xl border border-border bg-white p-3"
                 />
                 <p className="text-center text-xs text-muted-foreground">
-                  QR обновляется каждые 2 секунды. Если истекает — просто отсканируйте снова.
+                  QR обновляется каждые 2 секунды. Если истекает, просто отсканируйте снова.
                 </p>
               </div>
             )}
@@ -626,7 +626,7 @@ export default function WhatsappWizard() {
             </span>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            Если код не подошёл или WhatsApp пишет «неверный код» — нажмите{" "}
+            Если код не подошёл или WhatsApp пишет «неверный код», нажмите{" "}
             <b className="text-foreground">«Сбросить и заново»</b>. Просто запросить новый код
             не поможет: WhatsApp удерживает старую сессию, нужно её сбросить.
           </p>

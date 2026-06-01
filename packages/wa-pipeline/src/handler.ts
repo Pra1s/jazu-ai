@@ -171,7 +171,7 @@ function handoffNotificationTitle(handoffType: HandoffType): { plain: string; ht
     case "hot_lead":
       return { plain: "🔥 Горячий лид", html: "<b>🔥 Горячий лид</b>" };
     case "complaint":
-      return { plain: "⚠️ Жалоба — срочно", html: "<b>⚠️ Жалоба — срочно</b>" };
+      return { plain: "⚠️ Жалоба - срочно", html: "<b>⚠️ Жалоба - срочно</b>" };
     case "out_of_scope":
       return { plain: "❓ Нестандартный вопрос", html: "<b>❓ Нестандартный вопрос</b>" };
     case "requested":

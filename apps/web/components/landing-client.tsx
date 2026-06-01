@@ -22,17 +22,17 @@ const features = [
   {
     icon: Bot,
     title: "Глубокий опрос бизнеса",
-    body: "AI задаёт точечные вопросы по нише, услугам, ценам, заявкам и ограничениям — и сам собирает промпт."
+    body: "AI задаёт точечные вопросы по нише, услугам, ценам, заявкам и ограничениям и сам собирает промпт."
   },
   {
     icon: MessageSquare,
     title: "Тест с правками",
-    body: "Проверьте ответы от лица клиента. Нажмите «Поправить» на любой реплике — промпт обновится."
+    body: "Проверьте ответы от лица клиента. Нажмите «Поправить» на любой реплике, промпт обновится."
   },
   {
     icon: Zap,
     title: "WhatsApp по QR",
-    body: "Отсканируйте QR — и агент начнёт отвечать клиентам 24/7. Горячие лиды — на ваш номер WhatsApp или в Telegram."
+    body: "Отсканируйте QR, и агент начнёт отвечать клиентам 24/7. Горячие лиды на ваш номер WhatsApp или в Telegram."
   }
 ];
 
@@ -110,7 +110,7 @@ export default function LandingClient() {
         <div className="mt-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <Sparkles className="h-3.5 w-3.5 shrink-0 text-[#25D366]" />
-            Настройка и тест бота — бесплатно
+            Настройка и тест бота бесплатно
           </div>
           <div className="flex shrink-0 gap-2">
             <Button

@@ -45,7 +45,7 @@ export async function sendMagicCodeEmail(email: string, code: string): Promise<v
         ${code}
       </div>
       <p style="font-size: 13px; color: #888; margin: 20px 0 0 0;">
-        Код действует 15 минут. Если вы не запрашивали вход — просто проигнорируйте письмо.
+        Код действует 15 минут. Если вы не запрашивали вход, просто проигнорируйте письмо.
       </p>
     </div>
   `;
@@ -59,7 +59,7 @@ export async function sendMagicCodeEmail(email: string, code: string): Promise<v
     body: JSON.stringify({
       from: env.FROM_EMAIL,
       to: [email],
-      subject: `${code} — код для входа в Jazu`,
+      subject: `${code} - код для входа в Jazu`,
       html
     })
   });

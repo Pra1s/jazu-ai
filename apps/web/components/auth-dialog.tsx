@@ -241,7 +241,7 @@ export default function AuthDialog({
                 )}
               />
               <p className="mt-1 text-xs text-muted-foreground">
-                Если входите впервые — попросим номер телефона на следующем шаге.
+                Если входите впервые, попросим номер телефона на следующем шаге.
               </p>
             </div>
 

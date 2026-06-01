@@ -79,7 +79,7 @@ export default function ChatsClient() {
         </div>
         <h2 className="text-base font-semibold">Нет диалогов</h2>
         <p className="mt-2 text-sm text-muted-foreground">
-          Подключите WhatsApp — реальные переписки появятся здесь автоматически.
+          Подключите WhatsApp, реальные переписки появятся здесь автоматически.
         </p>
         <Button className="mt-5" asChild>
           <a href="/whatsapp">

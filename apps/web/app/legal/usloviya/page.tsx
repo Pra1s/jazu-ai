@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import LegalDoc, { type LegalDocData } from "@/components/legal-doc";
 
 export const metadata: Metadata = {
-  title: "Условия использования — Jazu"
+  title: "Условия использования - Jazu"
 };
 
 const doc: LegalDocData = {

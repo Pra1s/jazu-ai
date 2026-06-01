@@ -180,7 +180,7 @@ export default function BillingClient() {
             {usage.planLabel
               ? `Тариф «${usage.planLabel}»${usage.daysLeft !== null ? ` · ${usage.daysLeft} дн. до конца` : ""}`
               : usage.trialActive
-              ? `Пробный период — ${fmt(data.freeTrialDialogs)} диалогов бесплатно`
+              ? `Пробный период - ${fmt(data.freeTrialDialogs)} диалогов бесплатно`
               : `Использовано: ${fmt(usage.used)}`}
           </div>
         </div>
@@ -253,7 +253,7 @@ export default function BillingClient() {
                 Докупить диалоги
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                По цене вашего тарифа — {fmt(topupPricePerDialog)} ₸ за диалог.
+                По цене вашего тарифа - {fmt(topupPricePerDialog)} ₸ за диалог.
               </p>
               <div className="mt-3 flex items-baseline gap-2">
                 <span className="text-3xl font-semibold tracking-tight tabular-nums text-foreground">

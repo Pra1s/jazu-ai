@@ -392,7 +392,7 @@ function handoffNotificationTitle(handoffType: HandoffType): string {
     case "hot_lead":
       return "<b>🔥 Горячий лид</b>";
     case "complaint":
-      return "<b>⚠️ Жалоба — срочно</b>";
+      return "<b>⚠️ Жалоба - срочно</b>";
     case "out_of_scope":
       return "<b>❓ Нестандартный вопрос</b>";
     case "requested":
@@ -1398,7 +1398,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     // Номер отличается — нужен код. Без подключённого бота отправить нельзя.
     if (!connectedAgent) {
       reply.code(409);
-      return { ok: false, error: "Сначала подключите WhatsApp — код придёт с номера бота." };
+      return { ok: false, error: "Сначала подключите WhatsApp, код придёт с номера бота." };
     }
 
     const code = String(Math.floor(100000 + Math.random() * 900000));
@@ -1417,7 +1417,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     try {
       await sendWorkerMessage(connectedAgent.id, {
         chatId: `${targetDigits}@s.whatsapp.net`,
-        text: `Jazu: ваш код подтверждения — ${code}. Введите его в кабинете, чтобы получать уведомления о лидах. Код действует 10 минут.`
+        text: `Jazu: ваш код подтверждения - ${code}. Введите его в кабинете, чтобы получать уведомления о лидах. Код действует 10 минут.`
       });
     } catch (err) {
       request.log.error({ err, userId: user.id }, "phone verify code send failed");
@@ -2293,7 +2293,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         error:
           "Этот номер WhatsApp уже привязан к другому аккаунту Jazu. " +
           "Один номер можно использовать только в одном аккаунте. " +
-          "Если это ваш номер и нужно перенести — напишите в поддержку."
+          "Если это ваш номер и нужно перенести, напишите в поддержку."
       };
     }
 
@@ -2575,7 +2575,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
           message:
             "Этот номер WhatsApp уже привязан к другому аккаунту Jazu. " +
             "Один номер можно использовать только в одном аккаунте. " +
-            "Если это ваш номер и нужно перенести — напишите в поддержку."
+            "Если это ваш номер и нужно перенести, напишите в поддержку."
         };
       }
 
@@ -2614,7 +2614,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
           message:
             "Этот номер WhatsApp уже привязан к другому аккаунту Jazu. " +
             "Один номер можно использовать только в одном аккаунте. " +
-            "Если это ваш номер и нужно перенести — напишите в поддержку."
+            "Если это ваш номер и нужно перенести, напишите в поддержку."
         };
       }
       // Тот же владелец выиграл гонку — это ок, возвращаем успех.
@@ -2763,7 +2763,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       return {
         ok: true,
         reply: null,
-        summary: "Квота диалогов исчерпана — бот не отвечает.",
+        summary: "Квота диалогов исчерпана, бот не отвечает.",
         leadId: null,
         blocked: "quota_exhausted" as const,
         usage: result.usage

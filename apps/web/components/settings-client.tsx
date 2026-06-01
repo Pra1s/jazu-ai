@@ -278,7 +278,7 @@ export default function SettingsClient() {
               <h2 className="text-sm font-semibold">Личный номер для уведомлений</h2>
               <p className="mt-1.5 text-sm text-muted-foreground">
                 На этот номер бот будет писать в WhatsApp о новых лидах. Если он
-                совпадет с номером WhatsApp для AI бота — уведомления придут в чат
+                совпадет с номером WhatsApp для AI бота, уведомления придут в чат
                 «Сообщения себе». Формат +7XXXXXXXXXX (Казахстан / Россия).
               </p>
               {initialPhone && (
@@ -318,7 +318,7 @@ export default function SettingsClient() {
             <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
               <h2 className="text-sm font-semibold">Telegram (дополнительный канал)</h2>
               <p className="mt-1.5 text-sm text-muted-foreground">
-                Лиды также можно получать в Telegram. Основной канал — WhatsApp;
+                Лиды также можно получать в Telegram. Основной канал - WhatsApp;
                 Telegram включается по желанию.
               </p>
               <div className="mt-4">
@@ -362,7 +362,7 @@ export default function SettingsClient() {
                       ? "bg-emerald-100 text-emerald-700"
                       : "bg-secondary text-muted-foreground"
                   )}>
-                    {me?.agent?.status ?? "—"}
+                    {me?.agent?.status ?? "-"}
                   </span>
                 </div>
               </div>
