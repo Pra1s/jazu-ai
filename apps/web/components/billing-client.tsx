@@ -266,7 +266,7 @@ function PlanCard({
     <div
       className={cn(
         "relative flex flex-col rounded-2xl border bg-card p-7 sm:p-8 transition-colors",
-        plan.popular ? "border-foreground sm:-translate-y-1" : "border-border hover:border-foreground/30"
+        plan.popular ? "border-foreground" : "border-border hover:border-foreground/30"
       )}
     >
       {plan.popular && (
@@ -293,15 +293,17 @@ function PlanCard({
 
       {plan.audience && <p className="mt-1 text-xs text-muted-foreground">{plan.description}</p>}
 
-      <Button
-        variant="default"
-        size="lg"
-        className="mt-7 w-full rounded-full"
-        onClick={onSubscribe}
-        disabled={current}
-      >
-        {current ? "Текущий тариф" : "Подключить"}
-      </Button>
+      <div className="mt-auto pt-7">
+        <Button
+          variant="default"
+          size="lg"
+          className="w-full rounded-full"
+          onClick={onSubscribe}
+          disabled={current}
+        >
+          {current ? "Текущий тариф" : "Подключить"}
+        </Button>
+      </div>
     </div>
   );
 }
