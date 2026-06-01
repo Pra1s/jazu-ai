@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { ChevronDown, ChevronRight, Send, RotateCcw, Mic, Pencil, Play, FileText, Smartphone } from "lucide-react";
 import {
   type ActionButton,
@@ -22,7 +23,6 @@ import { cn } from "@/lib/cn";
 import { renderMarkdown } from "@/lib/render-markdown";
 import { toast } from "sonner";
 import { useAuthStatus } from "@/lib/use-auth-status";
-import AuthDialog from "@/components/auth-dialog";
 import ExtraDataDialog from "@/components/extra-data-dialog";
 
 type AssistantPart = {
@@ -485,18 +485,24 @@ export default function ChatWorkspace() {
   const userMessageCountRef = useRef(0);
   // Счётчик успешных правок из теста — Trigger 2 срабатывает только после 3-й.
   const testCorrectionCountRef = useRef(0);
-  const [authModal, setAuthModal] = useState<{ title: string; description: string } | null>(null);
-  // Непропускаемая подсказка у кнопки «Привязать ватсап»: появляется, когда
-  // гость закрыл модалку регистрации. Блокирует всё, кроме клика по кнопке.
+  // Непропускаемая подсказка у кнопки «Подключить WhatsApp»: показывается сразу
+  // при срабатывании триггера. Затемняет вкладку теста и указывает на кнопку в
+  // шапке, блокируя всё, кроме перехода к подключению.
   const [stickyHint, setStickyHint] = useState<{ title: string; description: string } | null>(null);
 
   function markTriggerFired() {
     triggerFiredRef.current = true;
   }
 
-  function openAuthModal(opts: { title: string; description: string }) {
-    setStickyHint(null);
-    setAuthModal(opts);
+  // Показ непропускаемой подсказки у кнопки «Подключить WhatsApp». Блокируем
+  // ввод и просим шапку скрыть свой мягкий coachmark, чтобы подсказки не
+  // накладывались друг на друга.
+  function showConnectHint(opts: { title: string; description: string }) {
+    setInputDisabled(true);
+    setStickyHint(opts);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("jazu:connectHintShown"));
+    }
   }
 
   async function refreshPrompt() {
@@ -645,8 +651,7 @@ export default function ChatWorkspace() {
     if (turn.shouldHandoff && turn.handoffType === "hot_lead") {
       markTriggerFired();
       if (correctionTimerRef.current) clearTimeout(correctionTimerRef.current);
-      setInputDisabled(true);
-      openAuthModal({
+      showConnectHint({
         title: "Ваш бот только что закрыл тестового лида! ⚡️",
         description:
           "Готовы получать такие же заявки от реальных клиентов? Привяжите WhatsApp в 1 клик, чтобы сохранить бота и подключить его к реальным клиентам."
@@ -658,8 +663,7 @@ export default function ChatWorkspace() {
     if (userMessageCountRef.current >= 10) {
       markTriggerFired();
       if (correctionTimerRef.current) clearTimeout(correctionTimerRef.current);
-      setInputDisabled(true);
-      openAuthModal({
+      showConnectHint({
         title: "Ваш ИИ-продавец отлично держит удар! 🥊",
         description:
           "Система полностью готова к бою. Привяжите WhatsApp в 1 клик, чтобы забрать этого бота себе и подключить к реальным клиентам."
@@ -688,20 +692,20 @@ export default function ChatWorkspace() {
       setCorrection(null);
       await Promise.all([refreshPrompt(), refreshHistories()]);
       notifyPromptProgress();
-      // Trigger 2 — после 3-й успешной правки из теста. Откладываем модалку на
-      // 5с, чтобы юзер увидел результат правки. Читаем актуальный ref в колбэке.
+      // Trigger 2 — после 3-й успешной правки из теста. Откладываем подсказку
+      // на 5с, чтобы юзер увидел результат правки. Читаем актуальный ref в
+      // колбэке.
       if (wasInTest) testCorrectionCountRef.current += 1;
-      if (
+      const willFireTrigger2 =
         wasInTest &&
         !isAuth &&
         !triggerFiredRef.current &&
-        testCorrectionCountRef.current >= 3
-      ) {
+        testCorrectionCountRef.current >= 3;
+      if (willFireTrigger2) {
         correctionTimerRef.current = setTimeout(() => {
           if (triggerFiredRef.current) return;
           markTriggerFired();
-          setInputDisabled(true);
-          openAuthModal({
+          showConnectHint({
             title: "Идеально! Бот усвоил ваши правила.",
             description:
               "Сохраните прогресс, чтобы настройки не потерялись, привяжите WhatsApp и подключите бота к реальным клиентам."
@@ -710,8 +714,9 @@ export default function ChatWorkspace() {
       }
       // После правки из теста — переключаем юзера в чат Настройки, чтобы он
       // увидел зелёную карточку «Промпт обновлён» в основном месте правды.
-      // В тесте всё подтянется само, если юзер сам туда вернётся.
-      if (wasInTest) {
+      // Но если сейчас сработает триггер регистрации — остаёмся в тесте, чтобы
+      // затемнение и подсказка показались именно на вкладке теста.
+      if (wasInTest && !willFireTrigger2) {
         setMode("setup");
         const builderList = await apiJson<ChatMessage[]>("/agent/history");
         const lastWithCard = [...builderList].reverse().find((m) => getPromptCard(m.parts ?? []));
@@ -1009,30 +1014,6 @@ export default function ChatWorkspace() {
         </DialogContent>
       </Dialog>
 
-      {/* Регистрация гостя — триггеры лояльности. После входа ведём в воронку
-          привязки WhatsApp (nextPath=/whatsapp). */}
-      {authModal && (
-        <AuthDialog
-          open
-          title={authModal.title}
-          description={authModal.description}
-          nextPath="/whatsapp"
-          onClose={() => {
-            // Закрытие крестиком НЕ снимает блокировку: переводим в
-            // непропускаемую подсказку у кнопки «Привязать ватсап».
-            const hint = authModal;
-            setAuthModal(null);
-            setStickyHint({ title: hint.title, description: hint.description });
-          }}
-          onSuccess={() => {
-            // Вход выполнен — снимаем блокировку и подтягиваем историю/промпт.
-            setInputDisabled(false);
-            setStickyHint(null);
-            void Promise.all([refreshPrompt(), refreshHistories()]);
-          }}
-        />
-      )}
-
       {/* Доп-данные о бизнесе (структурированный ввод) */}
       <ExtraDataDialog
         open={extraDataOpen}
@@ -1040,26 +1021,24 @@ export default function ChatWorkspace() {
         onSaved={() => void refreshPrompt()}
       />
 
-      {/* Непропускаемая подсказка у кнопки «Привязать WhatsApp». Оверлей
-          блокирует всё (z-40), сама кнопка в хедере поднята над ним (z-50)
-          и остаётся единственным кликабельным элементом. */}
-      {stickyHint && !authModal && (
+      {/* Непропускаемая подсказка, указывающая на кнопку «Подключить WhatsApp»
+          в шапке. Оверлей затемняет вкладку теста (z-40), кнопка в шапке выше
+          оверлея и остаётся кликабельной. Стрелка карточки смотрит вверх, на
+          кнопку. */}
+      {stickyHint && (
         <div className="absolute inset-0 z-40">
           <div className="absolute inset-0 bg-foreground/40 backdrop-blur-[1px]" aria-hidden />
-          <div className="absolute right-3 top-14 z-50 w-[min(20rem,calc(100vw-1.5rem))] rounded-2xl border border-[#25D366]/30 bg-card p-4 shadow-2xl">
+          <div className="absolute right-3 top-2 z-50 w-[min(20rem,calc(100vw-1.5rem))] rounded-2xl border border-[#25D366]/30 bg-card p-4 shadow-2xl">
             <div className="absolute -top-2 right-8 h-4 w-4 rotate-45 border-l border-t border-[#25D366]/30 bg-card" aria-hidden />
             <p className="text-sm font-semibold text-foreground">{stickyHint.title}</p>
             <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{stickyHint.description}</p>
-            <button
-              type="button"
-              onClick={() =>
-                openAuthModal({ title: stickyHint.title, description: stickyHint.description })
-              }
+            <Link
+              href="/whatsapp"
               className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-full bg-[#25D366] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#1ebe5c]"
             >
               <Smartphone className="h-3.5 w-3.5" />
               Подключить WhatsApp
-            </button>
+            </Link>
           </div>
         </div>
       )}

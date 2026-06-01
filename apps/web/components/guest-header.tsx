@@ -31,6 +31,9 @@ export default function GuestHeader() {
   const pathname = usePathname();
   const [progress, setProgress] = useState<ProgressResponse | null>(null);
   const [coachmarkDismissed, setCoachmarkDismissed] = useState(true);
+  // Когда в тесте срабатывает непропускаемая подсказка-триггер, прячем мягкий
+  // coachmark, чтобы две подсказки у одной кнопки не накладывались.
+  const [ctaLocked, setCtaLocked] = useState(false);
 
   const refreshProgress = useCallback(async () => {
     try {
@@ -53,8 +56,13 @@ export default function GuestHeader() {
     void refreshProgress();
 
     const handler = () => void refreshProgress();
+    const lockHandler = () => setCtaLocked(true);
     window.addEventListener("jazu:promptProgress", handler);
-    return () => window.removeEventListener("jazu:promptProgress", handler);
+    window.addEventListener("jazu:connectHintShown", lockHandler);
+    return () => {
+      window.removeEventListener("jazu:promptProgress", handler);
+      window.removeEventListener("jazu:connectHintShown", lockHandler);
+    };
   }, [refreshProgress]);
 
   // Кнопку «Подключить WhatsApp» (вместо «Войти») показываем, как только у
@@ -70,7 +78,7 @@ export default function GuestHeader() {
   const showCta =
     showWaCta && (progress?.correctionsCount ?? 0) >= MIN_CORRECTIONS;
 
-  const showCoachmark = showCta && !coachmarkDismissed;
+  const showCoachmark = showCta && !coachmarkDismissed && !ctaLocked;
 
   function dismissCoachmark() {
     setCoachmarkDismissed(true);
