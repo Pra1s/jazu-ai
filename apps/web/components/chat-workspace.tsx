@@ -410,7 +410,6 @@ export default function ChatWorkspace() {
   const [inputDisabled, setInputDisabled] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const connectBtnRef = useRef<HTMLButtonElement>(null);
   const extraDataBtnRef = useRef<HTMLButtonElement>(null);
 
   // ── Голосовой ввод (STT) ────────────────────────────────────────────────
@@ -769,26 +768,6 @@ export default function ChatWorkspace() {
 
         {isTest && (
           <div className="flex items-center gap-1">
-            {!isAuth && (
-              <button
-                ref={connectBtnRef}
-                type="button"
-                onClick={() =>
-                  openAuthModal({
-                    title: "Привяжите WhatsApp",
-                    description:
-                      "Войдите и подключите WhatsApp, чтобы бот начал отвечать вашим реальным клиентам."
-                  })
-                }
-                className={cn(
-                  "relative z-50 flex items-center gap-1 rounded-full bg-[#25D366] px-3 py-1 text-xs font-semibold text-white shadow-sm transition hover:bg-[#1ebe5c]",
-                  stickyHint && "ring-4 ring-[#25D366]/30"
-                )}
-              >
-                <Smartphone className="h-3.5 w-3.5" />
-                Привязать WhatsApp
-              </button>
-            )}
             <button
               type="button"
               onClick={() => setPromptDrawerOpen(true)}
@@ -1071,7 +1050,7 @@ export default function ChatWorkspace() {
               className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-full bg-[#25D366] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#1ebe5c]"
             >
               <Smartphone className="h-3.5 w-3.5" />
-              Привязать WhatsApp
+              Подключить WhatsApp
             </button>
           </div>
         </div>

@@ -57,16 +57,18 @@ export default function GuestHeader() {
     return () => window.removeEventListener("jazu:promptProgress", handler);
   }, [refreshProgress]);
 
-  // CTA показываем, когда промпт собран, сделано минимум 2 правки и WhatsApp
-  // ещё не подключён. На странице самой привязки/входа CTA не нужен.
+  // Кнопку «Подключить WhatsApp» (вместо «Войти») показываем, как только у
+  // гостя собран промпт и WhatsApp ещё не подключён — то есть на странице
+  // настройки/теста. На лендинге (промпта ещё нет) оставляем «Войти».
   const isAuthPath = pathname.startsWith("/auth");
   const isWhatsappPath = pathname.startsWith("/whatsapp");
+  const showWaCta =
+    !!progress && progress.hasPrompt && !progress.waConnected && !isWhatsappPath;
+
+  // Пульсирующую подсказку у кнопки включаем чуть позже — когда промпт собран
+  // и сделано минимум 2 правки (бот реально отлажен).
   const showCta =
-    !!progress &&
-    progress.hasPrompt &&
-    progress.correctionsCount >= MIN_CORRECTIONS &&
-    !progress.waConnected &&
-    !isWhatsappPath;
+    showWaCta && (progress?.correctionsCount ?? 0) >= MIN_CORRECTIONS;
 
   const showCoachmark = showCta && !coachmarkDismissed;
 
@@ -80,7 +82,7 @@ export default function GuestHeader() {
       <Logo />
 
       <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
-        {showCta && (
+        {!isAuthPath && showWaCta && (
           <div className="sm:relative">
             <Link
               href="/whatsapp"
@@ -90,8 +92,8 @@ export default function GuestHeader() {
               )}
             >
               <MessageCircle className="h-4 w-4 shrink-0" />
-              <span className="sm:hidden">Привязать</span>
-              <span className="hidden sm:inline">Привязать WhatsApp</span>
+              <span className="sm:hidden">Подключить</span>
+              <span className="hidden sm:inline">Подключить WhatsApp</span>
             </Link>
 
             {showCoachmark && (
@@ -121,7 +123,7 @@ export default function GuestHeader() {
                 </div>
                 <p className="mt-1.5 text-sm leading-5 text-slate-600">
                   Вы собрали промпт и отладили ответы на правках. Нажмите
-                  «Привязать WhatsApp»: после быстрой регистрации бот начнёт
+                  «Подключить WhatsApp»: после быстрой регистрации бот начнёт
                   отвечать клиентам 24/7, а уведомления о лидах и их статусе
                   будут приходить в WhatsApp.
                 </p>
@@ -137,7 +139,7 @@ export default function GuestHeader() {
           </div>
         )}
 
-        {!isAuthPath && (
+        {!isAuthPath && !showWaCta && (
           <Link
             href="/auth"
             className="flex items-center gap-2 whitespace-nowrap rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-secondary sm:px-4 sm:text-sm"
