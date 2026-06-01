@@ -4,6 +4,7 @@ import { SideNav } from "@/components/side-nav";
 import GuestHeader from "@/components/guest-header";
 import SubscriptionBanner from "@/components/subscription-banner";
 import OnboardingTour from "@/components/onboarding-tour";
+import GuestTour from "@/components/guest-tour";
 import { useAuthStatus } from "@/lib/use-auth-status";
 
 /**
@@ -38,6 +39,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {children}
       </main>
+      <GuestTour />
     </div>
   );
 }

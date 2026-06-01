@@ -82,39 +82,56 @@ export default function OnboardingTour() {
 
   useEffect(() => {
     const local = window.localStorage.getItem(storageKey);
-    // Завершённый тур или любой legacy-шаг — считаем тур пройденным.
-    if (local === "done" || (local && LEGACY_STEPS.has(local))) {
-      window.localStorage.setItem(storageKey, "done");
-      setStep("done");
-      setLoaded(true);
-      return;
-    }
 
     apiJson<SettingsResponse>("/settings")
       .then((me) => {
+        // Источник правды — СЕРВЕР. localStorage больше не перекрывает свежее
+        // серверное состояние: иначе на браузере, где тур когда-то проходили
+        // (local === "done"), новый зарегистрированный аккаунт никогда бы не
+        // увидел тур, хотя на сервере у него onboardingState ещё пустой.
         if (!me.success) {
-          const initial = STEP_ORDER[0];
-          if (!local && initial) {
-            setStep(initial);
-          } else if (local && STEP_ORDER.includes(local as TourStep)) {
-            setStep(local as TourStep);
+          // Теоретически тур смонтирован только для авторизованных, но на
+          // всякий случай падаем на localStorage.
+          if (local === "done" || (local && LEGACY_STEPS.has(local))) {
+            setStep("done");
+          } else {
+            const resolved = (local && STEP_ORDER.includes(local as TourStep))
+              ? (local as TourStep)
+              : (STEP_ORDER[0] as TourStep);
+            setStep(resolved);
           }
           return;
         }
 
         const serverStep = me.user?.onboardingState?.step;
-        if (serverStep === "done" || (serverStep && LEGACY_STEPS.has(serverStep)) || local === "done") {
+
+        // Тур считается пройденным ТОЛЬКО если так говорит сервер.
+        if (serverStep === "done" || (serverStep && LEGACY_STEPS.has(serverStep))) {
           window.localStorage.setItem(storageKey, "done");
           setStep("done");
           return;
         }
 
-        const resolved = (serverStep || local || STEP_ORDER[0]) as TourStep;
-        setStep(STEP_ORDER.includes(resolved) ? resolved : (STEP_ORDER[0] as TourStep));
+        // Сервер хранит конкретный валидный шаг — продолжаем с него.
+        if (serverStep && STEP_ORDER.includes(serverStep as TourStep)) {
+          setStep(serverStep as TourStep);
+          return;
+        }
+
+        // Сервер пуст (новый аккаунт) — стартуем тур с первого шага, даже если
+        // в localStorage осталось "done" от другого аккаунта на этом браузере.
+        setStep(STEP_ORDER[0] as TourStep);
       })
       .catch(() => {
-        const resolved = (local || STEP_ORDER[0]) as TourStep;
-        setStep(STEP_ORDER.includes(resolved) ? resolved : (STEP_ORDER[0] as TourStep));
+        // Сеть недоступна — фолбэк на localStorage, чтобы тур не мигал.
+        if (local === "done" || (local && LEGACY_STEPS.has(local))) {
+          setStep("done");
+          return;
+        }
+        const resolved = (local && STEP_ORDER.includes(local as TourStep))
+          ? (local as TourStep)
+          : (STEP_ORDER[0] as TourStep);
+        setStep(resolved);
       })
       .finally(() => setLoaded(true));
   }, []);

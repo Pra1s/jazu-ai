@@ -14,6 +14,7 @@ function WhatsAppIcon({ className }: { className?: string }) {
   );
 }
 import { apiJson } from "@/lib/api";
+import { cn } from "@/lib/cn";
 
 type ProgressResponse = {
   hasPrompt: boolean;
@@ -39,6 +40,10 @@ export default function GuestHeader() {
   const [progress, setProgress] = useState<ProgressResponse | null>(null);
   const [notReadyOpen, setNotReadyOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  // Подсветка кнопки «Подключить WhatsApp», когда в тесте сработал «горячий»
+  // триггер (chat-workspace шлёт jazu:connectHintShown). Привлекаем внимание
+  // к кнопке в шапке, на которую указывает непропускаемая подсказка теста.
+  const [coachmark, setCoachmark] = useState(false);
 
   const refreshProgress = useCallback(async () => {
     try {
@@ -52,8 +57,13 @@ export default function GuestHeader() {
   useEffect(() => {
     void refreshProgress();
     const handler = () => void refreshProgress();
+    const coachmarkHandler = () => setCoachmark(true);
     window.addEventListener("jazu:promptProgress", handler);
-    return () => window.removeEventListener("jazu:promptProgress", handler);
+    window.addEventListener("jazu:connectHintShown", coachmarkHandler);
+    return () => {
+      window.removeEventListener("jazu:promptProgress", handler);
+      window.removeEventListener("jazu:connectHintShown", coachmarkHandler);
+    };
   }, [refreshProgress]);
 
   const isAuthPath = pathname.startsWith("/auth");
@@ -93,7 +103,10 @@ export default function GuestHeader() {
             <button
               type="button"
               onClick={handleConnectClick}
-              className="flex items-center gap-1.5 whitespace-nowrap rounded-full bg-[#25D366] px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#1ebe5c] sm:gap-2 sm:px-4 sm:text-sm"
+              className={cn(
+                "flex items-center gap-1.5 whitespace-nowrap rounded-full bg-[#25D366] px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#1ebe5c] sm:gap-2 sm:px-4 sm:text-sm",
+                coachmark && "animate-pulse ring-2 ring-[#25D366]/50 ring-offset-2 ring-offset-background"
+              )}
             >
               <WhatsAppIcon className="h-4 w-4 shrink-0" />
               Подключить WhatsApp

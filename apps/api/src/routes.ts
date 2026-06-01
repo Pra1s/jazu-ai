@@ -3048,7 +3048,10 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     const updated = await prisma.user.update({
       where: { id: user.id },
       data: {
-        telegramChatId: body.telegramChatId ?? null,
+        // ВАЖНО: обновляем telegramChatId только если поле явно передано.
+        // Иначе частые PATCH'и тура (только onboardingState) затирали бы
+        // telegramChatId в null и пользователь терял бы уведомления.
+        ...(body.telegramChatId !== undefined ? { telegramChatId: body.telegramChatId || null } : {}),
         ...(body.displayName !== undefined ? { name: body.displayName } : {}),
         ...(body.onboardingState !== undefined ? { onboardingState: jsonInput(body.onboardingState) } : {})
       }
