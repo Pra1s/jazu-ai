@@ -820,7 +820,7 @@ export default function ChatWorkspace() {
               title="Добавить данные о бизнесе: ссылки, прайс, адреса, часы работы"
             >
               <FileText className="h-3.5 w-3.5" />
-              Данные о бизнесе
+              Добавить данные о бизнесе
             </button>
           </div>
         )}
