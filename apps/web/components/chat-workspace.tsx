@@ -886,7 +886,7 @@ export default function ChatWorkspace() {
           background: `linear-gradient(to top, hsl(var(--${isTest ? "test-canvas" : "card"})) 0%, hsl(var(--${isTest ? "test-canvas" : "card"}) / 0.92) 60%, hsl(var(--${isTest ? "test-canvas" : "card"}) / 0) 100%)`
         }}
       >
-        <div className="pointer-events-auto mx-auto w-full max-w-3xl rounded-2xl border border-border bg-card shadow-sm">
+        <div data-tour="composer" className="pointer-events-auto mx-auto w-full max-w-3xl rounded-2xl border border-border bg-card shadow-sm">
           <textarea
             ref={textareaRef}
             value={input}
@@ -930,6 +930,7 @@ export default function ChatWorkspace() {
                 icon={<Play className="h-3.5 w-3.5" />}
                 label="Тест"
                 tone="whatsapp"
+                dataTour="test-tab"
               />
             </div>
 
@@ -1133,13 +1134,15 @@ function ComposerTab({
   onClick,
   icon,
   label,
-  tone = "default"
+  tone = "default",
+  dataTour
 }: {
   active: boolean;
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
   tone?: "default" | "whatsapp";
+  dataTour?: string;
 }) {
   const activeClass =
     tone === "whatsapp" ? "bg-[#25D366] text-white" : "bg-foreground text-background";
@@ -1147,6 +1150,7 @@ function ComposerTab({
     <button
       type="button"
       onClick={onClick}
+      data-tour={dataTour}
       className={cn(
         "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition",
         active ? activeClass : "text-muted-foreground hover:bg-secondary hover:text-foreground"

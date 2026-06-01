@@ -103,6 +103,7 @@ export default function GuestHeader() {
             <button
               type="button"
               onClick={handleConnectClick}
+              data-tour="connect-wa"
               className={cn(
                 "flex items-center gap-1.5 whitespace-nowrap rounded-full bg-[#25D366] px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#1ebe5c] sm:gap-2 sm:px-4 sm:text-sm",
                 coachmark && "animate-pulse ring-2 ring-[#25D366]/50 ring-offset-2 ring-offset-background"
