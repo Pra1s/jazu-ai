@@ -855,14 +855,6 @@ export default function ChatWorkspace() {
             />
           ))
         )}
-          {!isTest && (
-            <div className="mt-6 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 pb-28 text-[11px] text-muted-foreground">
-              <a href="/legal/oferta" target="_blank" rel="noopener noreferrer" className="underline-offset-2 hover:text-foreground hover:underline">Оферта</a>
-              <a href="/legal/usloviya" target="_blank" rel="noopener noreferrer" className="underline-offset-2 hover:text-foreground hover:underline">Условия</a>
-              <a href="/legal/politika" target="_blank" rel="noopener noreferrer" className="underline-offset-2 hover:text-foreground hover:underline">Политика</a>
-              <a href="mailto:hello@jazu.chat" className="underline-offset-2 hover:text-foreground hover:underline">hello@jazu.chat</a>
-            </div>
-          )}
           <div ref={bottomRef} />
         </div>
       </div>
