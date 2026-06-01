@@ -48,15 +48,16 @@ function fmt(n: number) {
   return n.toLocaleString("ru-RU");
 }
 
+// Платёжная ссылка Kaspi Pay. Пока единая для всех тарифов и докупки:
+// после оплаты диалоги/тариф зачисляются вручную.
+const KASPI_PAY_URL = "https://pay.kaspi.kz/pay/ugtxcmxz";
+
 export default function BillingClient() {
   const router = useRouter();
   const [data, setData] = useState<PlansResponse | null>(null);
   const [usage, setUsage] = useState<UsageView | null>(null);
   const [me, setMe] = useState<{ ok: boolean } | null>(null);
   const [topupCount, setTopupCount] = useState<number>(100);
-  const [busyPlan, setBusyPlan] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -64,8 +65,8 @@ export default function BillingClient() {
         const plans = await apiJson<PlansResponse>("/billing/plans");
         setData(plans);
         setTopupCount(Math.max(plans.custom.min, 100));
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Не удалось загрузить тарифы");
+      } catch {
+        // тарифы не загрузились — покажем «Загружаем…», пользователь обновит
       }
       const meRes = await apiFetch("/auth/me");
       if (meRes.ok) {
@@ -86,70 +87,14 @@ export default function BillingClient() {
   const topupPricePerDialog = currentPlan?.pricePerDialogKzt ?? data?.pricePerDialog ?? 0;
   const topupPrice = topupCount * topupPricePerDialog;
 
-  async function subscribe(planId: string) {
+  // Оплата идёт через Kaspi Pay: открываем платёжную ссылку в новой вкладке.
+  // Зачисление диалогов/тарифа происходит вручную после оплаты.
+  function openKaspiPay() {
     if (!me?.ok) {
       router.push("/auth");
       return;
     }
-    setBusyPlan(planId);
-    setError(null);
-    setSuccessMsg(null);
-    try {
-      const res = await apiJson<{
-        ok: boolean;
-        error?: string;
-        usage?: UsageView;
-        purchase?: { conversations: number; amount: number };
-      }>("/billing/purchase", {
-        method: "POST",
-        body: JSON.stringify({ action: "subscribe", planId })
-      });
-      if (!res.ok) {
-        setError(res.error ?? "Ошибка оплаты");
-        return;
-      }
-      if (res.usage) setUsage(res.usage);
-      if (res.purchase) {
-        setSuccessMsg(`Тариф активирован · ${fmt(res.purchase.amount)} ₸ / месяц`);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка оплаты");
-    } finally {
-      setBusyPlan(null);
-    }
-  }
-
-  async function topup() {
-    if (!me?.ok) {
-      router.push("/auth");
-      return;
-    }
-    setBusyPlan("topup");
-    setError(null);
-    setSuccessMsg(null);
-    try {
-      const res = await apiJson<{
-        ok: boolean;
-        error?: string;
-        usage?: UsageView;
-        purchase?: { conversations: number; amount: number };
-      }>("/billing/purchase", {
-        method: "POST",
-        body: JSON.stringify({ action: "topup", count: topupCount })
-      });
-      if (!res.ok) {
-        setError(res.error ?? "Ошибка оплаты");
-        return;
-      }
-      if (res.usage) setUsage(res.usage);
-      if (res.purchase) {
-        setSuccessMsg(`+${fmt(res.purchase.conversations)} диалогов · ${fmt(res.purchase.amount)} ₸`);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка оплаты");
-    } finally {
-      setBusyPlan(null);
-    }
+    window.open(KASPI_PAY_URL, "_blank", "noopener,noreferrer");
   }
 
   if (!data) {
@@ -205,8 +150,7 @@ export default function BillingClient() {
             key={plan.id}
             plan={plan}
             current={usage?.planId === plan.id}
-            busy={busyPlan === plan.id}
-            onSubscribe={() => void subscribe(plan.id)}
+            onSubscribe={openKaspiPay}
           />
         ))}
       </div>
@@ -291,28 +235,12 @@ export default function BillingClient() {
               <Button
                 size="lg"
                 className="mt-2 w-full sm:w-auto sm:min-w-[160px]"
-                onClick={() => void topup()}
-                disabled={busyPlan === "topup"}
+                onClick={openKaspiPay}
               >
-                {busyPlan === "topup" ? "Обрабатываем…" : "Докупить"}
+                Докупить
               </Button>
             </div>
           </div>
-        </div>
-      )}
-
-      {(error || successMsg) && (
-        <div className="flex justify-center">
-          {error && (
-            <div className="rounded-full border border-red-200 bg-red-50 px-4 py-1.5 text-xs font-medium text-red-700">
-              {error}
-            </div>
-          )}
-          {successMsg && (
-            <div className="rounded-full bg-emerald-50 px-4 py-1.5 text-xs text-emerald-800">
-              {successMsg}
-            </div>
-          )}
         </div>
       )}
     </div>
@@ -322,12 +250,10 @@ export default function BillingClient() {
 function PlanCard({
   plan,
   current,
-  busy,
   onSubscribe
 }: {
   plan: Plan;
   current: boolean;
-  busy: boolean;
   onSubscribe: () => void;
 }) {
   return (
@@ -366,9 +292,9 @@ function PlanCard({
         size="lg"
         className="mt-7 w-full rounded-full"
         onClick={onSubscribe}
-        disabled={busy || current}
+        disabled={current}
       >
-        {current ? "Текущий тариф" : busy ? "Обрабатываем…" : "Подключить"}
+        {current ? "Текущий тариф" : "Подключить"}
       </Button>
     </div>
   );
