@@ -84,7 +84,7 @@ export const PLANS: Plan[] = [
   buildPlan({
     id: "start",
     label: "Старт",
-    description: "Микробизнес: бьюти-мастера, частные консультанты.",
+    description: "Бьюти-мастера, частные консультанты.",
     audience: "Микробизнес",
     conversations: 250,
     monthlyPriceKzt: 14990,
