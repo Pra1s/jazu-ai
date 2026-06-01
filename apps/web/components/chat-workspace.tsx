@@ -483,6 +483,8 @@ export default function ChatWorkspace() {
   const triggerFiredRef = useRef(false);
   const correctionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const userMessageCountRef = useRef(0);
+  // Счётчик успешных правок из теста — Trigger 2 срабатывает только после 3-й.
+  const testCorrectionCountRef = useRef(0);
   const [authModal, setAuthModal] = useState<{ title: string; description: string } | null>(null);
   // Непропускаемая подсказка у кнопки «Привязать ватсап»: появляется, когда
   // гость закрыл модалку регистрации. Блокирует всё, кроме клика по кнопке.
@@ -653,7 +655,7 @@ export default function ChatWorkspace() {
     }
 
     // Trigger 3 — лимит сообщений.
-    if (userMessageCountRef.current >= 8) {
+    if (userMessageCountRef.current >= 10) {
       markTriggerFired();
       if (correctionTimerRef.current) clearTimeout(correctionTimerRef.current);
       setInputDisabled(true);
@@ -686,9 +688,15 @@ export default function ChatWorkspace() {
       setCorrection(null);
       await Promise.all([refreshPrompt(), refreshHistories()]);
       notifyPromptProgress();
-      // Trigger 2 — успешная правка из теста. Откладываем модалку на 5с,
-      // чтобы юзер увидел результат правки. Читаем актуальный ref в колбэке.
-      if (wasInTest && !isAuth && !triggerFiredRef.current) {
+      // Trigger 2 — после 3-й успешной правки из теста. Откладываем модалку на
+      // 5с, чтобы юзер увидел результат правки. Читаем актуальный ref в колбэке.
+      if (wasInTest) testCorrectionCountRef.current += 1;
+      if (
+        wasInTest &&
+        !isAuth &&
+        !triggerFiredRef.current &&
+        testCorrectionCountRef.current >= 3
+      ) {
         correctionTimerRef.current = setTimeout(() => {
           if (triggerFiredRef.current) return;
           markTriggerFired();
