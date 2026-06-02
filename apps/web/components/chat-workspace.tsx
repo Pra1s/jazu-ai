@@ -545,11 +545,22 @@ export default function ChatWorkspace() {
       }
     })().catch(() => { if (mounted) setIsHydrated(true); });
 
-    const handler = () => setMode("test");
-    window.addEventListener("jazu:switchToTest", handler);
+    // Управление вкладками/окном из обзорного тура (OnboardingTour):
+    // он переключает режим и открывает окно доп-данных по шагам.
+    const toTest = () => setMode("test");
+    const toSetup = () => setMode("setup");
+    const openExtra = () => setExtraDataOpen(true);
+    const closeExtra = () => setExtraDataOpen(false);
+    window.addEventListener("jazu:switchToTest", toTest);
+    window.addEventListener("jazu:switchToSetup", toSetup);
+    window.addEventListener("jazu:openExtraData", openExtra);
+    window.addEventListener("jazu:closeExtraData", closeExtra);
     return () => {
       mounted = false;
-      window.removeEventListener("jazu:switchToTest", handler);
+      window.removeEventListener("jazu:switchToTest", toTest);
+      window.removeEventListener("jazu:switchToSetup", toSetup);
+      window.removeEventListener("jazu:openExtraData", openExtra);
+      window.removeEventListener("jazu:closeExtraData", closeExtra);
     };
   }, []);
 
@@ -823,6 +834,7 @@ export default function ChatWorkspace() {
             <button
               ref={extraDataBtnRef}
               type="button"
+              data-tour="extra-data-btn"
               onClick={() => setExtraDataOpen(true)}
               className="flex items-center gap-1 rounded-full bg-secondary px-2.5 py-1 text-xs font-medium text-foreground transition hover:bg-secondary/70"
               title="Добавить данные о бизнесе: ссылки, прайс, адреса, часы работы"
