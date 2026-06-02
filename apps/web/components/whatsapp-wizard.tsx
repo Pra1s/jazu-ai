@@ -24,6 +24,7 @@ import { FormAlert } from "@/components/ui/form-alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/cn";
 import { persistNext } from "@/lib/safe-next";
+import { resetAuthStatus } from "@/lib/use-auth-status";
 
 type WaStatusResponse = {
   agentId?: string | null;
@@ -74,6 +75,19 @@ export default function WhatsappWizard() {
   const [error, setError] = useState<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Подтверждение личного номера для уведомлений ────────────────────────
+  // Показывается на экране «WhatsApp подключён» ТОЛЬКО новому юзеру (у кого
+  // ещё нет phone, me.needsPhone === true). Шаги: ask → input → code.
+  //   ask   — «тот же ли номер, что у бота?» (Да → verify сразу / Нет → input)
+  //   input — ввод личного номера, бэк шлёт код с номера бота
+  //   code  — ввод 6-значного кода, который пришёл с номера бота
+  // Переиспользуем /auth/phone/verify-start и /auth/phone/verify-confirm.
+  const [notifStage, setNotifStage] = useState<"ask" | "input" | "code">("ask");
+  const [notifPhone, setNotifPhone] = useState("");
+  const [notifCode, setNotifCode] = useState("");
+  const [notifBusy, setNotifBusy] = useState(false);
+  const [notifError, setNotifError] = useState<string | null>(null);
 
   const effectiveStatus =
     status?.workerStatus?.status ?? status?.connection?.status ?? "disconnected";
@@ -266,6 +280,75 @@ export default function WhatsappWizard() {
     }
   }
 
+  // verify-start: бэк сравнивает номер с номером бота. Если совпал — номер
+  // считается подтверждённым сразу (verified). Если нет — шлёт код с номера
+  // бота и переводит шаг в «code».
+  async function startNotifVerify(targetPhone: string) {
+    if (notifBusy) return;
+    setNotifBusy(true);
+    setNotifError(null);
+    try {
+      const res = await apiFetch("/auth/phone/verify-start", {
+        method: "POST",
+        body: JSON.stringify({ phone: targetPhone })
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { ok?: boolean; error?: string; verified?: boolean; codeSent?: boolean }
+        | null;
+      if (!res.ok || !data?.ok) {
+        setNotifError(data?.error ?? "Не удалось сохранить номер");
+        return;
+      }
+      if (data.verified) {
+        resetAuthStatus();
+        router.replace("/dashboard");
+        return;
+      }
+      setNotifStage("code");
+    } catch (err) {
+      setNotifError(err instanceof Error ? err.message : "Не удалось сохранить номер");
+    } finally {
+      setNotifBusy(false);
+    }
+  }
+
+  function confirmSameNumber() {
+    if (!connectedPhone) return;
+    void startNotifVerify(connectedPhone);
+  }
+
+  function submitNotifPhone() {
+    if (!notifPhone.trim()) return;
+    void startNotifVerify(notifPhone.trim());
+  }
+
+  async function confirmNotifCode() {
+    const trimmed = notifCode.replace(/\D+/g, "");
+    if (!trimmed || notifBusy) return;
+    setNotifBusy(true);
+    setNotifError(null);
+    try {
+      const res = await apiFetch("/auth/phone/verify-confirm", {
+        method: "POST",
+        body: JSON.stringify({ code: trimmed })
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { ok?: boolean; error?: string }
+        | null;
+      if (!res.ok || !data?.ok) {
+        setNotifError(data?.error ?? "Неверный код");
+        setNotifCode("");
+        return;
+      }
+      resetAuthStatus();
+      router.replace("/dashboard");
+    } catch (err) {
+      setNotifError(err instanceof Error ? err.message : "Не удалось проверить код");
+    } finally {
+      setNotifBusy(false);
+    }
+  }
+
   // ── Loading
   if (me === null) {
     return (
@@ -289,14 +372,15 @@ export default function WhatsappWizard() {
         <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
           <LogIn className="h-5 w-5" />
         </div>
-        <h2 className="text-lg font-semibold">Остался последний шаг</h2>
+        <h2 className="text-lg font-semibold">Ваш бот готов — остался один шаг</h2>
         <p className="mt-2 text-sm text-muted-foreground">
-          Чтобы привязать WhatsApp, пройдите быструю регистрацию, это займёт
-          минуту. Все ваши настройки бота сохранятся, и после входа вы сразу
-          вернётесь на этот экран привязки.
+          Создайте бесплатный аккаунт за минуту, чтобы сохранить бота и
+          подключить его к вашему WhatsApp. Все настройки и правки уже
+          сохранены — сразу после входа вы вернётесь сюда, привяжете номер, и
+          бот начнёт отвечать реальным клиентам.
         </p>
         <Button className="mt-4" onClick={goRegister}>
-          Пройти регистрацию
+          Создать аккаунт и подключить
         </Button>
       </div>
     );
@@ -371,7 +455,139 @@ export default function WhatsappWizard() {
           </div>
         </div>
 
-        {/* Что дальше — подсказки после успешного подключения */}
+        {/* Новый юзер (ещё нет личного номера) — после подключения сначала
+            подтверждает номер для уведомлений. Иначе — обычные подсказки. */}
+        {me?.needsPhone === true ? (
+          <div className="mt-6 border-t border-border pt-6">
+            {notifStage === "ask" && (
+              <>
+                <h3 className="text-sm font-semibold text-foreground">
+                  Куда присылать уведомления о лидах
+                </h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Присылать уведомления о новых лидах на этот же номер{" "}
+                  <span className="font-medium text-foreground">{connectedPhone ?? "-"}</span>?
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Button onClick={confirmSameNumber} disabled={notifBusy || !connectedPhone}>
+                    {notifBusy ? "Сохраняем…" : "Да, на этот номер"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setNotifStage("input");
+                      setNotifError(null);
+                    }}
+                    disabled={notifBusy}
+                  >
+                    Нет, другой номер
+                  </Button>
+                </div>
+              </>
+            )}
+
+            {notifStage === "input" && (
+              <>
+                <h3 className="text-sm font-semibold text-foreground">
+                  Личный номер для уведомлений
+                </h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  На этот номер будут приходить уведомления о новых лидах от бота.
+                  Мы отправим код подтверждения с номера бота.
+                </p>
+                <div className="mt-4 max-w-sm">
+                  <input
+                    type="tel"
+                    inputMode="tel"
+                    value={notifPhone}
+                    onChange={(e) => {
+                      setNotifPhone(formatPhoneInput(e.target.value));
+                      if (notifError) setNotifError(null);
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && submitNotifPhone()}
+                    placeholder="+7 701 123 45 67"
+                    className={cn(
+                      "w-full rounded-lg border border-border bg-background px-3.5 py-2.5 text-sm outline-none transition placeholder:text-muted-foreground",
+                      "focus:border-foreground focus:ring-1 focus:ring-foreground/10"
+                    )}
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Формат +7XXXXXXXXXX (Казахстан / Россия)
+                  </p>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Button onClick={submitNotifPhone} disabled={notifBusy || !notifPhone.trim()}>
+                    {notifBusy ? "Отправляем код…" : "Получить код"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setNotifStage("ask");
+                      setNotifError(null);
+                    }}
+                    disabled={notifBusy}
+                  >
+                    Назад
+                  </Button>
+                </div>
+              </>
+            )}
+
+            {notifStage === "code" && (
+              <>
+                <h3 className="text-sm font-semibold text-foreground">Подтвердите номер</h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Код пришёл с номера бота на{" "}
+                  <span className="font-medium text-foreground">{notifPhone}</span>. Введите 6 цифр.
+                </p>
+                <div className="mt-4 max-w-sm">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    value={notifCode}
+                    onChange={(e) => {
+                      setNotifCode(e.target.value.replace(/\D+/g, "").slice(0, 6));
+                      if (notifError) setNotifError(null);
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && void confirmNotifCode()}
+                    placeholder="123456"
+                    className={cn(
+                      "w-full rounded-lg border border-border bg-background px-3.5 py-2.5 text-center text-lg font-mono tracking-[0.4em] text-foreground outline-none transition placeholder:text-muted-foreground/50",
+                      "focus:border-foreground focus:ring-1 focus:ring-foreground/10"
+                    )}
+                  />
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Button
+                    onClick={() => void confirmNotifCode()}
+                    disabled={notifBusy || notifCode.length < 4}
+                  >
+                    {notifBusy ? "Проверяем…" : "Подтвердить"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setNotifStage("input");
+                      setNotifCode("");
+                      setNotifError(null);
+                    }}
+                    disabled={notifBusy}
+                  >
+                    Изменить номер
+                  </Button>
+                </div>
+              </>
+            )}
+
+            {notifError && (
+              <FormAlert variant="error" className="mt-4">
+                {notifError}
+              </FormAlert>
+            )}
+          </div>
+        ) : (
+        /* Что дальше — подсказки после успешного подключения */
         <div className="mt-6 border-t border-border pt-6">
           <h3 className="text-sm font-semibold text-foreground">Что дальше</h3>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -422,6 +638,7 @@ export default function WhatsappWizard() {
             , он перестанет отвечать, пока вы не включите его снова.
           </p>
         </div>
+        )}
       </div>
     );
   }

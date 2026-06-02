@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Zap, X } from "lucide-react";
-import { persistNext } from "@/lib/safe-next";
 
 function WhatsAppIcon({ className }: { className?: string }) {
   return (
@@ -79,8 +78,9 @@ export default function GuestHeader() {
       setNotReadyOpen(true);
       return;
     }
-    persistNext("/whatsapp");
-    router.push("/auth?next=/whatsapp");
+    // Гостя ведём на промежуточный экран /whatsapp (там блок «последний шаг»
+    // с быстрой регистрацией). Раньше прыгали сразу на /auth, минуя его.
+    router.push("/whatsapp");
   }
 
   return (

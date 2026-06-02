@@ -3,6 +3,28 @@
 Хронология решённых багов: что случилось, почему, как решили. Новые записи —
 сверху. Правила ведения см. в `.cursor/rules/bugfix-journal.mdc`.
 
+## 2026-06-02 — Онбординг: пропал промежуточный экран WhatsApp и порядок «подключение → номер»
+
+- **Что случилось:** (1) Кнопка «Подключить WhatsApp» в гостевой шапке кидала сразу на `/auth`, минуя промежуточный экран «последний шаг» (он остался только у триггера из теста). (2) После первого входа (Google/email) у юзера сразу спрашивали личный номер на `/auth/phone` — задуманный порядок «сначала подключить WhatsApp, потом подтвердить номер для уведомлений» не работал.
+- **Почему:** (1) `handleConnectClick` в `guest-header.tsx` делал `router.push("/auth?next=/whatsapp")` вместо `/whatsapp`. (2) Google callback и email-флоу вели нового юзера на `/auth/phone`, а `PhoneRequiredGuard` пускал только на `/auth/phone` — до экрана подключения было не добраться; на `/auth/phone` при несовпадающем номере без подключённого бота `verify-start` отдавал 409 «Сначала подключите WhatsApp» (тупик).
+- **Как решили:**
+  - `apps/web/components/guest-header.tsx`: CTA ведёт на `/whatsapp` (промежуточный экран), убран лишний `persistNext`.
+  - `apps/web/components/whatsapp-wizard.tsx`: воронко-текст гостевого блока «последний шаг»; на экране «WhatsApp подключён» для нового юзера (`me.needsPhone`) добавлен шаг подтверждения номера уведомлений (ask → input → code) поверх готовых `/auth/phone/verify-start` и `/auth/phone/verify-confirm`.
+  - `apps/api/src/routes.ts`: Google callback и magic-link callback ведут нового юзера на `/whatsapp` вместо `/auth/phone`.
+  - `apps/web/components/auth-client.tsx`: email-логин при `needsPhone` редиректит на `/whatsapp`.
+  - `apps/web/components/phone-required-guard.tsx`: цель редиректа `/whatsapp`, whitelist `{ /whatsapp, /auth/phone }`; гейт остаётся жёстким.
+- **Как проверить / не повторить:** Гость с настроенным ботом жмёт «Подключить WhatsApp» → промежуточный экран, а не сразу `/auth`. Новый юзер после входа попадает на `/whatsapp`; пока бот не подключён — в кабинет не пускает. После подключения: «Да, этот номер» → сразу кабинет; «Нет» → ввод номера → код с номера бота → кабинет. Возвращающийся юзер (с номером) видит обычный экран «Что дальше».
+
+## 2026-06-02 — Три дефекта умности бота (leadGoal, конкретика, коучмарк)
+
+- **Что случилось:** (1) Билдер повторно спрашивал `leadGoal` у владельца, который уже выразил цель при выборе модели («сам записывать на замер»). (2) Рантайм принимал расплывчатое время («к вечеру») как конкретный слот и не уточнял. (3) Коучмарк «Подключить WhatsApp» не всплывал после захвата лида в гостевом режиме.
+- **Почему:** (1) ШАГ 5 в билдере явно запрещал выводить `leadGoal` из модели → поле оставалось пустым → попадало в «Что ещё не закрыто» → повторный вопрос. `botModel`/`carcass` не входили в блок ПАМЯТЬ (knownLines), LLM не видела их как уже известные. (2) Правил отклонения расплывчатых ответов по ключевым параметрам в `## КАК ВЕСТИ КВАЛИФИКАЦИЮ` не существовало. (3) `Trigger 1` в `maybeFireChatTriggers` был жёстко привязан к `handoffType === "hot_lead"`, а бот не всегда выставлял это значение при самостоятельном сборе заявки.
+- **Как решили:** Коммит `ee52efa`.
+  - `packages/ai/src/prompts.ts`: ШАГ 5 переписан — разрешает фиксировать `leadGoal` из ответа о модели без переспроса; добавлен запрет на повтор известного в «Чего НИКОГДА». Правило 6 в `## КАК ВЕСТИ КВАЛИФИКАЦИЮ` — отклонять расплывчатые ключевые ответы и уточнять до конкретики. `buildCarcassBlock` booking/inspection — слот и время визита = конкретный диапазон. Секция `## ПЕРЕДАЧА МЕНЕДЖЕРУ` — захваченная заявка выставляет `shouldHandoff=true, handoffType="hot_lead"`.
+  - `packages/ai/src/index.ts`: `buildBuilderTurn` — `botModel` и `carcass` добавлены в `knownLines`.
+  - `apps/web/components/chat-workspace.tsx`: `maybeFireChatTriggers` Trigger 1 срабатывает на любой позитивный хендофф (`shouldHandoff && handoffType !== "complaint" && !== "out_of_scope"`).
+- **Как проверить / не повторить:** Билдер «пластиковые окна» + «сам записывать на замер» → `leadGoal` фиксируется сам, отдельного вопроса нет. Тест: «можно к вечеру» → бот уточняет «17:00 или 19:00?». Тест (гость): бот подтвердил заявку → коучмарк появляется.
+
 ---
 
 ## 2026-05-29 — Бот отвечал на старые диалоги (до подключения)
@@ -18,13 +40,13 @@
 - **Как решили:** снимок «до-коннектных» чатов из WhatsApp history-sync.
   • `syncFullHistory: true` в makeWASocket — полная история при привязке;
   • worker слушает `messaging-history.set`, собирает chatId из chats+messages,
-    шлёт в API ([apps/wa-worker/src/manager.ts](../apps/wa-worker/src/manager.ts));
+  шлёт в API ([apps/wa-worker/src/manager.ts](../apps/wa-worker/src/manager.ts));
   • API `POST /internal/wa-preconnection-chats` сохраняет их в новую таблицу
-    `WaPreConnectionChat`, но только в «окне свежей привязки» (botRespondsSince
-    < 15 мин) — чтобы reconnect старой сессии не пометил чаты, которые бот уже
-    ведёт ([apps/api/src/routes.ts](../apps/api/src/routes.ts));
+  `WaPreConnectionChat`, но только в «окне свежей привязки» (botRespondsSince
+  < 15 мин) — чтобы reconnect старой сессии не пометил чаты, которые бот уже
+  ведёт ([apps/api/src/routes.ts](../apps/api/src/routes.ts));
   • handler: если chatId в WaPreConnectionChat → `pre_connection_message`
-    ([packages/wa-pipeline/src/handler.ts](../packages/wa-pipeline/src/handler.ts));
+  ([packages/wa-pipeline/src/handler.ts](../packages/wa-pipeline/src/handler.ts));
   • очистка снимка при «Отключить».
 - **Как проверить / не повторить:** 100% недостижимо — WhatsApp сам не отдаёт
   полную историю за всё время; очень старый неактивный чат вне history-sync
@@ -88,7 +110,7 @@
 
 - **Что случилось:** и QR, и pairing-код не доводили до привязки у всех юзеров;
   в логах `connected to WA` → `attempting registration` → тишина → `QR refs
-  attempts ended` → reconnect по кругу. Ни 515, ни pair-success.
+attempts ended` → reconnect по кругу. Ни 515, ни pair-success.
 - **Почему:** кастомный browser-tuple `["app.jazu.chat","Chrome","Ubuntu"]`
   (ставили ради красивого имени устройства в Linked Devices). Нестандартный
   формат ломает доставку pairing — подтверждено Baileys issue #2306.
@@ -105,7 +127,7 @@
 - **Что случилось:** (1) «Показать QR» после попытки кода ничего не делал;
   (2) «Отключить» крутил спиннер, статус оставался «Подключено»; в логах API
   спам `Worker stop failed: 500 Body cannot be empty when content-type is set
-  to application/json`.
+to application/json`.
 - **Почему:** (1) `manager.start()` видел existing pairing-сессию и не
   пересоздавал сокет; (2) `buildHeaders()` в worker-client всегда слал
   `Content-Type: application/json`, а Fastify 5 на DELETE/GET без body отбивает

@@ -195,10 +195,10 @@ export default function AuthClient() {
       // Сбрасываем кэш /auth/me, чтобы SideNav и гарды сразу увидели вход.
       resetAuthStatus();
       if (data.needsPhone) {
-        // Номер ещё не введён — прокидываем next дальше, чтобы после
-        // /auth/phone вернуть юзера в исходную точку (например, /whatsapp).
-        const target = nextParam ? `/auth/phone?next=${encodeURIComponent(nextParam)}` : "/auth/phone";
-        router.replace(target);
+        // Номер ещё не введён — ведём через подключение WhatsApp. Сначала
+        // юзер привязывает бота на /whatsapp, и уже после успешного
+        // подключения подтверждает личный номер для уведомлений.
+        router.replace("/whatsapp");
       } else {
         router.replace(nextParam || "/dashboard");
       }

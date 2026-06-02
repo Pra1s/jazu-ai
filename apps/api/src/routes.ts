@@ -856,8 +856,9 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
 
     // Если по какой-то причине phone у юзера ещё нет (старая запись, или
     // юзер логинится повторно через email на аккаунт без номера) —
-    // отправляем добивать номер.
-    const target = user.phone ? "/dashboard" : "/auth/phone";
+    // ведём через подключение WhatsApp, где после привязки бота юзер
+    // подтверждает личный номер для уведомлений.
+    const target = user.phone ? "/dashboard" : "/whatsapp";
     reply.redirect(`${env.WEB_ORIGIN}${target}`);
     return;
   });
@@ -1313,8 +1314,10 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       metadata: { method: "google" }
     });
 
-    // Phone обязателен. Если у юзера его ещё нет — отправляем добивать.
-    const target = user.phone ? "/dashboard" : "/auth/phone";
+    // Phone обязателен. Если у юзера его ещё нет — ведём через подключение
+    // WhatsApp: сначала /whatsapp (привязка бота), затем уже на этом экране
+    // подтверждение личного номера для уведомлений.
+    const target = user.phone ? "/dashboard" : "/whatsapp";
     reply.redirect(`${env.WEB_ORIGIN}${target}`);
     return;
   });
