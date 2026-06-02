@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -55,6 +55,7 @@ function NavList({
           <Link
             key={href}
             href={href}
+            data-tour={`nav-${href.slice(1)}`}
             {...(onNavigate ? { onClick: onNavigate } : {})}
             className={cn(
               "flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
@@ -92,7 +93,36 @@ export function SideNav() {
   // никаких ссылок, кроме самого требования ввести номер.
   const needsPhone = authStatus?.ok === true && authStatus.needsPhone === true;
 
+  // Форс-открытие шторки обзорным туром (OnboardingTour шлёт jazu:openNav на
+  // шагах-страницах, чтобы стрелка указывала на пункт меню). Пока флаг
+  // активен, шторку не закрываем по навигации между шагами и по тапу мимо.
+  const forcedOpenRef = useRef(false);
+
   useEffect(() => {
+    const openNav = () => {
+      // На десктопе мобильная шторка скрыта (lg:hidden) — открывать её незачем
+      // (пункты меню и так видны в постоянном сайдбаре).
+      if (typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches) {
+        forcedOpenRef.current = true;
+        setOpen(true);
+      }
+    };
+    const closeNav = () => {
+      forcedOpenRef.current = false;
+      setOpen(false);
+    };
+    window.addEventListener("jazu:openNav", openNav);
+    window.addEventListener("jazu:closeNav", closeNav);
+    return () => {
+      window.removeEventListener("jazu:openNav", openNav);
+      window.removeEventListener("jazu:closeNav", closeNav);
+    };
+  }, []);
+
+  useEffect(() => {
+    // Во время тура (форс-открытие) не закрываем шторку на смене страницы —
+    // иначе при авто-переходе между шагами она схлопывалась бы.
+    if (forcedOpenRef.current) return;
     setOpen(false);
   }, [pathname]);
 
@@ -125,7 +155,11 @@ export function SideNav() {
         <button
           type="button"
           aria-label="Закрыть меню"
-          onClick={() => setOpen(false)}
+          onClick={() => {
+            // Во время тура тап по затемнению не закрывает шторку.
+            if (forcedOpenRef.current) return;
+            setOpen(false);
+          }}
           className="fixed inset-0 z-40 bg-foreground/30 backdrop-blur-sm lg:hidden"
         />
       )}

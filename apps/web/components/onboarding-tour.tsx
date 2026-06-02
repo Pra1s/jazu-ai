@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { apiJson } from "@/lib/api";
 import { useAuthStatus } from "@/lib/use-auth-status";
@@ -40,7 +40,10 @@ type StepDef = {
   // К какому элементу привязать карточку (data-tour). Если нет — карточка
   // показывается по центру снизу (шаг про целую страницу).
   target?: string;
-  placement: "top" | "bottom";
+  // Предпочтительное положение относительно цели. "right" используется для
+  // пунктов меню (карточка сбоку, стрелка влево); при нехватке места справа
+  // measure() сам падает на "bottom".
+  placement: "top" | "bottom" | "right";
 };
 
 const STEPS: Record<StepId, StepDef> = {
@@ -72,28 +75,32 @@ const STEPS: Record<StepId, StepDef> = {
     body: "Здесь все переписки клиентов с ботом и горячие лиды. Любой диалог можно поставить на паузу — бот перестанет отвечать, пока вы не включите его снова.",
     action: "Далее",
     route: "/chats",
-    placement: "bottom"
+    target: "nav-chats",
+    placement: "right"
   },
   whatsapp: {
     title: "Шаг 5. WhatsApp",
     body: "Управление подключением: статус, смена номера, переподключение по коду или QR. Бот отвечает клиентам именно с этого номера.",
     action: "Далее",
     route: "/whatsapp",
-    placement: "bottom"
+    target: "nav-whatsapp",
+    placement: "right"
   },
   settings: {
     title: "Шаг 6. Настройки",
     body: "Личный номер для уведомлений о лидах и подключение Telegram. Сюда же загляните, чтобы поменять данные аккаунта.",
     action: "Далее",
     route: "/settings",
-    placement: "bottom"
+    target: "nav-settings",
+    placement: "right"
   },
   billing: {
     title: "Шаг 7. Тарифы",
     body: "Следите за остатком диалогов, продлевайте тариф и докупайте диалоги. Готово — теперь вы знаете весь кабинет!",
     action: "Завершить",
     route: "/billing",
-    placement: "bottom"
+    target: "nav-billing",
+    placement: "right"
   }
 };
 
@@ -121,6 +128,7 @@ const LEGACY_STEPS = new Set<string>([
 const storageKey = "jazu_onboarding_step";
 
 const CARD_WIDTH = 320;
+const CARD_HEIGHT_FALLBACK = 160; // оценка высоты карточки до первого замера
 const GAP = 12;
 const MARGIN = 12;
 
@@ -128,8 +136,11 @@ type Pos = {
   top?: number;
   bottom?: number;
   left: number;
-  arrowLeft: number;
-  arrowSide: "top" | "bottom";
+  // Стрелка-указатель: для верх/низ — смещение по X (arrowLeft), для лево/право
+  // — смещение по Y (arrowTop). Используется только соответствующее стороне.
+  arrowSide: "top" | "bottom" | "left" | "right";
+  arrowLeft?: number;
+  arrowTop?: number;
 };
 
 type SettingsResponse = {
@@ -139,21 +150,28 @@ type SettingsResponse = {
   };
 };
 
-// Действия при входе в шаг: переключение вкладки / открытие окна. Навигацию
-// по маршруту делаем отдельно (нужен router/pathname).
+// Действия при входе в шаг: переключение вкладки / открытие окна / шторки
+// меню. Навигацию по маршруту делаем отдельно (нужен router/pathname).
 function runStepSideEffects(id: AnyStep) {
   if (typeof window === "undefined") return;
   if (id === "extra_data") {
     window.dispatchEvent(new Event("jazu:switchToSetup"));
+    window.dispatchEvent(new Event("jazu:closeNav"));
   } else if (id === "extra_data_window") {
     window.dispatchEvent(new Event("jazu:switchToSetup"));
     window.dispatchEvent(new Event("jazu:openExtraData"));
+    window.dispatchEvent(new Event("jazu:closeNav"));
   } else if (id === "test") {
     window.dispatchEvent(new Event("jazu:closeExtraData"));
     window.dispatchEvent(new Event("jazu:switchToTest"));
+    window.dispatchEvent(new Event("jazu:closeNav"));
   } else if (id === "chats" || id === "whatsapp" || id === "settings" || id === "billing") {
-    // Эти шаги про целую страницу — окон не открываем.
+    // Эти шаги про целую страницу — окон не открываем, но на мобильном
+    // открываем шторку меню, чтобы стрелка указывала на пункт.
     window.dispatchEvent(new Event("jazu:closeExtraData"));
+    window.dispatchEvent(new Event("jazu:openNav"));
+  } else if (id === "done") {
+    window.dispatchEvent(new Event("jazu:closeNav"));
   }
 }
 
@@ -176,6 +194,7 @@ export default function OnboardingTour() {
   const [loaded, setLoaded] = useState(false);
   const [pos, setPos] = useState<Pos | null>(null);
   const startedRef = useRef(false);
+  const cardRef = useRef<HTMLDivElement>(null);
 
   // Юзер прошёл онбординг полностью (есть телефон). Только тогда показываем тур.
   const eligible = authStatus?.ok === true && authStatus.needsPhone === false;
@@ -226,25 +245,60 @@ export default function OnboardingTour() {
       setPos(null);
       return;
     }
-    const el = document.querySelector<HTMLElement>(`[data-tour="${def.target}"]`);
+    // Цель может присутствовать в DOM дважды (мобильная шторка + десктоп-сайдбар).
+    // Берём ВИДИМЫЙ инстанс: скрытый (display:none) даёт нулевой прямоугольник.
+    const els = Array.from(
+      document.querySelectorAll<HTMLElement>(`[data-tour="${def.target}"]`)
+    );
+    const el = els.find((node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
     if (!el) {
       setPos(null);
       return;
     }
     const r = el.getBoundingClientRect();
     const vw = window.innerWidth;
+    const vh = window.innerHeight;
     const cardW = Math.min(CARD_WIDTH, vw - MARGIN * 2);
-    const targetCenterX = r.left + r.width / 2;
-    let left = targetCenterX - cardW / 2;
-    left = Math.max(MARGIN, Math.min(left, vw - MARGIN - cardW));
-    const arrowLeft = Math.max(16, Math.min(targetCenterX - left, cardW - 16));
+    const cardH = cardRef.current?.getBoundingClientRect().height || CARD_HEIGHT_FALLBACK;
+
+    const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(v, max));
+
+    // "right" — карточка сбоку от пункта меню (стрелка влево). Если справа не
+    // влезает (узкая мобильная шторка) — падаем на "bottom" (под пунктом).
+    if (def.placement === "right") {
+      const left = r.right + GAP;
+      if (left + cardW <= vw - MARGIN) {
+        const top = clamp(r.top, MARGIN, vh - MARGIN - cardH);
+        const arrowTop = clamp(r.top + r.height / 2 - top, 16, cardH - 16);
+        setPos({ top, left, arrowSide: "left", arrowTop });
+        return;
+      }
+      // фолбэк: под пунктом
+    }
 
     if (def.placement === "top") {
-      setPos({ bottom: window.innerHeight - r.top + GAP, left, arrowLeft, arrowSide: "bottom" });
-    } else {
-      setPos({ top: r.bottom + GAP, left, arrowLeft, arrowSide: "top" });
+      const targetCenterX = r.left + r.width / 2;
+      const left = clamp(targetCenterX - cardW / 2, MARGIN, vw - MARGIN - cardW);
+      const arrowLeft = clamp(targetCenterX - left, 16, cardW - 16);
+      setPos({ bottom: vh - r.top + GAP, left, arrowLeft, arrowSide: "bottom" });
+      return;
     }
+
+    // bottom (по умолчанию и фолбэк для right)
+    const targetCenterX = r.left + r.width / 2;
+    const left = clamp(targetCenterX - cardW / 2, MARGIN, vw - MARGIN - cardW);
+    const arrowLeft = clamp(targetCenterX - left, 16, cardW - 16);
+    setPos({ top: r.bottom + GAP, left, arrowLeft, arrowSide: "top" });
   }, [def]);
+
+  // Сбрасываем позицию при смене шага, чтобы карточка не «прыгала» из старой
+  // точки: она появится уже на новом якоре после ближайшего measure().
+  useLayoutEffect(() => {
+    setPos(null);
+  }, [step]);
 
   useLayoutEffect(() => {
     if (!active || !def?.target) {
@@ -252,7 +306,9 @@ export default function OnboardingTour() {
       return;
     }
     measure();
-    const id = window.setInterval(measure, 250);
+    // Цель может появиться/сдвинуться после навигации и анимации шторки —
+    // до-наводим интервалом.
+    const id = window.setInterval(measure, 200);
     window.addEventListener("resize", measure);
     window.addEventListener("scroll", measure, true);
     return () => {
@@ -274,6 +330,9 @@ export default function OnboardingTour() {
       const nextDef = STEPS[next];
       if (pathname !== nextDef.route) router.push(nextDef.route);
       runStepSideEffects(next);
+    } else {
+      // Конец тура — закрываем шторку, если она была открыта последним шагом.
+      runStepSideEffects("done");
     }
   }
 
@@ -299,22 +358,34 @@ export default function OnboardingTour() {
     </>
   );
 
+  // Стрелка-указатель: квадрат-«ромб» на нужной стороне карточки.
+  function arrowStyle(p: Pos): CSSProperties {
+    switch (p.arrowSide) {
+      case "bottom":
+        return { bottom: -6, left: (p.arrowLeft ?? 24) - 6, borderRight: "1px solid", borderBottom: "1px solid" };
+      case "top":
+        return { top: -6, left: (p.arrowLeft ?? 24) - 6, borderLeft: "1px solid", borderTop: "1px solid" };
+      case "left":
+        return { left: -6, top: (p.arrowTop ?? 24) - 6, borderLeft: "1px solid", borderBottom: "1px solid" };
+      case "right":
+      default:
+        return { right: -6, top: (p.arrowTop ?? 24) - 6, borderRight: "1px solid", borderTop: "1px solid" };
+    }
+  }
+
   // Карточка, привязанная к элементу (стрелка-указатель).
   if (def.target && pos) {
     return (
       <div
-        className="pointer-events-auto fixed z-[60] w-[320px] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl"
+        ref={cardRef}
+        className="pointer-events-auto fixed z-[60] w-[320px] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl transition-[top,left,bottom] duration-200"
         style={{ top: pos.top, bottom: pos.bottom, left: pos.left }}
         role="dialog"
         aria-live="polite"
       >
         <div
           className="absolute h-3 w-3 rotate-45 border-slate-200 bg-white"
-          style={
-            pos.arrowSide === "bottom"
-              ? { bottom: -6, left: pos.arrowLeft - 6, borderRight: "1px solid", borderBottom: "1px solid" }
-              : { top: -6, left: pos.arrowLeft - 6, borderLeft: "1px solid", borderTop: "1px solid" }
-          }
+          style={arrowStyle(pos)}
           aria-hidden
         />
         {inner}
@@ -322,10 +393,12 @@ export default function OnboardingTour() {
     );
   }
 
-  // Карточка про целую страницу / окно — фиксируем снизу по центру (выше
-  // модалок: z-[60], чтобы быть поверх окна доп-данных).
+  // Фолбэк: у шага есть target, но он ещё не виден (идёт навигация, едет
+  // шторка) — показываем плавающую карточку снизу, чтобы тур не «исчезал»
+  // (его нельзя скипнуть). Для страничных шагов без target — то же место.
   return (
     <div
+      ref={cardRef}
       className="pointer-events-auto fixed left-1/2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-[60] w-[min(92vw,22rem)] -translate-x-1/2 rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl sm:left-auto sm:right-4 sm:bottom-4 sm:translate-x-0"
       role="dialog"
       aria-live="polite"
