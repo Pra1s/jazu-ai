@@ -657,8 +657,13 @@ export default function ChatWorkspace() {
   function maybeFireChatTriggers(turn: TurnResponse) {
     if (isAuth || triggerFiredRef.current) return;
 
-    // Trigger 1 — горячий лид (наивысший приоритет).
-    if (turn.shouldHandoff && turn.handoffType === "hot_lead") {
+    // Trigger 1 — позитивный лид-хендофф (наивысший приоритет).
+    // Срабатывает на hot_lead / requested / null-тип, но НЕ на complaint / out_of_scope.
+    const isLeadHandoff =
+      turn.shouldHandoff &&
+      turn.handoffType !== "complaint" &&
+      turn.handoffType !== "out_of_scope";
+    if (isLeadHandoff) {
       markTriggerFired();
       if (correctionTimerRef.current) clearTimeout(correctionTimerRef.current);
       showConnectHint({

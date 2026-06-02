@@ -169,6 +169,8 @@ export async function buildBuilderTurn(
     if (nextProfile.pricingPolicy) knownLines.push(`- Цены: ${nextProfile.pricingPolicy}`);
     if (nextProfile.bookingFlow) knownLines.push(`- Сценарий заявки: ${nextProfile.bookingFlow}`);
     if (nextProfile.leadGoal) knownLines.push(`- Цель диалога: ${nextProfile.leadGoal}`);
+    if (nextProfile.botModel) knownLines.push(`- Модель бота: ${nextProfile.botModel}`);
+    if (nextProfile.carcass) knownLines.push(`- Каркас воронки: ${nextProfile.carcass}`);
     if (nextProfile.handoffRules) knownLines.push(`- Передача человеку: ${nextProfile.handoffRules}`);
     if (nextProfile.tone) knownLines.push(`- Тон: ${nextProfile.tone}`);
 
