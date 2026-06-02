@@ -11,8 +11,6 @@ import {
   Loader2,
   LogIn,
   MessageSquare,
-  Settings,
-  ArrowRight,
   Copy,
   HelpCircle,
   X
@@ -456,7 +454,7 @@ export default function WhatsappWizard() {
         </div>
 
         {/* Новый юзер (ещё нет личного номера) — после подключения сначала
-            подтверждает номер для уведомлений. Иначе — обычные подсказки. */}
+            подтверждает номер для уведомлений. Иначе — подсказка про паузу. */}
         {me?.needsPhone === true ? (
           <div className="mt-6 border-t border-border pt-6">
             {notifStage === "ask" && (
@@ -587,57 +585,15 @@ export default function WhatsappWizard() {
             )}
           </div>
         ) : (
-        /* Что дальше — подсказки после успешного подключения */
-        <div className="mt-6 border-t border-border pt-6">
-          <h3 className="text-sm font-semibold text-foreground">Что дальше</h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Бот уже на связи. Вот куда заглянуть дальше.
-          </p>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <Link
-              href="/chats"
-              className="group flex items-start gap-3 rounded-xl border border-border bg-background p-4 transition-colors hover:bg-secondary"
-            >
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-secondary text-foreground">
-                <MessageSquare className="h-4 w-4" />
-              </div>
-              <div className="min-w-0">
-                <div className="flex items-center gap-1 text-sm font-medium text-foreground">
-                  Диалоги
-                  <ArrowRight className="h-3.5 w-3.5 -translate-x-0.5 opacity-0 transition group-hover:translate-x-0 group-hover:opacity-100" />
-                </div>
-                <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
-                  Смотрите переписки клиентов с ботом и горячие лиды.
-                </p>
-              </div>
-            </Link>
-
-            <Link
-              href="/settings"
-              className="group flex items-start gap-3 rounded-xl border border-border bg-background p-4 transition-colors hover:bg-secondary"
-            >
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-secondary text-foreground">
-                <Settings className="h-4 w-4" />
-              </div>
-              <div className="min-w-0">
-                <div className="flex items-center gap-1 text-sm font-medium text-foreground">
-                  Настройки
-                  <ArrowRight className="h-3.5 w-3.5 -translate-x-0.5 opacity-0 transition group-hover:translate-x-0 group-hover:opacity-100" />
-                </div>
-                <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
-                  Подключите Telegram, чтобы получать уведомления о лидах.
-                </p>
-              </div>
-            </Link>
+          <div className="mt-6 border-t border-border pt-6">
+            <p className="text-xs leading-5 text-muted-foreground">
+              Бот можно временно поставить на паузу в разделе{" "}
+              <Link href="/chats" className="font-medium text-foreground underline-offset-2 hover:underline">
+                «Диалоги»
+              </Link>
+              , он перестанет отвечать, пока вы не включите его снова.
+            </p>
           </div>
-          <p className="mt-3 text-xs leading-5 text-muted-foreground">
-            Бот можно временно поставить на паузу в разделе{" "}
-            <Link href="/chats" className="font-medium text-foreground underline-offset-2 hover:underline">
-              «Диалоги»
-            </Link>
-            , он перестанет отвечать, пока вы не включите его снова.
-          </p>
-        </div>
         )}
       </div>
     );
