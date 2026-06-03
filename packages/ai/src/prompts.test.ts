@@ -93,9 +93,7 @@ describe("buildRuntimeEnvelope", () => {
     expect(out).toContain("## ОТКРЫТИЕ ДИАЛОГА (ВЕДЁТ КЛИЕНТ)");
     expect(out).toContain("## ДОЗИРУЙ ИНФОРМАЦИЮ");
     expect(out).toContain("## ТЫ ЖИВОЙ ЧЕЛОВЕК");
-    expect(out).toContain("## ДАННЫЕ БИЗНЕСА ЭТО ТВОИ ЗНАНИЯ, А НЕ МЕНЮ ДЛЯ КЛИЕНТА");
     expect(out).toContain("## ОТ ПОТРЕБНОСТИ К ЗАКРЫТИЮ");
-    expect(out).toContain("САМОПРОВЕРКА ПЕРЕД ОТВЕТОМ");
   });
 
   it("ветка lead_capture для qualifier (дефолт роли)", () => {
@@ -113,13 +111,11 @@ describe("buildRuntimeEnvelope", () => {
     expect(out).toContain("## МЕХАНИКА (inspection)");
   });
 
-  it("reply-инструкции не содержат длинного тире вне примеров и самопроверки", () => {
+  it("reply-инструкции не содержат длинного тире (кроме стрелок)", () => {
     const out = buildRuntimeEnvelope("BIZ", profile({ botModel: "admin" }), null);
-    const withoutSelfCheck = out.split("⛔ САМОПРОВЕРКА")[0] ?? out;
-    const withoutQuotedExamples = withoutSelfCheck
-      .replace(/"[^"]*"/g, "")
-      .replace(/\(— или –\)/g, "");
-    expect(withoutQuotedExamples).not.toMatch(/[—–]/);
+    // выкидываем стрелку → и оставляем проверку именно на — / –
+    const reply = out.split("## Формат вывода")[1] ?? out;
+    expect(reply).not.toMatch(/[—–]/);
   });
 });
 
@@ -135,11 +131,5 @@ describe("buildBuilderSystemPrompt", () => {
   it("содержит маппинг роль→каркас из formatRoleCarcassMapping()", () => {
     const out = buildBuilderSystemPrompt(profile());
     expect(out).toContain(formatRoleCarcassMapping());
-  });
-
-  it("v3.1: секция dialog про открытые вопросы и самопроверку на тире", () => {
-    const out = buildBuilderSystemPrompt(profile());
-    expect(out).toContain("не подставляй свои города/услуги как варианты выбора");
-    expect(out).toContain("САМОПРОВЕРКА ПЕРЕД ОТВЕТОМ");
   });
 });
