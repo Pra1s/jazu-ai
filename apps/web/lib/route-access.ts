@@ -19,6 +19,18 @@ export const PROTECTED_PATH_PREFIXES = [
   "/auth/phone"
 ];
 
+/** Matcher-сегменты для Next.js middleware (без статики и _next). */
+export const MIDDLEWARE_MATCHER = [
+  "/dashboard/:path*",
+  "/chats/:path*",
+  "/settings/:path*",
+  "/billing/:path*",
+  "/whatsapp/:path*",
+  "/auth/phone",
+  "/auth/phone/:path*",
+  "/login"
+] as const;
+
 function matchesPrefix(pathname: string, prefix: string): boolean {
   return pathname === prefix || pathname.startsWith(`${prefix}/`);
 }
