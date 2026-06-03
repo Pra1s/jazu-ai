@@ -18,6 +18,26 @@ const envSchema = z.object({
   WA_PER_CHAT_MIN_INTERVAL_MS: z.coerce.number().int().positive().default(1_200),
   /** Параллельность consumer'а wa:outbound в одном процессе. */
   WA_OUTBOUND_CONCURRENCY: z.coerce.number().int().positive().default(8),
+  /** BullMQ lockDuration для wa:outbound (job может ждать до 150с). */
+  WA_OUTBOUND_LOCK_MS: z.coerce.number().int().positive().default(180_000),
+  /** Включить humanize: read receipt, typing, задержку ответа. */
+  WA_HUMANIZE_REPLIES: z
+    .enum(["true", "false", "1", "0"])
+    .optional()
+    .transform((v) => v !== "false" && v !== "0")
+    .default(true),
+  WA_REPLY_DELAY_FIRST_MIN_MS: z.coerce.number().int().positive().default(90_000),
+  WA_REPLY_DELAY_FIRST_MAX_MS: z.coerce.number().int().positive().default(150_000),
+  WA_REPLY_DELAY_MIN_MS: z.coerce.number().int().positive().default(20_000),
+  WA_REPLY_DELAY_MAX_MS: z.coerce.number().int().positive().default(35_000),
+  WA_READ_DELAY_FIRST_MIN_MS: z.coerce.number().int().positive().default(5_000),
+  WA_READ_DELAY_FIRST_MAX_MS: z.coerce.number().int().positive().default(15_000),
+  WA_READ_DELAY_MIN_MS: z.coerce.number().int().positive().default(2_000),
+  WA_READ_DELAY_MAX_MS: z.coerce.number().int().positive().default(6_000),
+  WA_TYPING_FIRST_MIN_MS: z.coerce.number().int().positive().default(8_000),
+  WA_TYPING_FIRST_MAX_MS: z.coerce.number().int().positive().default(20_000),
+  WA_TYPING_MIN_MS: z.coerce.number().int().positive().default(5_000),
+  WA_TYPING_MAX_MS: z.coerce.number().int().positive().default(12_000),
   SENTRY_DSN: z.string().url().optional().or(z.literal("").transform(() => undefined)),
   RELEASE_VERSION: z.string().optional()
 });

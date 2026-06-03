@@ -4,6 +4,17 @@ import { capturePostHog } from "@jazu/observability";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 
+function randomInt(min: number, max: number): number {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function computeTargetReplyAtMs(inboundReceivedAtMs: number, isFirstBotReply: boolean): number {
+  const [minMs, maxMs] = isFirstBotReply
+    ? [env.WA_REPLY_DELAY_FIRST_MIN_MS, env.WA_REPLY_DELAY_FIRST_MAX_MS]
+    : [env.WA_REPLY_DELAY_MIN_MS, env.WA_REPLY_DELAY_MAX_MS];
+  return inboundReceivedAtMs + randomInt(minMs, maxMs);
+}
+
 /**
  * Обработчик одной задачи из очереди wa:inbound.
  *
@@ -33,12 +44,22 @@ export async function handleWaInbound(job: Job<WaInboundJob>): Promise<void> {
 
   if (result.status === "ok") {
     if (result.reply && result.reply.trim().length > 0) {
+      const inboundReceivedAtMs =
+        job.data.messageTimestamp !== undefined
+          ? job.data.messageTimestamp * 1000
+          : Date.now();
+      const targetReplyAtMs = computeTargetReplyAtMs(inboundReceivedAtMs, result.isFirstBotReply);
       const outbound: WaOutboundJob = {
         agentId,
         chatId,
         text: result.reply,
+        humanize: true,
+        inboundReceivedAtMs,
+        targetReplyAtMs,
+        isFirstBotReply: result.isFirstBotReply,
         ...(job.id ? { inboundJobId: String(job.id) } : {}),
-        ...(requestId ? { requestId } : {})
+        ...(requestId ? { requestId } : {}),
+        ...(waMessageId ? { waMessageId } : {})
       };
       await getOutboundQueue().add("wa-outbound", outbound);
     }

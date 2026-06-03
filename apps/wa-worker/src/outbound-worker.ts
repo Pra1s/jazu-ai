@@ -25,17 +25,35 @@ export function startOutboundWorker(manager: ConnectionManager): StartedWorker<W
   return startWorker<WaOutboundJob>(
     QUEUE_WA_OUTBOUND,
     async (job: Job<WaOutboundJob>) => {
-      const { agentId, chatId, text } = job.data;
+      const {
+        agentId,
+        chatId,
+        text,
+        humanize,
+        targetReplyAtMs,
+        isFirstBotReply
+      } = job.data;
       const status = await manager.status(agentId);
       if (status.status !== "connected") {
         // Сокет ещё/уже не активен — пусть BullMQ повторит с backoff.
         // Это происходит, например, во время реконнекта после network blip.
         throw new Error(`Agent ${agentId} not connected (status=${status.status}); will retry`);
       }
-      await manager.send(agentId, { chatId, text });
+
+      const humanizeOptions =
+        humanize && targetReplyAtMs !== undefined && isFirstBotReply !== undefined
+          ? { targetReplyAtMs, isFirstBotReply }
+          : undefined;
+
+      await manager.send(agentId, {
+        chatId,
+        text,
+        ...(humanizeOptions ? { humanize: humanizeOptions } : {})
+      });
     },
     {
-      concurrency: env.WA_OUTBOUND_CONCURRENCY
+      concurrency: env.WA_OUTBOUND_CONCURRENCY,
+      lockDuration: env.WA_OUTBOUND_LOCK_MS
     }
   );
 }

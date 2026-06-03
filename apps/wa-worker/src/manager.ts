@@ -9,6 +9,13 @@ import {
 import { env } from "./env.js";
 import { useDbAuthState } from "./db-auth-state.js";
 import { getInboundQueue, type WaInboundJob } from "@jazu/queue";
+import {
+  computeReadDelayMs,
+  randomInt,
+  stopTyping,
+  waitWithTyping,
+  type HumanizeTimingConfig
+} from "./humanize-reply.js";
 
 type PublicConnectionState = {
   status: "disconnected" | "qr" | "pairing" | "connected" | "error";
@@ -48,7 +55,12 @@ type ManagedConnection = {
 const PAIRING_CODE_TTL_MS = 50_000;
 
 type WAMessageLike = {
-  key: { fromMe?: boolean | null; remoteJid?: string | null; id?: string | null };
+  key: {
+    fromMe?: boolean | null;
+    remoteJid?: string | null;
+    id?: string | null;
+    participant?: string | null;
+  };
   pushName?: string | null;
   /** Unix-секунды (Baileys: number | Long). Возраст оригинального сообщения. */
   messageTimestamp?: number | { toNumber?: () => number } | null;
@@ -87,6 +99,26 @@ function getTextMessage(message: WAMessageLike): string | null {
   ];
 
   return candidates.find((item): item is string => typeof item === "string" && item.trim().length > 0) ?? null;
+}
+
+function chatKey(agentId: string, chatId: string): string {
+  return `${agentId}:${chatId}`;
+}
+
+function humanizeTimingConfig(): HumanizeTimingConfig {
+  return {
+    typingMinMs: env.WA_TYPING_MIN_MS,
+    typingMaxMs: env.WA_TYPING_MAX_MS,
+    typingFirstMinMs: env.WA_TYPING_FIRST_MIN_MS,
+    typingFirstMaxMs: env.WA_TYPING_FIRST_MAX_MS
+  };
+}
+
+function computeTargetReplyAtMs(inboundReceivedAtMs: number, isFirstBotReply: boolean): number {
+  const [minMs, maxMs] = isFirstBotReply
+    ? [env.WA_REPLY_DELAY_FIRST_MIN_MS, env.WA_REPLY_DELAY_FIRST_MAX_MS]
+    : [env.WA_REPLY_DELAY_MIN_MS, env.WA_REPLY_DELAY_MAX_MS];
+  return inboundReceivedAtMs + randomInt(minMs, maxMs);
 }
 
 /**
@@ -339,6 +371,10 @@ async function sendInboundToApi(
 
 export class ConnectionManager {
   private connections = new Map<string, ManagedConnection>();
+  /** Чаты, где бот уже отправлял хотя бы один ответ (для read/typing диапазонов). */
+  private repliedChats = new Set<string>();
+  /** Сериализация send/humanize на один chatId. */
+  private chatSendLocks = new Map<string, Promise<void>>();
 
   private getConnection(agentId: string) {
     return this.connections.get(agentId);
@@ -358,6 +394,50 @@ export class ConnectionManager {
       workerSessionId: state.workerSessionId,
       lastSeenAt: state.lastSeenAt?.toISOString?.() ?? null
     };
+  }
+
+  private hasRepliedBefore(agentId: string, chatId: string): boolean {
+    return this.repliedChats.has(chatKey(agentId, chatId));
+  }
+
+  private markReplied(agentId: string, chatId: string): void {
+    this.repliedChats.add(chatKey(agentId, chatId));
+  }
+
+  /** Синие галочки «прочитано» — не блокирует Baileys event loop. */
+  scheduleReadReceipt(
+    agentId: string,
+    socket: NonNullable<ManagedConnection["socket"]>,
+    chatId: string,
+    waMsgId: string | undefined,
+    participant: string | undefined
+  ): void {
+    if (!env.WA_HUMANIZE_REPLIES || !waMsgId) return;
+
+    const isFirstInChat = !this.hasRepliedBefore(agentId, chatId);
+    const delayMs = computeReadDelayMs(
+      isFirstInChat,
+      env.WA_READ_DELAY_FIRST_MIN_MS,
+      env.WA_READ_DELAY_FIRST_MAX_MS,
+      env.WA_READ_DELAY_MIN_MS,
+      env.WA_READ_DELAY_MAX_MS
+    );
+
+    void (async () => {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      const connection = this.getConnection(agentId);
+      if (!connection?.socket || connection.socket !== socket) return;
+      await connection.socket
+        .readMessages([
+          {
+            remoteJid: chatId,
+            id: waMsgId,
+            fromMe: false,
+            ...(participant ? { participant } : {})
+          }
+        ])
+        .catch(() => undefined);
+    })();
   }
 
   async start(
@@ -630,7 +710,10 @@ export class ConnectionManager {
 
         const senderName = message.pushName || undefined;
         const waMsgId = message.key.id ?? undefined;
+        const participant = message.key.participant ?? undefined;
         const messageTimestamp = extractMessageTimestamp(message.messageTimestamp);
+
+        this.scheduleReadReceipt(agentId, socket, chatId, waMsgId, participant);
 
         // Production path: enqueue в Redis. Ответ прилетит обратно через
         // wa:outbound и его отправит outboundWorker (другой consumer ниже).
@@ -662,7 +745,17 @@ export class ConnectionManager {
               messageTimestamp
             );
             if (result.reply) {
-              await socket.sendMessage(chatId, { text: result.reply });
+              const inboundReceivedAtMs =
+                messageTimestamp !== undefined ? messageTimestamp * 1000 : Date.now();
+              const isFirstBotReply = !this.hasRepliedBefore(agentId, chatId);
+              const targetReplyAtMs = computeTargetReplyAtMs(inboundReceivedAtMs, isFirstBotReply);
+              await this.send(agentId, {
+                chatId,
+                text: result.reply,
+                ...(env.WA_HUMANIZE_REPLIES
+                  ? { humanize: { targetReplyAtMs, isFirstBotReply } }
+                  : {})
+              });
             }
             lastError = null;
             break;
@@ -853,10 +946,55 @@ export class ConnectionManager {
     return { code, phone: `+${phoneDigits}` };
   }
 
-  async send(agentId: string, payload: { chatId: string; text: string }): Promise<void> {
+  async send(
+    agentId: string,
+    payload: {
+      chatId: string;
+      text: string;
+      humanize?: { targetReplyAtMs: number; isFirstBotReply: boolean };
+    }
+  ): Promise<void> {
+    const lockKey = chatKey(agentId, payload.chatId);
+    const prev = this.chatSendLocks.get(lockKey) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const chain = prev.then(() => gate);
+    this.chatSendLocks.set(lockKey, chain);
+
+    await prev;
+    try {
+      await this.sendUnlocked(agentId, payload);
+    } finally {
+      release();
+      if (this.chatSendLocks.get(lockKey) === chain) {
+        this.chatSendLocks.delete(lockKey);
+      }
+    }
+  }
+
+  private async sendUnlocked(
+    agentId: string,
+    payload: {
+      chatId: string;
+      text: string;
+      humanize?: { targetReplyAtMs: number; isFirstBotReply: boolean };
+    }
+  ): Promise<void> {
     const connection = this.getConnection(agentId);
     if (!connection?.socket) {
       throw new Error("Connection is not active");
+    }
+
+    if (env.WA_HUMANIZE_REPLIES && payload.humanize) {
+      await waitWithTyping(
+        connection.socket,
+        payload.chatId,
+        payload.humanize.targetReplyAtMs,
+        payload.humanize.isFirstBotReply,
+        humanizeTimingConfig()
+      );
     }
 
     // Простой per-chatId rate-limit: не чаще одного сообщения за заданный
@@ -872,8 +1010,10 @@ export class ConnectionManager {
     }
 
     await connection.socket.sendMessage(payload.chatId, { text: payload.text });
+    await stopTyping(connection.socket, payload.chatId);
     connection.lastSentAt.set(payload.chatId, Date.now());
     connection.lastSeenAt = new Date();
+    this.markReplied(agentId, payload.chatId);
   }
 
   /**

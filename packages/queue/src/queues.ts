@@ -64,6 +64,18 @@ export type WaOutboundJob = {
   inboundJobId?: string;
   /** Прокидываем request-id дальше — чтобы wa-worker логировал тот же reqId. */
   requestId?: string;
+  /** Unix ms — когда клиент отправил inbound (для humanize-тайминга). */
+  inboundReceivedAtMs?: number;
+  /** Unix ms — целевое время ответа (фиксируется при enqueue). */
+  targetReplyAtMs?: number;
+  /** Первый ответ бота в этом чате — влияет на typing-диапазон. */
+  isFirstBotReply?: boolean;
+  /** Включить задержку, read receipt fallback и typing перед send. */
+  humanize?: boolean;
+  /** id inbound-сообщения (fallback read receipt в outbound). */
+  waMessageId?: string;
+  /** participant для group-чатов (read receipt). */
+  participant?: string;
 };
 
 const DEFAULT_QUEUE_OPTIONS: Omit<QueueOptions, "connection"> = {

@@ -66,6 +66,8 @@ export type WaInboundResult =
       /** Владелец агента (для аналитики lead_created в jobs). null у
        *  анонимных агентов без привязанного юзера. */
       agentOwnerUserId: string | null;
+      /** Был ли это первый outbound бота в чате (до persist текущего ответа). */
+      isFirstBotReply: boolean;
     }
   | {
       status: "deduplicated";
@@ -386,6 +388,14 @@ export async function processWaInbound(
     };
   }
 
+  const priorOutboundCount = await prisma.waMessage.count({
+    where: {
+      conversationId: conversation.id,
+      direction: "out"
+    }
+  });
+  const isFirstBotReply = priorOutboundCount === 0;
+
   const history = await prisma.waMessage.findMany({
     where: { conversationId: conversation.id },
     orderBy: { createdAt: "asc" },
@@ -480,6 +490,7 @@ export async function processWaInbound(
     shouldHandoff: runtimeTurn.shouldHandoff,
     ...(runtimeTurn.actionButton ? { actionButton: runtimeTurn.actionButton } : {}),
     usage: trackResult.ok ? trackResult.usage : undefined,
-    agentOwnerUserId: agent.userId ?? null
+    agentOwnerUserId: agent.userId ?? null,
+    isFirstBotReply
   };
 }

@@ -1,0 +1,90 @@
+import { randomInt as cryptoRandomInt } from "node:crypto";
+import type { WASocket } from "@whiskeysockets/baileys";
+
+export type HumanizeTimingConfig = {
+  typingMinMs: number;
+  typingMaxMs: number;
+  typingFirstMinMs: number;
+  typingFirstMaxMs: number;
+};
+
+/** Случайное целое в [min, max] включительно. */
+export function randomInt(min: number, max: number): number {
+  if (max < min) return min;
+  return cryptoRandomInt(min, max + 1);
+}
+
+/** Сколько ещё ждать до targetReplyAtMs (не меньше 0). */
+export function computeRemainingWait(targetReplyAtMs: number, nowMs = Date.now()): number {
+  return Math.max(0, targetReplyAtMs - nowMs);
+}
+
+/** Длительность typing перед отправкой (не больше remainingWait). */
+export function computeTypingDurationMs(
+  isFirstBotReply: boolean,
+  remainingWaitMs: number,
+  config: HumanizeTimingConfig
+): number {
+  if (remainingWaitMs <= 0) return 0;
+  const [minMs, maxMs] = isFirstBotReply
+    ? [config.typingFirstMinMs, config.typingFirstMaxMs]
+    : [config.typingMinMs, config.typingMaxMs];
+  return Math.min(randomInt(minMs, maxMs), remainingWaitMs);
+}
+
+export function computeReadDelayMs(
+  isFirstInChat: boolean,
+  readDelayFirstMinMs: number,
+  readDelayFirstMaxMs: number,
+  readDelayMinMs: number,
+  readDelayMaxMs: number
+): number {
+  return isFirstInChat
+    ? randomInt(readDelayFirstMinMs, readDelayFirstMaxMs)
+    : randomInt(readDelayMinMs, readDelayMaxMs);
+}
+
+const TYPING_REFRESH_MS = 8_000;
+
+function sleep(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Ждём до targetReplyAtMs, показываем «печатает…» в конце окна,
+ * затем вызывающий код отправляет сообщение и зовёт stopTyping().
+ */
+export async function waitWithTyping(
+  socket: Pick<WASocket, "sendPresenceUpdate">,
+  chatId: string,
+  targetReplyAtMs: number,
+  isFirstBotReply: boolean,
+  config: HumanizeTimingConfig
+): Promise<void> {
+  const remainingWait = computeRemainingWait(targetReplyAtMs);
+  if (remainingWait <= 0) return;
+
+  const typingDuration = computeTypingDurationMs(isFirstBotReply, remainingWait, config);
+  const silentWait = remainingWait - typingDuration;
+
+  await sleep(silentWait);
+
+  const typingUntil = Date.now() + typingDuration;
+  while (Date.now() < typingUntil) {
+    await socket.sendPresenceUpdate("composing", chatId).catch(() => undefined);
+    const left = typingUntil - Date.now();
+    if (left <= 0) break;
+    await sleep(Math.min(TYPING_REFRESH_MS, left));
+  }
+
+  const finalWait = computeRemainingWait(targetReplyAtMs);
+  await sleep(finalWait);
+}
+
+export async function stopTyping(
+  socket: Pick<WASocket, "sendPresenceUpdate">,
+  chatId: string
+): Promise<void> {
+  await socket.sendPresenceUpdate("paused", chatId).catch(() => undefined);
+}
