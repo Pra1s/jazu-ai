@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import { Toaster } from "sonner";
 import "./globals.css";
 import AppShell from "@/components/app-shell";
+import AuthRequiredGuard from "@/components/auth-required-guard";
 import PhoneRequiredGuard from "@/components/phone-required-guard";
 import { PostHogIdentify } from "@/components/posthog-identify";
 
@@ -31,7 +32,9 @@ export default function RootLayout({
       >
         <PostHogIdentify />
         <AppShell>
-          <PhoneRequiredGuard>{children}</PhoneRequiredGuard>
+          <AuthRequiredGuard>
+            <PhoneRequiredGuard>{children}</PhoneRequiredGuard>
+          </AuthRequiredGuard>
         </AppShell>
         <Toaster position="bottom-right" richColors />
       </body>
