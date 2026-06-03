@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { isProtectedPath, MIDDLEWARE_MATCHER } from "@/lib/route-access";
+import { isProtectedPath } from "@/lib/route-access";
 import { sanitizeNext } from "@/lib/safe-next";
 
 const API_BASE_URL =
@@ -52,6 +52,16 @@ export async function middleware(request: NextRequest) {
   return NextResponse.redirect(url);
 }
 
+// Next.js требует литеральный matcher (без spread/import) — дублируем route-access.
 export const config = {
-  matcher: [...MIDDLEWARE_MATCHER]
+  matcher: [
+    "/dashboard/:path*",
+    "/chats/:path*",
+    "/settings/:path*",
+    "/billing/:path*",
+    "/whatsapp/:path*",
+    "/auth/phone",
+    "/auth/phone/:path*",
+    "/login"
+  ]
 };
