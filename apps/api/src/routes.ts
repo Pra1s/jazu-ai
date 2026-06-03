@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { prisma, type Prisma } from "@jazu/db";
-import { actionButtonSchema, businessProfileSchema, type ActionButton, type PromptCard } from "@jazu/shared";
+import { actionButtonSchema, businessProfileSchema, type ActionButton, type Carcass, type PromptCard } from "@jazu/shared";
 import {
   applyPromptCorrection,
   buildBuilderTurn,
@@ -2112,7 +2112,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         // ход клиента, и needChanged мог бы ложно сработать.
         const regenProfile = {
           ...profile,
-          carcass: (agent.carcass ?? null) as "booking" | "inspection" | "sales" | null,
+          carcass: (agent.carcass ?? null) as Carcass | null,
           botModel: (result.newBotModel ?? agent.botModel ?? null) as
             | "admin" | "consultant" | "support" | "qualifier" | "salesman" | null
         } as typeof profile;
@@ -2190,7 +2190,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       // чтобы envelope не прочитал устаревшее значение из BusinessProfile.data.
       const runtimeProfile = {
         ...profile,
-        carcass: (agent.carcass ?? null) as "booking" | "inspection" | "sales" | null,
+        carcass: (agent.carcass ?? null) as Carcass | null,
         botModel: (agent.botModel ?? null) as
           | "admin" | "consultant" | "support" | "qualifier" | "salesman" | null
       } as typeof profile;

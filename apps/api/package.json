@@ -15,6 +15,7 @@
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "db:migrate-carcass": "tsx --env-file=../../.env scripts/migrate-carcass-layer-b.ts",
     "start": "node --env-file=../../.env --import tsx/esm src/index.ts"
   },
   "dependencies": {

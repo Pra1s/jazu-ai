@@ -1,4 +1,11 @@
-import { businessProfileSchema, type ActionButton, type BusinessProfile } from "@jazu/shared";
+import {
+  businessProfileSchema,
+  CARCASSES,
+  type ActionButton,
+  type BotModel,
+  type BusinessProfile,
+  type Carcass
+} from "@jazu/shared";
 import {
   completeStream,
   runJsonCallWithTelemetry,
@@ -7,22 +14,24 @@ import {
   type StreamChunk
 } from "./openai.js";
 import {
+  assertPromptShape,
   buildBuilderSystemPrompt,
   buildCorrectionSystemPrompt,
+  buildEnrichmentSystemPrompt,
   buildPromptFromProfile,
   buildRuntimeEnvelope,
   buildRuntimePrompt,
+  getFallback,
   getNextQuestions,
   mergeProfile,
+  resolveCarcass,
   summarizeLead,
   RUNTIME_FALLBACK
 } from "./prompts.js";
 
+export type { BotModel, Carcass } from "@jazu/shared";
+
 export type PromptEventKind = "skip" | "create" | "edit";
-
-export type Carcass = "booking" | "inspection" | "sales";
-
-export type BotModel = "admin" | "consultant" | "support" | "qualifier" | "salesman";
 
 export type BuilderTurn = {
   assistantText: string;
@@ -305,7 +314,7 @@ export async function buildBuilderTurn(
       ? completion.promptSummary.trim()
       : undefined;
 
-    const allowedCarcass: Carcass[] = ["booking", "inspection", "sales"];
+    const allowedCarcass: readonly Carcass[] = CARCASSES;
     const carcass: Carcass | null = allowedCarcass.includes(completion.carcass as Carcass)
       ? (completion.carcass as Carcass)
       : null;
@@ -381,7 +390,14 @@ export async function buildRuntimeTurn(
     : null;
   const systemPrompt = override ?? buildRuntimePrompt(profile);
 
-  // ПОРЯДОК ВАЖЕН: envelope v2.3 принимает бизнес-промпт первым аргументом и сам
+  // Лёгкая проверка формы бизнес-промпта (§4): не падаем, только логируем notes
+  // для наблюдаемости (нет about/task/start или неизвестна роль).
+  const shapeNotes = assertPromptShape(systemPrompt, profile.botModel ?? null);
+  if (shapeNotes.length > 0) {
+    console.warn("[buildRuntimeTurn] prompt shape notes", shapeNotes);
+  }
+
+  // ПОРЯДОК ВАЖЕН: envelope v3 принимает бизнес-промпт первым аргументом и сам
   // склеивает его с блоками роли/потребности/механики/handoff и контрактом.
   // profile несёт botModel/carcass (подмешиваются вызывающим кодом из Agent).
   const runtimeSystem = buildRuntimeEnvelope(systemPrompt, profile, options.detectedNeed ?? null);
@@ -450,28 +466,10 @@ export async function buildRuntimeTurn(
       };
     }
 
-    // Модельный fallback: если роль бота известна — берём готовый текст под неё.
-    const fallbackModel = profile.botModel;
-    if (fallbackModel && RUNTIME_FALLBACK[fallbackModel]) {
-      return {
-        reply: RUNTIME_FALLBACK[fallbackModel],
-        shouldHandoff: false
-      };
-    }
-
-    const greetingHints = /\b(привет|здравствуй|здравствуйте|hi|hello|салам|ассалам|добрый\s+день|добрый\s+вечер|доброе\s+утро)\b/i;
-    if (greetingHints.test(userText)) {
-      const brand = profile.businessName ? `Это ${profile.businessName}.` : "";
-      return {
-        reply: `Здравствуйте! ${brand} С чем нужна помощь?`.replace(/\s+/g, " ").trim(),
-        shouldHandoff: false
-      };
-    }
-
+    // Оффлайн-фоллбэк: нейтральное открытие (D1). Роль известна — берём её пул,
+    // иначе общий нейтральный пул. getFallback сам выбирает вариацию.
     return {
-      reply:
-        profile.bookingFlow ||
-        "Поможем. Подскажите, пожалуйста, что именно вас интересует и какой результат вам нужен?",
+      reply: getFallback(profile.botModel ?? null),
       shouldHandoff: false
     };
   }
@@ -588,13 +586,17 @@ export function createInitialProfile(): BusinessProfile {
 export {
   buildBuilderSystemPrompt,
   buildCorrectionSystemPrompt,
+  buildEnrichmentSystemPrompt,
   buildPromptFromProfile,
   buildRuntimeEnvelope,
   buildRuntimePrompt,
+  getFallback,
   getNextQuestions,
   mergeProfile,
+  resolveCarcass,
   summarizeLead,
   completeStream,
+  RUNTIME_FALLBACK,
   type StreamChunk
 };
 

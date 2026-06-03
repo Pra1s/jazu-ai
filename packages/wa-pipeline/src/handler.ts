@@ -7,7 +7,8 @@ import { prisma as defaultPrisma, type Prisma } from "@jazu/db";
 import {
   actionButtonSchema,
   businessProfileSchema,
-  type ActionButton
+  type ActionButton,
+  type Carcass
 } from "@jazu/shared";
 import { sendTelegramLead, sendWhatsappOwnerNotification } from "./notifications.js";
 import { trackConversationUsage, type UsageView } from "./billing.js";
@@ -413,7 +414,7 @@ export async function processWaInbound(
   // BusinessProfile.data может отставать, а envelope читает profile.carcass/botModel.
   const runtimeProfile = {
     ...profile,
-    carcass: (agent.carcass ?? null) as "booking" | "inspection" | "sales" | null,
+    carcass: (agent.carcass ?? null) as Carcass | null,
     botModel: (agent.botModel ?? null) as
       | "admin" | "consultant" | "support" | "qualifier" | "salesman" | null
   } as typeof profile;

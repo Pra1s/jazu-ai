@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { BOT_MODELS, CARCASSES } from "./botContract.js";
+
+export * from "./botContract.js";
 
 export const actionButtonSchema = z.object({
   type: z.enum(["switch_to_test", "open_whatsapp", "start_over", "custom"]),
@@ -33,10 +36,10 @@ export const businessProfileSchema = z.object({
   emergencyCases: z.array(z.string()).default([]),
   // Роль бота (v2.2) — определяет цель и тон. Денормализуется на Agent.botModel
   // для быстрого чтения в рантайме, но истина профиля хранится здесь.
-  botModel: z.enum(["admin", "consultant", "support", "qualifier", "salesman"]).optional(),
-  // Механика воронки. Истина — Agent.carcass; в схеме нужна, т.к. v2.3-envelope
+  botModel: z.enum(BOT_MODELS).optional(),
+  // Механика воронки. Истина — Agent.carcass; в схеме нужна, т.к. v3-envelope
   // читает profile.carcass (значение подмешивается из Agent на вызове рантайма).
-  carcass: z.enum(["booking", "inspection", "sales"]).optional(),
+  carcass: z.enum(CARCASSES).optional(),
   notes: z.string().optional()
 });
 
