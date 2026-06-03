@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { BOT_MODELS, CARCASSES } from "./botContract.js";
+// Без .js — Next/Turbopack при сборке web не мапит .js → .ts в workspace-пакете.
+import { BOT_MODELS, CARCASSES } from "./botContract";
 
-export * from "./botContract.js";
+export * from "./botContract";
 
 export const actionButtonSchema = z.object({
   type: z.enum(["switch_to_test", "open_whatsapp", "start_over", "custom"]),
