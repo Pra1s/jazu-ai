@@ -192,7 +192,8 @@ async function writeLeadIfNeeded(
   message: string,
   shouldCreate: boolean,
   options: WaInboundOptions,
-  handoffType: HandoffType = null
+  handoffType: HandoffType = null,
+  clientPhone?: string | null
 ): Promise<string | null> {
   if (!shouldCreate) return null;
   const existing = await prisma.lead.findFirst({
@@ -220,6 +221,12 @@ async function writeLeadIfNeeded(
   });
 
   const title = handoffNotificationTitle(handoffType);
+  const notificationLines = [
+    title.plain,
+    summary,
+    ...(clientPhone ? [`Телефон: ${clientPhone}`] : []),
+    `Агент: ${agent?.name ?? agentId}`
+  ];
 
   // Канал 1 (основной): WhatsApp на личный номер владельца через его бота.
   // Шлём только если бот подключён (есть activный WaConnection) и у юзера
@@ -237,7 +244,7 @@ async function writeLeadIfNeeded(
       agentId: agent.id,
       personalPhone: agent.user.phone,
       botPhone: waConnection.phone,
-      text: [title.plain, summary, `Агент: ${agent.name}`].join("\n\n")
+      text: notificationLines.join("\n\n")
     });
   }
 
@@ -246,7 +253,7 @@ async function writeLeadIfNeeded(
     void sendTelegramLead(
       options.telegramBotToken,
       agent.user.telegramChatId,
-      [title.html, summary, `Agent: ${agent.name}`].join("\n")
+      [title.html, summary, ...(clientPhone ? [`Телефон: ${clientPhone}`] : []), `Agent: ${agent?.name ?? agentId}`].join("\n")
     );
   }
 
@@ -431,6 +438,7 @@ export async function processWaInbound(
     {
       systemOverride,
       detectedNeed: conversation.detectedNeed,
+      detectedName: conversation.detectedName,
       telemetry
     }
   );
@@ -448,6 +456,19 @@ export async function processWaInbound(
       await prisma.conversation.update({
         where: { id: conversation.id },
         data: { detectedNeed: nextNeed }
+      });
+    }
+  }
+
+  {
+    let nextName: string | null = null;
+    if (runtimeTurn.extractedName) {
+      nextName = runtimeTurn.extractedName;
+    }
+    if (nextName && nextName !== conversation.detectedName) {
+      await prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { detectedName: nextName }
       });
     }
   }
@@ -471,21 +492,31 @@ export async function processWaInbound(
   });
 
   const summary = runtimeTurn.summary || summarizeLead(profile, input.message);
+  const clientPhone = input.chatId.split("@")[0] ?? null;
+  const noName = !runtimeTurn.extractedName && !conversation.detectedName;
+  if (
+    runtimeTurn.shouldHandoff
+    && (runtimeTurn.handoffType === "hot_lead" || runtimeTurn.handoffType === "requested")
+    && noName
+  ) {
+    runtimeTurn.summary = `[имя не указано] ${summary}`.trim();
+  }
   const leadId = await writeLeadIfNeeded(
     prisma,
     agent.id,
     conversation.id,
-    summary,
+    runtimeTurn.summary || summary,
     input.message,
     runtimeTurn.shouldHandoff,
     options,
-    runtimeTurn.handoffType ?? null
+    runtimeTurn.handoffType ?? null,
+    clientPhone
   );
 
   return {
     status: "ok",
     reply: runtimeTurn.reply,
-    summary,
+    summary: runtimeTurn.summary || summary,
     leadId,
     conversationId: conversation.id,
     shouldHandoff: runtimeTurn.shouldHandoff,

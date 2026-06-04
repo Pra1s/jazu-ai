@@ -40,10 +40,10 @@ export const SECTION_NAMES = {
 
 // Типы хэндоффа: имя + когда срабатывает + шаблон summary. Рендерятся в промпты.
 export const HANDOFF_TYPES = {
-  hot_lead:     { when: "готов купить/записаться сейчас", summary: "Горячий лид: [тип], [цель], [город]" },
+  hot_lead:     { when: "готов купить/записаться сейчас", summary: "Горячий лид: [имя], [тип], [цель], [город]" },
   complaint:    { when: "жалоба/претензия/угроза",        summary: "Жалоба: [суть], клиент [настроение]" },
   out_of_scope: { when: "вопрос вне инструкции",          summary: "Нестандартный вопрос: [суть]" },
-  requested:    { when: "просит менеджера/перезвон",       summary: "Просит связи: [контекст]" },
+  requested:    { when: "просит менеджера/перезвон",       summary: "Просит связи: [имя], [контекст]" },
 } as const;
 export type HandoffType = keyof typeof HANDOFF_TYPES;
 

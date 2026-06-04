@@ -1,5 +1,6 @@
 import {
   businessProfileSchema,
+  BOT_MODELS,
   CARCASSES,
   type ActionButton,
   type BotModel,
@@ -28,6 +29,8 @@ import {
   summarizeLead,
   RUNTIME_FALLBACK
 } from "./prompts.js";
+// 3.1 (П6): механическая чистка исходящего текста ДЛЯ ПОЛЬЗОВАТЕЛЯ (тире/пробелы).
+import { postProcessUserText } from "./postProcess.js";
 
 export type { BotModel, Carcass } from "@jazu/shared";
 
@@ -56,6 +59,9 @@ export type RuntimeTurn = {
   extractedNeed?: string;
   // true ТОЛЬКО если клиент явно сменил запрос — триггер жёсткой перезаписи.
   needChanged?: boolean;
+  // 3.1 (П1/R2): имя клиента, если назвал в этом ходе ("" если нет). Зеркало extractedNeed,
+  // бэк сохраняет в буфер detectedName и прокидывает обратно (см. план-патч П3).
+  extractedName?: string;
   actionButton?: ActionButton | undefined;
 };
 
@@ -144,7 +150,7 @@ function buildFallbackBuilderReply(profile: BusinessProfile, userText: string): 
       ].join(" ");
 
   return {
-    assistantText: sanitizeAssistantText(assistantText),
+    assistantText: postProcessUserText(sanitizeAssistantText(assistantText)),
     profilePatch: patch,
     nextQuestions,
     promptDraft,
@@ -207,7 +213,7 @@ export async function buildBuilderTurn(
           content: [
             `Последнее сообщение пользователя: """${userText}"""`,
             "",
-            "## ПАМЯТЬ (это уже известно про бизнес — НЕ переспрашивай)",
+            "## ПАМЯТЬ (это уже известно про бизнес, НЕ переспрашивай)",
             knownLines.length > 0 ? knownLines.join("\n") : "- (пока ничего не зафиксировано)",
             "",
             "## ПОСЛЕДНИЕ ОТВЕТЫ ПОЛЬЗОВАТЕЛЯ",
@@ -217,15 +223,15 @@ export async function buildBuilderTurn(
             assistantTurns.length > 0 ? assistantTurns.map((m, i) => `${i + 1}. "${m.content}"`).join("\n") : "(пусто)",
             "",
             "## ПРАВИЛА ХОДА",
-            "1. Прочитай ПАМЯТЬ — НИ В КОЕМ СЛУЧАЕ не задавай вопрос про поле, которое там уже есть.",
-            "2. Если короткое последнее сообщение ('Алматы', 'не знаю', 'я же говорил', 'ок', '?') — пойми его в контексте ТВОЕГО последнего вопроса.",
-            "   - Если это содержательный ответ на твой вопрос — положи его в profilePatch и иди дальше.",
-            "   - Если 'не знаю'/'без разницы' — зафиксируй поле как пропущенное и иди к следующему.",
-            "   - Если 'я же говорил'/'уже сказал' — НЕ переспрашивай тот же вопрос. Извинись одной фразой и перейди к следующему НЕпокрытому полю.",
-            "   - Если '?' или непонятка — коротко объясни, что ты хотел узнать, и дай 2-3 примера ответа в **bold**.",
-            "3. profilePatch — только то, что реально сказано в ЭТОМ сообщении. Не выдумывай.",
-            "4. nextQuestions — максимум 1.",
-            "5. Стиль ответа — живой, без шаблонов. НЕ начинай каждое сообщение со слова 'Принял'. Чередуй: 'Ок,', 'Понял,', 'Так,', 'Ага,', 'Хорошо,', или вообще без вводного слова.",
+            "1. Прочитай ПАМЯТЬ, НИ В КОЕМ СЛУЧАЕ не задавай вопрос про поле, которое там уже есть.",
+            "2. Если короткое последнее сообщение ('Алматы', 'не знаю', 'я же говорил', 'ок', '?'), пойми его в контексте ТВОЕГО последнего вопроса.",
+            "   - Если это содержательный ответ на твой вопрос, положи его в profilePatch и иди дальше.",
+            "   - Если 'не знаю'/'без разницы', зафиксируй поле как пропущенное и иди к следующему.",
+            "   - Если 'я же говорил'/'уже сказал', НЕ переспрашивай тот же вопрос. Извинись одной фразой и перейди к следующему НЕпокрытому полю.",
+            "   - Если '?' или непонятка, коротко объясни, что ты хотел узнать, и дай 2-3 примера ответа в **bold**.",
+            "3. profilePatch: только то, что реально сказано в ЭТОМ сообщении. Не выдумывай.",
+            "4. nextQuestions: максимум 1.",
+            "5. Стиль ответа: живой, без шаблонов. НЕ начинай каждое сообщение со слова 'Принял'. Чередуй: 'Ок,', 'Понял,', 'Так,', 'Ага,', 'Хорошо,', или вообще без вводного слова.",
             "6. Подтверждение и вопрос соединяй одной фразой, а не через точку 'Принял X. Теперь Y'.",
             "",
             "## ЧЕК-ЛИСТ ВОПРОСА (проверь свой следующий вопрос перед ответом)",
@@ -234,7 +240,7 @@ export async function buildBuilderTurn(
             "- [ ] Варианты подобраны под уже известную нишу, а не абстрактные.",
             "- [ ] В вопросе один параметр (не два сразу).",
             "- [ ] Вопрос можно прочитать вслух за 3 секунды.",
-            "Если хоть один пункт не выполнен — переформулируй.",
+            "Если хоть один пункт не выполнен, переформулируй.",
             "",
             "## КОНТЕКСТ ХОДА",
             `Пользователь сделал ${userTurns.length} содержательных ход(ов) с начала диалога.`,
@@ -319,18 +325,18 @@ export async function buildBuilderTurn(
       ? (completion.carcass as Carcass)
       : null;
 
-    const allowedBotModels: BotModel[] = ["admin", "consultant", "support", "qualifier", "salesman"];
+    const allowedBotModels: readonly BotModel[] = BOT_MODELS;
     const botModel: BotModel | null = allowedBotModels.includes(completion.botModel as BotModel)
       ? (completion.botModel as BotModel)
       : null;
 
     return {
-      assistantText: sanitizeAssistantText(
+      assistantText: postProcessUserText(sanitizeAssistantText(
         completion.assistantText ||
           (nextQuestions.length > 0
             ? `Понял. ${nextQuestions[0]}`
             : "Отлично, у меня уже достаточно данных для промпта и теста.")
-      ),
+      )),
       profilePatch: combinedPatch,
       nextQuestions,
       promptDraft,
@@ -381,7 +387,7 @@ export async function buildRuntimeTurn(
   profile: BusinessProfile,
   userText: string,
   history: Array<{ role: "user" | "assistant"; content: string }> = [],
-  options: { systemOverride?: string | null; detectedNeed?: string | null; telemetry?: LlmTelemetryHooks } = {}
+  options: { systemOverride?: string | null; detectedNeed?: string | null; detectedName?: string | null; telemetry?: LlmTelemetryHooks } = {}
 ): Promise<RuntimeTurn> {
   const summary = summarizeLead(profile, userText);
   const handoff = identifyLeadNeed(userText);
@@ -400,7 +406,7 @@ export async function buildRuntimeTurn(
   // ПОРЯДОК ВАЖЕН: envelope v3 принимает бизнес-промпт первым аргументом и сам
   // склеивает его с блоками роли/потребности/механики/handoff и контрактом.
   // profile несёт botModel/carcass (подмешиваются вызывающим кодом из Agent).
-  const runtimeSystem = buildRuntimeEnvelope(systemPrompt, profile, options.detectedNeed ?? null);
+  const runtimeSystem = buildRuntimeEnvelope(systemPrompt, profile, options.detectedNeed ?? null, options.detectedName ?? null);
 
   try {
     const wrapper = await runJsonCallWithTelemetry<{
@@ -410,6 +416,7 @@ export async function buildRuntimeTurn(
       summary?: string;
       extractedNeed?: string;
       needChanged?: boolean;
+      extractedName?: string;
       actionButton?: ActionButton;
     }>({
       system: runtimeSystem,
@@ -446,14 +453,20 @@ export async function buildRuntimeTurn(
       ? completion.extractedNeed.trim()
       : "";
     const needChanged = completion.needChanged === true;
+    // 3.1 (R2): имя клиента из текущего хода. Непустое — бэк перезапишет буфер detectedName.
+    const extractedName = typeof completion.extractedName === "string"
+      ? completion.extractedName.trim()
+      : "";
 
     return {
-      reply: sanitizeAssistantText(completion.reply),
+      // 3.1 (П6): механически чистим тире/пробелы в исходящем reply сразу после парсинга.
+      reply: postProcessUserText(sanitizeAssistantText(completion.reply)),
       shouldHandoff: completion.shouldHandoff ?? handoff.handoff,
       ...(completion.handoffType !== undefined ? { handoffType: completion.handoffType } : {}),
       summary: completion.summary || summary,
       extractedNeed,
       needChanged,
+      extractedName,
       ...(completion.actionButton ? { actionButton: completion.actionButton } : {})
     };
   } catch (error) {
@@ -549,14 +562,14 @@ export async function applyPromptCorrection(params: {
 
     return {
       newPrompt: completion.newPrompt,
-      assistantText: sanitizeAssistantText(
+      assistantText: postProcessUserText(sanitizeAssistantText(
         completion.assistantText ||
-          `Готово, учёл правку — попробуй задать тот же вопрос боту ещё раз.`
-      ),
+          `Готово, учёл правку. Попробуй задать тот же вопрос боту ещё раз.`
+      )),
       changeSummary: completion.changeSummary?.trim() || correctionText.slice(0, 120),
       ...(completion.correctionType ? { correctionType: completion.correctionType } : {}),
       ...(completion.sectionEdited ? { sectionEdited: completion.sectionEdited } : {}),
-      ...(["admin", "consultant", "support", "qualifier", "salesman"].includes(completion.newBotModel as string)
+      ...((BOT_MODELS as readonly string[]).includes(completion.newBotModel as string)
         ? { newBotModel: completion.newBotModel as BotModel }
         : {})
     };
@@ -564,8 +577,62 @@ export async function applyPromptCorrection(params: {
     const appended = `${base}\n\n## Уточнение от владельца (правка ${new Date().toISOString().slice(0, 10)})\n- ${correctionText}`;
     return {
       newPrompt: appended,
-      assistantText: "Добавил твою правку в правила бота. Попробуй спросить ещё раз — должен ответить по-новому.",
+      assistantText: "Добавил твою правку в правила бота. Попробуй спросить ещё раз, должен ответить по-новому.",
       changeSummary: correctionText.slice(0, 120)
+    };
+  }
+}
+
+export async function applyEnrichment(params: {
+  currentPrompt: string;
+  formData: Record<string, string>;
+  telemetry?: LlmTelemetryHooks;
+}): Promise<{ newPrompt: string; assistantText: string; fieldsApplied: string[] }> {
+  const { currentPrompt, formData, telemetry } = params;
+
+  try {
+    const wrapper = await runJsonCallWithTelemetry<{
+      newPrompt?: string;
+      assistantText?: string;
+      fieldsApplied?: string[];
+    }>({
+      system: buildEnrichmentSystemPrompt(),
+      messages: [{
+        role: "user",
+        content: [
+          "## ТЕКУЩИЙ ПРОМПТ",
+          currentPrompt,
+          "",
+          "## ДАННЫЕ ФОРМЫ",
+          JSON.stringify(formData, null, 2),
+          "",
+          "Впиши данные в промпт. Верни JSON."
+        ].join("\n")
+      }],
+      temperature: 0.2
+    }, telemetry);
+
+    if (wrapper.blocked || !wrapper.result?.newPrompt) {
+      return {
+        newPrompt: currentPrompt,
+        assistantText: "Не удалось применить данные (лимит). Попробуйте позже.",
+        fieldsApplied: []
+      };
+    }
+
+    const c = wrapper.result;
+    return {
+      newPrompt: c.newPrompt!,
+      assistantText: postProcessUserText(sanitizeAssistantText(
+        c.assistantText || "Добавил данные, бот будет их использовать."
+      )),
+      fieldsApplied: c.fieldsApplied ?? []
+    };
+  } catch {
+    return {
+      newPrompt: currentPrompt,
+      assistantText: "Не удалось обновить промпт по данным формы. Данные профиля сохранены.",
+      fieldsApplied: []
     };
   }
 }

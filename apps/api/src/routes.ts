@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma, type Prisma } from "@jazu/db";
 import { actionButtonSchema, businessProfileSchema, type ActionButton, type Carcass, type PromptCard } from "@jazu/shared";
 import {
+  applyEnrichment,
   applyPromptCorrection,
   buildBuilderTurn,
   buildFallbackPrompt,
@@ -352,7 +353,7 @@ async function ensureAgentProfile(agentId: string) {
 async function savePromptVersion(
   agentId: string,
   content: string,
-  source: "create" | "edit" | "correction",
+  source: "create" | "edit" | "correction" | "enrichment",
   meta?: { correctionType?: string | null; sectionEdited?: string | null }
 ) {
   const previous = await prisma.promptVersion.findFirst({
@@ -1575,7 +1576,39 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       create: { agentId: agent.id, data: merged }
     });
 
-    return { ok: true, businessProfile: merged };
+    let assistantText: string | undefined;
+    try {
+      const existingPrompt = await prisma.promptVersion.findFirst({
+        where: { agentId: agent.id },
+        orderBy: { createdAt: "desc" }
+      });
+      const currentPrompt = existingPrompt?.content || agent.currentPrompt || buildFallbackPrompt(merged);
+      const formData = Object.fromEntries(
+        Object.entries(body).flatMap(([key, value]) =>
+          typeof value === "string" && value.trim().length > 0 ? [[key, value.trim()]] as const : []
+        )
+      ) as Record<string, string>;
+
+      if (Object.keys(formData).length > 0 && currentPrompt.trim().length > 0) {
+        const result = await applyEnrichment({
+          currentPrompt,
+          formData,
+          telemetry: buildLlmTelemetry({
+            route: "enrichment",
+            userId: agent.userId ?? null,
+            agentId: agent.id
+          })
+        });
+        if (result.newPrompt !== currentPrompt && result.newPrompt.trim().length > 80) {
+          await savePromptVersion(agent.id, result.newPrompt, "enrichment");
+        }
+        assistantText = result.assistantText;
+      }
+    } catch (err) {
+      request.log.warn({ err }, "/agent/extra-data enrichment failed");
+    }
+
+    return { ok: true, businessProfile: merged, ...(assistantText ? { assistantText } : {}) };
   });
 
   // Голосовой ввод: распознавание речи (STT). Аудио приходит как base64 в JSON,
@@ -1982,7 +2015,8 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       data: {
         testBotHistory: [],
         // Сбрасываем буфер потребности, иначе после reset бот «помнит» старую цель.
-        detectedNeed: null
+        detectedNeed: null,
+        detectedName: null
       }
     });
     return { ok: true };
@@ -2126,6 +2160,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
           {
             systemOverride: result.newPrompt,
             detectedNeed: session.detectedNeed,
+            detectedName: session.detectedName,
             telemetry: buildLlmTelemetry({
               route: "test-regenerate",
               userId: agent.userId ?? null,
@@ -2204,6 +2239,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         {
           systemOverride: agent.currentPrompt,
           detectedNeed: session.detectedNeed,
+          detectedName: session.detectedName,
           telemetry: buildLlmTelemetry({
             route: "test-chat",
             userId: agent.userId ?? null,
@@ -2236,6 +2272,19 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
           await prisma.session.update({
             where: { id: session.id },
             data: { detectedNeed: nextNeed }
+          });
+        }
+      }
+
+      {
+        let nextName: string | null = null;
+        if (turn.extractedName) {
+          nextName = turn.extractedName;
+        }
+        if (nextName && nextName !== session.detectedName) {
+          await prisma.session.update({
+            where: { id: session.id },
+            data: { detectedName: nextName }
           });
         }
       }

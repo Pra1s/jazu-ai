@@ -139,6 +139,7 @@ model Session {
   // Буфер «потребности клиента» для теста (v2.3). Пишется при первом извлечении
   // и при явной смене запроса (needChanged). Чистится на /test-chat/reset.
   detectedNeed   String?
+  detectedName   String?
   createAgentHistory Json
   promptBuilderHistory Json
   testBotHistory  Json
@@ -330,6 +331,7 @@ model Conversation {
   // Буфер «потребности клиента» для боевого WhatsApp-диалога (v2.3). Пишется при
   // первом извлечении и при явной смене запроса (needChanged).
   detectedNeed    String?
+  detectedName    String?
   lastMessageAt   DateTime?    @default(now())
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
@@ -379,6 +381,7 @@ enum PromptSource {
   create
   edit
   correction
+  enrichment
 }
 
 enum PromptCreator {
