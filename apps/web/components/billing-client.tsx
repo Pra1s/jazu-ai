@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Check, X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { apiFetch, apiJson } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
@@ -254,7 +254,7 @@ export default function BillingClient() {
     <div className="space-y-12">
       {/* Баланс + статус подписки */}
       {usage && (
-        <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-border pb-6">
+        <div className="flex flex-wrap items-baseline justify-between gap-2 border-b-2 border-foreground/15 pb-6">
           <div className="flex items-baseline gap-3">
             <span className="text-4xl font-semibold tracking-tight text-foreground sm:text-5xl">
               {fmt(usage.remaining)}
@@ -297,32 +297,27 @@ export default function BillingClient() {
 
       {/* Enterprise — заявка, без оплаты и ползунка */}
       {enterprise && (
-        <div className="rounded-2xl border border-border bg-card p-6 sm:p-8">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="min-w-0">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                {enterprise.label}
-              </div>
-              <div className="mt-2 text-2xl font-semibold text-foreground">Индивидуально</div>
-              <p className="mt-1 text-sm text-muted-foreground">{enterprise.description}</p>
-              {enterprise.features && (
-                <ul className="mt-3 space-y-1.5">
-                  {enterprise.features.map((f) => (
-                    <li key={f} className="flex items-center gap-2 text-sm text-foreground">
-                      <Check className="h-3.5 w-3.5 text-[#25D366]" />
-                      {f}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <button
-              type="button"
+        <div className="flex flex-col rounded-2xl border border-border bg-card p-7 sm:p-8">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            {enterprise.label}
+          </div>
+          <div className="mt-5 text-2xl font-semibold text-foreground">Индивидуально</div>
+          <p className="mt-2 text-sm text-muted-foreground">{enterprise.description}</p>
+          {enterprise.features && (
+            <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-foreground marker:text-muted-foreground">
+              {enterprise.features.map((f) => (
+                <li key={f}>{f}</li>
+              ))}
+            </ul>
+          )}
+          <div className="mt-auto pt-7">
+            <Button
+              size="lg"
+              className="w-full rounded-full"
               onClick={() => setEnterpriseOpen(true)}
-              className="flex items-center justify-center gap-2 rounded-full bg-foreground px-5 py-2.5 text-sm font-semibold text-background transition hover:bg-foreground/90"
             >
               Оставить заявку
-            </button>
+            </Button>
           </div>
         </div>
       )}
