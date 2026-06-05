@@ -6,15 +6,16 @@ import { shouldRedirectGuestToHome } from "@/lib/route-access";
 import { useAuthStatus } from "@/lib/use-auth-status";
 
 /**
- * Гард кабинетных страниц для гостей.
+ * Гард кабинетных страниц для гостей (только клиент).
  *
- * Дополняет middleware на стороне клиента: SPA-навигация, logout и
- * истечение сессии без F5. Неавторизованного на /chats, /settings,
- * /billing, /auth/phone уводим на главную. Воронку не трогаем.
+ * Неавторизованного на /chats, /settings, /billing, /auth/phone уводим на
+ * главную. Воронку не трогаем. Серверного middleware нет специально:
+ * cookie сессии host-only для api-домена и на web-домен не приходит, из-за
+ * чего серверная проверка редиректила бы и залогиненных.
  *
- * Источник правды — useAuthStatus (Session.userId через /auth/me).
- * Пока статус null на «закрытом» пути — показываем заглушку, чтобы не
- * мелькнули чужие настройки/чаты.
+ * Источник правды — useAuthStatus (Session.userId через /auth/me, apiFetch
+ * ходит на api-домен напрямую с cookie). Пока статус null на «закрытом»
+ * пути — показываем заглушку, чтобы не мелькнули чужие настройки/чаты.
  */
 export default function GuestRouteGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
