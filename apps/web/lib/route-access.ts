@@ -25,3 +25,15 @@ export function shouldRedirectGuestToHome(pathname: string): boolean {
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
   );
 }
+
+/**
+ * Пути воронки и маркетинга — на них до ответа /auth/me можно показать
+ * гостевую шапку. На остальных (кабинет) — нейтральный каркас, иначе
+ * залогиненный при F5 на миг видит GuestHeader с «Подключить WhatsApp».
+ */
+export function isPublicGuestPath(pathname: string): boolean {
+  if (pathname === "/" || pathname === "/auth" || pathname === "/faq") return true;
+  if (pathname === "/dashboard" || pathname.startsWith("/whatsapp")) return true;
+  if (pathname.startsWith("/legal")) return true;
+  return false;
+}
