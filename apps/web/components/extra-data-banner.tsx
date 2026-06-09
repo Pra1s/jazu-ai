@@ -8,16 +8,13 @@ import ExtraDataDialog from "@/components/extra-data-dialog";
 
 // Глобальный баннер в кабинете: пока не заполнены ключевые данные о бизнесе,
 // бот отвечает общими фразами. Показывается на всех страницах кабинета.
-// Закрытие живёт в sessionStorage: в рамках сессии не надоедает, но при новом
-// заходе напомнит снова, пока данные не заполнены.
+// Крестик скрывает баннер только в памяти (до перезагрузки страницы): пока
+// данные не заполнены, при каждом новом заходе/обновлении алерт виден снова.
 export default function ExtraDataBanner() {
   const [profile, setProfile] = useState<BusinessProfile | null>(null);
   const [hasPrompt, setHasPrompt] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [hidden, setHidden] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return window.sessionStorage.getItem("jazu:extraDataAlertHidden") === "1";
-  });
+  const [hidden, setHidden] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -40,14 +37,6 @@ export default function ExtraDataBanner() {
     return () => window.removeEventListener("jazu:promptProgress", onProgress);
   }, [refresh]);
 
-  function hide() {
-    setHidden(true);
-    try {
-      window.sessionStorage.setItem("jazu:extraDataAlertHidden", "1");
-    } catch {
-      /* non-critical */
-    }
-  }
 
   // Каких ключевых данных не хватает — без них бот не знает конкретику бизнеса.
   const missing: string[] = [];
@@ -82,7 +71,7 @@ export default function ExtraDataBanner() {
             </button>
             <button
               type="button"
-              onClick={hide}
+              onClick={() => setHidden(true)}
               className="shrink-0 rounded-full p-1 text-amber-700/70 transition hover:bg-amber-100 hover:text-amber-900"
               aria-label="Скрыть"
             >
