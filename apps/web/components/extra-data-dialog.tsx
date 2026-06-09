@@ -25,8 +25,7 @@ type Fields = {
   links: string;
   pricing: string;
   script: string;
-  addresses: string;
-  hours: string;
+  branches: string;
   restrictions: string;
 };
 
@@ -36,8 +35,7 @@ const EMPTY: Fields = {
   links: "",
   pricing: "",
   script: "",
-  addresses: "",
-  hours: "",
+  branches: "",
   restrictions: ""
 };
 
@@ -47,8 +45,12 @@ const FIELD_META: { key: keyof Fields; label: string; placeholder: string; rows:
   { key: "links", label: "Ссылки (Instagram, 2ГИС, сайт)", placeholder: "https://instagram.com/...\nhttps://2gis.kz/...", rows: 2 },
   { key: "pricing", label: "Прайс / цены", placeholder: "Стрижка - 5000 ₸\nОкрашивание - от 15000 ₸", rows: 3 },
   { key: "script", label: "Скрипт / сценарий продаж", placeholder: "Как бот должен вести клиента к заявке", rows: 3 },
-  { key: "addresses", label: "Адреса", placeholder: "г. Алматы, ул. Абая 10", rows: 2 },
-  { key: "hours", label: "Время работы", placeholder: "Пн-Пт 9:00–20:00, Сб-Вс 10:00–18:00", rows: 1 },
+  {
+    key: "branches",
+    label: "Адреса/филиалы и время работы",
+    placeholder: "Филиал 1, ул. Абая 10 — Пн-Пт 9:00–20:00\nФилиал 2, ул. Достык 5 — ежедневно 10:00–22:00",
+    rows: 3
+  },
   { key: "restrictions", label: "Ограничения / чего не делаем", placeholder: "Не работаем с детьми до 18\nБез выезда за город", rows: 2 }
 ];
 
@@ -64,14 +66,19 @@ export default function ExtraDataDialog({ open, onClose, onSaved }: ExtraDataDia
       try {
         const data = await apiJson<{ businessProfile?: Record<string, unknown> }>("/agent/prompt");
         const p = data.businessProfile ?? {};
+        // Филиалы и график живут одним полем (profile.hours). Старые адреса из
+        // addressPolicy подмешиваем в префилл, чтобы при сохранении они
+        // переехали в объединённое поле.
+        const hours = typeof p.hours === "string" ? p.hours.trim() : "";
+        const addresses = typeof p.addressPolicy === "string" ? p.addressPolicy.trim() : "";
+        const branches = [hours, addresses !== hours ? addresses : ""].filter(Boolean).join("\n");
         setFields({
           companyName: typeof p.businessName === "string" ? p.businessName : "",
           services: Array.isArray(p.servicesList) ? (p.servicesList as string[]).join("\n") : "",
           links: "",
           pricing: typeof p.pricingPolicy === "string" ? p.pricingPolicy : "",
           script: "",
-          addresses: typeof p.addressPolicy === "string" ? p.addressPolicy : "",
-          hours: typeof p.hours === "string" ? p.hours : "",
+          branches,
           restrictions: Array.isArray(p.notAllowed) ? (p.notAllowed as string[]).join("\n") : ""
         });
       } catch {

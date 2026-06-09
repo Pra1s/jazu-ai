@@ -55,8 +55,9 @@ export default function ExtraDataBanner() {
     if (!profile.businessName?.trim()) missing.push("название компании");
     if (profile.servicesList.length === 0) missing.push("услуги/товары");
     if (!profile.pricingPolicy?.trim()) missing.push("цены");
-    if (!profile.hours?.trim()) missing.push("время работы");
-    if (!profile.addressPolicy?.trim()) missing.push("адреса");
+    if (!profile.hours?.trim() && !profile.addressPolicy?.trim()) {
+      missing.push("адреса/филиалы и время работы");
+    }
   }
 
   const show = profile !== null && hasPrompt && !hidden && missing.length > 0;

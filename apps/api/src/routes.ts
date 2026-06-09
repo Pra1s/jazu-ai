@@ -1540,16 +1540,17 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
-  // Доп-данные бизнеса: структурированный ввод (ссылки, прайс, скрипт, адреса,
-  // часы, ограничения). Мерджим в businessProfile поверх собранного чатом.
+  // Доп-данные бизнеса: структурированный ввод (ссылки, прайс, скрипт,
+  // филиалы+часы, ограничения). Мерджим в businessProfile поверх собранного чатом.
   const extraDataSchema = z.object({
     companyName: z.string().max(300).optional(),
     services: z.string().max(4000).optional(),
     links: z.string().max(2000).optional(),
     pricing: z.string().max(4000).optional(),
     script: z.string().max(4000).optional(),
-    addresses: z.string().max(2000).optional(),
-    hours: z.string().max(1000).optional(),
+    // Объединённое поле «адреса/филиалы и время работы»: филиал — график,
+    // по строке на филиал. Хранится целиком в profile.hours.
+    branches: z.string().max(3000).optional(),
     restrictions: z.string().max(2000).optional()
   });
   app.post("/agent/extra-data", async (request, reply) => {
@@ -1564,8 +1565,13 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     if (body.companyName !== undefined) patch.businessName = body.companyName.trim();
     if (body.services !== undefined) patch.servicesList = splitLines(body.services);
     if (body.pricing !== undefined) patch.pricingPolicy = body.pricing.trim();
-    if (body.hours !== undefined) patch.hours = body.hours.trim();
-    if (body.addresses !== undefined) patch.addressPolicy = body.addresses.trim();
+    if (body.branches !== undefined) {
+      // Филиалы и график — одно поле, чтобы в промпте адрес и часы каждого
+      // филиала не разносились по разным секциям. Старый addressPolicy
+      // очищаем: его содержимое переехало в объединённое поле (см. префилл).
+      patch.hours = body.branches.trim();
+      patch.addressPolicy = "";
+    }
     if (body.restrictions !== undefined) patch.notAllowed = splitLines(body.restrictions);
     // Ссылки и скрипт складываем в notes/integrations как доп-контекст.
     const noteParts: string[] = [];
