@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronRight, Send, RotateCcw, Mic, Pencil, Play, FileText, Smartphone, AlertTriangle, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Send, RotateCcw, Mic, Pencil, Play, FileText, Smartphone } from "lucide-react";
 import {
   type ActionButton,
   type BusinessProfile,
@@ -393,7 +393,7 @@ export default function ChatWorkspace() {
   // (как у кнопки «Подключить WhatsApp»). Локальный prompt всегда непустой
   // из-за fallback-промпта, поэтому для гейтов используем именно hasPrompt.
   const [hasPrompt, setHasPrompt] = useState(false);
-  const [profile, setProfile] = useState<BusinessProfile>(() => businessProfileSchema.parse({}));
+  const [, setProfile] = useState<BusinessProfile>(() => businessProfileSchema.parse({}));
   const [builderMessages, setBuilderMessages] = useState<ChatMessage[]>([]);
   const [testMessages, setTestMessages] = useState<ChatMessage[]>([]);
   const [streamingId, setStreamingId] = useState<string | null>(null);
@@ -412,12 +412,6 @@ export default function ChatWorkspace() {
   const [correction, setCorrection] = useState<CorrectionState | null>(null);
   const [promptDrawerOpen, setPromptDrawerOpen] = useState(false);
   const [extraDataOpen, setExtraDataOpen] = useState(false);
-  // Алерт «заполните доп. данные о бизнесе». Скрытие живёт в sessionStorage:
-  // в рамках сессии не надоедает, но при новом заходе напомнит снова.
-  const [extraDataAlertHidden, setExtraDataAlertHidden] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return window.sessionStorage.getItem("jazu:extraDataAlertHidden") === "1";
-  });
   const [isHydrated, setIsHydrated] = useState(false);
   const [inputDisabled, setInputDisabled] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -777,27 +771,6 @@ export default function ChatWorkspace() {
 
   const messages = mode === "setup" ? builderMessages : testMessages;
   const isTest = mode === "test";
-
-  // Каких ключевых данных о бизнесе не хватает в профиле — пока они не
-  // заполнены, бот отвечает общими фразами без конкретики бизнеса.
-  const missingExtraData = useMemo(() => {
-    const missing: string[] = [];
-    if (!profile.businessName?.trim()) missing.push("название компании");
-    if (profile.servicesList.length === 0) missing.push("услуги/товары");
-    if (!profile.pricingPolicy?.trim()) missing.push("цены");
-    if (!profile.hours?.trim()) missing.push("время работы");
-    if (!profile.addressPolicy?.trim()) missing.push("адреса");
-    return missing;
-  }, [profile]);
-  const showExtraDataAlert =
-    isAuth && !isTest && hasPrompt && !extraDataAlertHidden && missingExtraData.length > 0;
-
-  function hideExtraDataAlert() {
-    setExtraDataAlertHidden(true);
-    try {
-      window.sessionStorage.setItem("jazu:extraDataAlertHidden", "1");
-    } catch { /* non-critical */ }
-  }
   const lastActionButtonId = [...messages].reverse().find((m) => getActionButton(m.parts ?? []))?.id;
 
   if (!isHydrated) {
@@ -872,35 +845,6 @@ export default function ChatWorkspace() {
           </div>
         )}
       </div>
-
-      {/* Алерт: бот пока работает на общих данных — нужно заполнить доп. данные */}
-      {showExtraDataAlert && (
-        <div className="border-b border-amber-300/60 bg-amber-50 px-4 py-2.5">
-          <div className="mx-auto flex w-full max-w-3xl items-start gap-2.5">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-            <div className="min-w-0 flex-1 text-xs leading-5 text-amber-900">
-              <span className="font-semibold">Заполните данные о бизнесе.</span>{" "}
-              Сейчас бот отвечает общими фразами — ему не хватает точных данных вашего бизнеса:{" "}
-              {missingExtraData.join(", ")}.
-            </div>
-            <button
-              type="button"
-              onClick={() => setExtraDataOpen(true)}
-              className="shrink-0 rounded-full bg-amber-600 px-3 py-1 text-xs font-semibold text-white transition hover:bg-amber-700"
-            >
-              Заполнить
-            </button>
-            <button
-              type="button"
-              onClick={hideExtraDataAlert}
-              className="shrink-0 rounded-full p-1 text-amber-700/70 transition hover:bg-amber-100 hover:text-amber-900"
-              aria-label="Скрыть"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Messages */}
       <div
@@ -1119,7 +1063,10 @@ export default function ChatWorkspace() {
       <ExtraDataDialog
         open={extraDataOpen}
         onClose={() => setExtraDataOpen(false)}
-        onSaved={() => void refreshPrompt()}
+        onSaved={() => {
+          notifyPromptProgress();
+          void refreshPrompt();
+        }}
       />
 
       {/* Непропускаемая подсказка, указывающая на кнопку «Подключить WhatsApp»
