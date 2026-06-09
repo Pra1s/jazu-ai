@@ -271,7 +271,9 @@ export default function ExtraDataDialog({ open, onClose, onSaved }: ExtraDataDia
                         )}
                       />
                     </div>
-                    <div className="flex items-center gap-1.5">
+                    {/* На мобилке ряд занимает всю ширину и селекты делят её
+                        поровну (flex-1), на десктопе — компактные фиксированные. */}
+                    <div className="flex w-full min-w-0 items-center gap-1.5 sm:w-auto">
                       <Clock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       <StyledSelect
                         value={row.days}
@@ -279,7 +281,7 @@ export default function ExtraDataDialog({ open, onClose, onSaved }: ExtraDataDia
                         options={DAY_OPTIONS}
                         placeholder="Дни"
                         ariaLabel="Дни работы"
-                        className="w-[8.5rem]"
+                        className="min-w-0 flex-1 sm:w-[8.5rem] sm:flex-none"
                       />
                       {row.days !== ROUND_THE_CLOCK && (
                         <>
@@ -288,15 +290,15 @@ export default function ExtraDataDialog({ open, onClose, onSaved }: ExtraDataDia
                             onChange={(v) => updateBranch(i, { from: v })}
                             options={TIME_OPTIONS}
                             ariaLabel="Время открытия"
-                            className="w-[5.25rem]"
+                            className="min-w-0 flex-1 sm:w-[5.25rem] sm:flex-none"
                           />
-                          <span className="text-xs text-muted-foreground">—</span>
+                          <span className="shrink-0 text-xs text-muted-foreground">—</span>
                           <StyledSelect
                             value={row.to}
                             onChange={(v) => updateBranch(i, { to: v })}
                             options={TIME_OPTIONS}
                             ariaLabel="Время закрытия"
-                            className="w-[5.25rem]"
+                            className="min-w-0 flex-1 sm:w-[5.25rem] sm:flex-none"
                           />
                         </>
                       )}
