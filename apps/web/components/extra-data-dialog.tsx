@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, X } from "lucide-react";
+import { ChevronDown, Clock, MapPin, Plus, X } from "lucide-react";
 import { apiJson } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
@@ -115,10 +115,43 @@ const FIELD_META: { key: keyof Fields; label: string; placeholder: string; rows:
   { key: "restrictions", label: "Ограничения / чего не делаем", placeholder: "Не работаем с детьми до 18\nБез выезда за город", rows: 2 }
 ];
 
-const selectClass = cn(
-  "rounded-lg border border-border bg-background px-2 py-2 text-sm text-foreground outline-none transition",
-  "focus:border-foreground focus:ring-1 focus:ring-foreground/10"
-);
+// Стилизованный селект: нативный select без системных стрелок + свой шеврон.
+function StyledSelect({
+  value,
+  onChange,
+  options,
+  placeholder,
+  ariaLabel,
+  className
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: string[];
+  placeholder?: string;
+  ariaLabel: string;
+  className?: string;
+}) {
+  return (
+    <div className={cn("relative", className)}>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={ariaLabel}
+        className={cn(
+          "w-full cursor-pointer appearance-none rounded-lg border border-border bg-background py-2 pl-3 pr-7 text-sm outline-none transition",
+          "hover:border-foreground/30 focus:border-foreground focus:ring-1 focus:ring-foreground/10",
+          value ? "text-foreground" : "text-muted-foreground"
+        )}
+      >
+        {placeholder !== undefined && <option value="">{placeholder}</option>}
+        {options.map((o) => (
+          <option key={o} value={o}>{o}</option>
+        ))}
+      </select>
+      <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+    </div>
+  );
+}
 
 // Структурированный ввод данных о бизнесе. Дополняет промпт, собранный чатом.
 export default function ExtraDataDialog({ open, onClose, onSaved }: ExtraDataDialogProps) {
@@ -212,65 +245,62 @@ export default function ExtraDataDialog({ open, onClose, onSaved }: ExtraDataDia
               {branches.map((row, i) => (
                 <div
                   key={i}
-                  className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-secondary/30 p-2"
+                  className="group relative rounded-xl border border-border bg-secondary/30 p-2.5 transition hover:border-foreground/20"
                 >
-                  <input
-                    type="text"
-                    value={row.place}
-                    onChange={(e) => updateBranch(i, { place: e.target.value })}
-                    placeholder="Алматы, Самал-2, д.33"
-                    className={cn(
-                      "min-w-[10rem] flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition placeholder:text-muted-foreground",
-                      "focus:border-foreground focus:ring-1 focus:ring-foreground/10"
-                    )}
-                  />
-                  <div className="flex items-center gap-1.5">
-                    <select
-                      value={row.days}
-                      onChange={(e) => updateBranch(i, { days: e.target.value })}
-                      className={cn(selectClass, !row.days && "text-muted-foreground")}
-                      aria-label="Дни работы"
+                  {branches.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setBranches((prev) => prev.filter((_, j) => j !== i))}
+                      className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-sm transition hover:text-foreground"
+                      aria-label="Удалить филиал"
                     >
-                      <option value="">Дни</option>
-                      {DAY_OPTIONS.map((d) => (
-                        <option key={d} value={d}>{d}</option>
-                      ))}
-                    </select>
-                    {row.days !== ROUND_THE_CLOCK && (
-                      <>
-                        <select
-                          value={row.from}
-                          onChange={(e) => updateBranch(i, { from: e.target.value })}
-                          className={selectClass}
-                          aria-label="Время открытия"
-                        >
-                          {TIME_OPTIONS.map((t) => (
-                            <option key={t} value={t}>{t}</option>
-                          ))}
-                        </select>
-                        <span className="text-xs text-muted-foreground">—</span>
-                        <select
-                          value={row.to}
-                          onChange={(e) => updateBranch(i, { to: e.target.value })}
-                          className={selectClass}
-                          aria-label="Время закрытия"
-                        >
-                          {TIME_OPTIONS.map((t) => (
-                            <option key={t} value={t}>{t}</option>
-                          ))}
-                        </select>
-                      </>
-                    )}
-                    {branches.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => setBranches((prev) => prev.filter((_, j) => j !== i))}
-                        className="rounded-full p-1 text-muted-foreground transition hover:bg-secondary hover:text-foreground"
-                        aria-label="Удалить филиал"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    )}
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="relative min-w-[11rem] flex-1">
+                      <MapPin className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                      <input
+                        type="text"
+                        value={row.place}
+                        onChange={(e) => updateBranch(i, { place: e.target.value })}
+                        placeholder="Алматы, Самал-2, д.33"
+                        className={cn(
+                          "w-full rounded-lg border border-border bg-background py-2 pl-8 pr-3 text-sm text-foreground outline-none transition placeholder:text-muted-foreground",
+                          "hover:border-foreground/30 focus:border-foreground focus:ring-1 focus:ring-foreground/10"
+                        )}
+                      />
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <Clock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <StyledSelect
+                        value={row.days}
+                        onChange={(v) => updateBranch(i, { days: v })}
+                        options={DAY_OPTIONS}
+                        placeholder="Дни"
+                        ariaLabel="Дни работы"
+                        className="w-[8.5rem]"
+                      />
+                      {row.days !== ROUND_THE_CLOCK && (
+                        <>
+                          <StyledSelect
+                            value={row.from}
+                            onChange={(v) => updateBranch(i, { from: v })}
+                            options={TIME_OPTIONS}
+                            ariaLabel="Время открытия"
+                            className="w-[5.25rem]"
+                          />
+                          <span className="text-xs text-muted-foreground">—</span>
+                          <StyledSelect
+                            value={row.to}
+                            onChange={(v) => updateBranch(i, { to: v })}
+                            options={TIME_OPTIONS}
+                            ariaLabel="Время закрытия"
+                            className="w-[5.25rem]"
+                          />
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}
