@@ -30,10 +30,13 @@ export function shouldRedirectGuestToHome(pathname: string): boolean {
  * Пути воронки и маркетинга — на них до ответа /auth/me можно показать
  * гостевую шапку. На остальных (кабинет) — нейтральный каркас, иначе
  * залогиненный при F5 на миг видит GuestHeader с «Подключить WhatsApp».
+ *
+ * /dashboard сюда НЕ входит: им пользуются и залогиненные, и для них мигание
+ * гостевой шапки при F5 заметнее, чем короткая пауза каркаса для гостя.
  */
 export function isPublicGuestPath(pathname: string): boolean {
   if (pathname === "/" || pathname === "/auth" || pathname === "/faq") return true;
-  if (pathname === "/dashboard" || pathname.startsWith("/whatsapp")) return true;
+  if (pathname.startsWith("/whatsapp")) return true;
   if (pathname.startsWith("/legal")) return true;
   return false;
 }
