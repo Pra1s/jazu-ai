@@ -1543,6 +1543,8 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
   // Доп-данные бизнеса: структурированный ввод (ссылки, прайс, скрипт, адреса,
   // часы, ограничения). Мерджим в businessProfile поверх собранного чатом.
   const extraDataSchema = z.object({
+    companyName: z.string().max(300).optional(),
+    services: z.string().max(4000).optional(),
     links: z.string().max(2000).optional(),
     pricing: z.string().max(4000).optional(),
     script: z.string().max(4000).optional(),
@@ -1559,6 +1561,8 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       (s ?? "").split(/[\n;]+/).map((x) => x.trim()).filter(Boolean);
 
     const patch: Partial<typeof profile> = {};
+    if (body.companyName !== undefined) patch.businessName = body.companyName.trim();
+    if (body.services !== undefined) patch.servicesList = splitLines(body.services);
     if (body.pricing !== undefined) patch.pricingPolicy = body.pricing.trim();
     if (body.hours !== undefined) patch.hours = body.hours.trim();
     if (body.addresses !== undefined) patch.addressPolicy = body.addresses.trim();

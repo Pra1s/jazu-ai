@@ -20,6 +20,8 @@ type ExtraDataDialogProps = {
 };
 
 type Fields = {
+  companyName: string;
+  services: string;
   links: string;
   pricing: string;
   script: string;
@@ -29,6 +31,8 @@ type Fields = {
 };
 
 const EMPTY: Fields = {
+  companyName: "",
+  services: "",
   links: "",
   pricing: "",
   script: "",
@@ -38,6 +42,8 @@ const EMPTY: Fields = {
 };
 
 const FIELD_META: { key: keyof Fields; label: string; placeholder: string; rows: number }[] = [
+  { key: "companyName", label: "Название компании", placeholder: "Например: Студия красоты «Алия»", rows: 1 },
+  { key: "services", label: "Список услуг / товаров", placeholder: "Стрижка\nОкрашивание\nМаникюр", rows: 3 },
   { key: "links", label: "Ссылки (Instagram, 2ГИС, сайт)", placeholder: "https://instagram.com/...\nhttps://2gis.kz/...", rows: 2 },
   { key: "pricing", label: "Прайс / цены", placeholder: "Стрижка - 5000 ₸\nОкрашивание - от 15000 ₸", rows: 3 },
   { key: "script", label: "Скрипт / сценарий продаж", placeholder: "Как бот должен вести клиента к заявке", rows: 3 },
@@ -59,6 +65,8 @@ export default function ExtraDataDialog({ open, onClose, onSaved }: ExtraDataDia
         const data = await apiJson<{ businessProfile?: Record<string, unknown> }>("/agent/prompt");
         const p = data.businessProfile ?? {};
         setFields({
+          companyName: typeof p.businessName === "string" ? p.businessName : "",
+          services: Array.isArray(p.servicesList) ? (p.servicesList as string[]).join("\n") : "",
           links: "",
           pricing: typeof p.pricingPolicy === "string" ? p.pricingPolicy : "",
           script: "",
