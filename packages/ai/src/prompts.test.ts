@@ -7,6 +7,10 @@ import {
   buildRuntimeEnvelope,
   getFallback,
   resolveCarcass,
+  parsePromptSections,
+  assemblePrompt,
+  applySectionPatches,
+  ENRICHMENT_FIELD_SECTION,
   RUNTIME_FALLBACK
 } from "./prompts.js";
 
@@ -131,5 +135,92 @@ describe("buildBuilderSystemPrompt", () => {
   it("содержит маппинг роль→каркас из formatRoleCarcassMapping()", () => {
     const out = buildBuilderSystemPrompt(profile());
     expect(out).toContain(formatRoleCarcassMapping());
+  });
+});
+
+describe("обогащение: детерминированная раскладка по секциям", () => {
+  const sample = [
+    "Преамбула про бота.",
+    "",
+    `${SECTION_NAMES.about}`,
+    "Барбершоп. Услуги: стрижки.",
+    "",
+    `${SECTION_NAMES.canSay}`,
+    "Цены уточняет специалист.",
+    "",
+    `${SECTION_NAMES.limits}`,
+    "Не выдумывать цены.",
+  ].join("\n");
+
+  it("parsePromptSections разбирает преамбулу и секции, round-trip сохраняет текст", () => {
+    const { preamble, sections } = parsePromptSections(sample);
+    expect(preamble).toBe("Преамбула про бота.");
+    expect(sections.map((s) => s.header)).toEqual([
+      SECTION_NAMES.about, SECTION_NAMES.canSay, SECTION_NAMES.limits,
+    ]);
+    expect(sections[0]?.body).toBe("Барбершоп. Услуги: стрижки.");
+    // round-trip: повторный разбор собранного промпта даёт те же секции
+    const reassembled = assemblePrompt(preamble, sections);
+    const again = parsePromptSections(reassembled);
+    expect(again.preamble).toBe(preamble);
+    expect(again.sections).toEqual(sections);
+  });
+
+  it("applySectionPatches заменяет тело существующей канонической секции на месте", () => {
+    const { newPrompt, sectionsApplied } = applySectionPatches(sample, {
+      [SECTION_NAMES.canSay]: "Стрижка — 5000 ₸.",
+    });
+    expect(sectionsApplied).toEqual([SECTION_NAMES.canSay]);
+    const { sections } = parsePromptSections(newPrompt);
+    const canSay = sections.find((s) => s.header === SECTION_NAMES.canSay);
+    expect(canSay?.body).toBe("Стрижка — 5000 ₸.");
+    // порядок секций не нарушен, прочие секции целы
+    expect(sections.map((s) => s.header)).toEqual([
+      SECTION_NAMES.about, SECTION_NAMES.canSay, SECTION_NAMES.limits,
+    ]);
+    expect(sections.find((s) => s.header === SECTION_NAMES.about)?.body).toContain("стрижки");
+  });
+
+  it("applySectionPatches ОТБРАСЫВАЕТ неканонические/выдуманные заголовки", () => {
+    const { newPrompt, sectionsApplied } = applySectionPatches(sample, {
+      "## Услуги и цены": "Стрижка — 5000 ₸.",
+      "## Прайс": "что-то",
+    });
+    expect(sectionsApplied).toEqual([]);
+    expect(newPrompt).not.toContain("## Услуги и цены");
+    expect(newPrompt).not.toContain("## Прайс");
+  });
+
+  it("applySectionPatches вставляет отсутствующую каноническую секцию по порядку", () => {
+    // dialog идёт ПЕРЕД canSay в каноническом порядке → должна встать между about и canSay
+    const { newPrompt } = applySectionPatches(sample, {
+      [SECTION_NAMES.dialog]: "Тон дружелюбный.",
+    });
+    const headers = parsePromptSections(newPrompt).sections.map((s) => s.header);
+    expect(headers).toEqual([
+      SECTION_NAMES.about, SECTION_NAMES.dialog, SECTION_NAMES.canSay, SECTION_NAMES.limits,
+    ]);
+  });
+
+  it("applySectionPatches игнорирует пустые тела", () => {
+    const { sectionsApplied } = applySectionPatches(sample, { [SECTION_NAMES.about]: "   " });
+    expect(sectionsApplied).toEqual([]);
+  });
+
+  it("ENRICHMENT_FIELD_SECTION принимает branches (имя поля прод-формы) как синоним locations → about", () => {
+    expect(ENRICHMENT_FIELD_SECTION.branches).toBe("about");
+    expect(ENRICHMENT_FIELD_SECTION.branches).toBe(ENRICHMENT_FIELD_SECTION.locations);
+  });
+
+  it("applySectionPatches обезвреживает markdown-заголовки в теле (нет фантомных секций)", () => {
+    const { newPrompt } = applySectionPatches(sample, {
+      [SECTION_NAMES.canSay]: "## ПРАЙС\nСтрижка — 5000 ₸\n### Доп\nБорода — 3000 ₸",
+    });
+    const headers = parsePromptSections(newPrompt).sections.map((s) => s.header);
+    // среди заголовков ТОЛЬКО канонические из sample, никаких "## ПРАЙС"/"### Доп"
+    expect(headers).toEqual([SECTION_NAMES.about, SECTION_NAMES.canSay, SECTION_NAMES.limits]);
+    expect(newPrompt).toContain("ПРАЙС");          // сам текст сохранён
+    expect(newPrompt).toContain("Стрижка — 5000 ₸");
+    expect(newPrompt).not.toMatch(/^#{1,6}\s+ПРАЙС/m); // но не как заголовок
   });
 });

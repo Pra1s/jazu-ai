@@ -2,6 +2,7 @@ import {
   businessProfileSchema,
   BOT_MODELS,
   CARCASSES,
+  SECTION_NAMES,
   type ActionButton,
   type BotModel,
   type BusinessProfile,
@@ -27,6 +28,9 @@ import {
   mergeProfile,
   resolveCarcass,
   summarizeLead,
+  applySectionPatches,
+  parsePromptSections,
+  ENRICHMENT_FIELD_SECTION,
   RUNTIME_FALLBACK
 } from "./prompts.js";
 // 3.1 (П6): механическая чистка исходящего текста ДЛЯ ПОЛЬЗОВАТЕЛЯ (тире/пробелы).
@@ -92,8 +96,12 @@ function heuristicPatch(userText: string, profile: BusinessProfile): Partial<Bus
     }
   }
 
-  // niche — only when text is the first message and niche is not yet set
-  if (!profile.niche && !profile.description && text.length > 10 && text.length < 400) {
+  // niche — only when text is the first message and niche is not yet set.
+  // Порог снижен до >2: однословные ниши («барбершоп», «клининг», «СТО») тоже
+  // должны фиксироваться, иначе билдер уходит в лишний niche-вопрос. LLM-патч
+  // при необходимости перезапишет. Явные приветствия не считаем нишей.
+  const looksLikeGreeting = /^(привет|здравствуйте|добрый день|доброе утро|добрый вечер|здарова|hi|hello)\b/i.test(text);
+  if (!profile.niche && !profile.description && text.length > 2 && text.length < 400 && !looksLikeGreeting) {
     patch.niche = extractShortValue(text, 120);
   }
 
@@ -138,6 +146,19 @@ function buildFallbackBuilderReply(profile: BusinessProfile, userText: string): 
       }
     : undefined;
 
+  // Короткая, дедуплицированная сводка известного. niche/geography от эвристики
+  // могут совпадать (на длинной первой фразе оба = всё предложение) — без дедупа
+  // получалось «зафиксировал: X, X». Обрезаем длинные значения и убираем вложенные дубли.
+  const knownFacts = Array.from(new Set(
+    [merged.businessName, merged.niche, merged.geography]
+      .map((v) => (v || "").trim())
+      .filter(Boolean)
+      .map((v) => (v.length > 40 ? `${v.slice(0, 40).trim()}…` : v))
+  ));
+  const factLine = knownFacts
+    .filter((a, i) => !knownFacts.some((b, j) => j !== i && b.toLowerCase().includes(a.toLowerCase())))
+    .join(", ") || "ваш бизнес";
+
   const assistantText = readyToTest
     ? [
         `Собрал основу для ${merged.businessName || "вашего бизнеса"}.`,
@@ -145,7 +166,7 @@ function buildFallbackBuilderReply(profile: BusinessProfile, userText: string): 
         "Если хотите, я ещё могу усилить сценарий, добавить исключения или более жёсткие правила передачи человеку."
       ].join(" ")
     : [
-        `Понял. Я уже зафиксировал: ${merged.businessName || merged.niche || "ваш бизнес"}${merged.geography ? `, ${merged.geography}` : ""}.`,
+        `Понял, зафиксировал: ${factLine}.`,
         nextQuestions.length > 0 ? nextQuestions[0] : "Продолжаю уточнять детали."
       ].join(" ");
 
@@ -286,6 +307,15 @@ export async function buildBuilderTurn(
           // "[object Object]" и засрёт профиль. Пропускаем некорректное значение.
           rawCompletionPatch[key] = undefined;
         }
+      }
+    }
+    // N1: LLM может вернуть null для ещё неизвестных полей (напр. businessName:null
+    // от Gemini). Схема профиля строковые поля как null не принимает → mergeProfile
+    // падает и ход уходит в fallback. Выкидываем null/undefined из патча: отсутствие
+    // ключа корректно подхватится из базы при merge.
+    for (const key of Object.keys(rawCompletionPatch)) {
+      if (rawCompletionPatch[key] === null || rawCompletionPatch[key] === undefined) {
+        delete rawCompletionPatch[key];
       }
     }
     const sanitizedCompletionPatch = rawCompletionPatch as Partial<BusinessProfile>;
@@ -479,10 +509,14 @@ export async function buildRuntimeTurn(
       };
     }
 
-    // Оффлайн-фоллбэк: нейтральное открытие (D1). Роль известна — берём её пул,
-    // иначе общий нейтральный пул. getFallback сам выбирает вариацию.
+    // Оффлайн-фоллбэк. В НАЧАЛЕ диалога (истории нет) — нейтральное открытие с
+    // приветствием (D1). В СЕРЕДИНЕ диалога приветствие повторять нельзя (R6),
+    // отдаём нейтральную просьбу повторить, без «здравствуйте».
+    const midDialog = history.some((m) => m.role === "assistant");
     return {
-      reply: getFallback(profile.botModel ?? null),
+      reply: midDialog
+        ? "Извините, не расслышал. Можете повторить?"
+        : getFallback(profile.botModel ?? null),
       shouldHandoff: false
     };
   }
@@ -591,8 +625,24 @@ export async function applyEnrichment(params: {
   const { currentPrompt, formData, telemetry } = params;
 
   try {
+    // Текущие тела целевых секций → даём LLM как контекст, чтобы он МЕРДЖИЛ, а не терял.
+    // Целевые = только секции, в которые маппятся реально присланные поля формы.
+    const { sections } = parsePromptSections(currentPrompt);
+    const bodyByHeader = new Map(sections.map((s) => [s.header, s.body] as const));
+    const targetKeys = [...new Set(
+      Object.keys(formData)
+        .map((f) => ENRICHMENT_FIELD_SECTION[f])
+        .filter((k): k is keyof typeof SECTION_NAMES => Boolean(k))
+    )];
+    const targetHeaders = targetKeys.length > 0
+      ? targetKeys.map((k) => SECTION_NAMES[k])
+      : [SECTION_NAMES.about, SECTION_NAMES.canSay, SECTION_NAMES.dialog, SECTION_NAMES.limits];
+    const currentSectionsText = targetHeaders
+      .map((h) => `${h}\n${bodyByHeader.get(h) ?? "(секции пока нет — будет создана)"}`)
+      .join("\n\n");
+
     const wrapper = await runJsonCallWithTelemetry<{
-      newPrompt?: string;
+      sections?: Record<string, string>;
       assistantText?: string;
       fieldsApplied?: string[];
     }>({
@@ -600,19 +650,19 @@ export async function applyEnrichment(params: {
       messages: [{
         role: "user",
         content: [
-          "## ТЕКУЩИЙ ПРОМПТ",
-          currentPrompt,
+          "## ТЕКУЩИЕ ТЕЛА ЦЕЛЕВЫХ СЕКЦИЙ",
+          currentSectionsText,
           "",
           "## ДАННЫЕ ФОРМЫ",
           JSON.stringify(formData, null, 2),
           "",
-          "Впиши данные в промпт. Верни JSON."
+          "Верни JSON с патчами секций (ключи — только канонические заголовки)."
         ].join("\n")
       }],
       temperature: 0.2
     }, telemetry);
 
-    if (wrapper.blocked || !wrapper.result?.newPrompt) {
+    if (wrapper.blocked || !wrapper.result?.sections || Object.keys(wrapper.result.sections).length === 0) {
       return {
         newPrompt: currentPrompt,
         assistantText: "Не удалось применить данные (лимит). Попробуйте позже.",
@@ -621,12 +671,22 @@ export async function applyEnrichment(params: {
     }
 
     const c = wrapper.result;
+    // Размещение детерминированное: код кладёт тела ТОЛЬКО в канонические секции,
+    // выдуманные/неканонические ключи отбрасываются в applySectionPatches.
+    const { newPrompt, sectionsApplied } = applySectionPatches(currentPrompt, c.sections!);
+    if (sectionsApplied.length === 0 || !newPrompt.trim()) {
+      return {
+        newPrompt: currentPrompt,
+        assistantText: "Не удалось применить данные. Данные профиля сохранены.",
+        fieldsApplied: []
+      };
+    }
     return {
-      newPrompt: c.newPrompt!,
+      newPrompt,
       assistantText: postProcessUserText(sanitizeAssistantText(
         c.assistantText || "Добавил данные, бот будет их использовать."
       )),
-      fieldsApplied: c.fieldsApplied ?? []
+      fieldsApplied: (c.fieldsApplied && c.fieldsApplied.length > 0) ? c.fieldsApplied : sectionsApplied
     };
   } catch {
     return {
@@ -672,6 +732,8 @@ export {
   completeJsonWithUsage,
   runJsonCallWithTelemetry,
   transcribeAudio,
+  setLlmKeyProvider,
+  type LlmKeyProvider,
   type LlmUsage,
   type LlmCallTelemetry,
   type LlmTelemetryHooks

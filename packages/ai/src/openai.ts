@@ -35,8 +35,143 @@ const PRICING_PER_MILLION_TOKENS: Record<string, { input: number; output: number
   "gpt-4.1-nano":    { input: 0.1,  output: 0.4  },
   "gpt-4o":          { input: 2.5,  output: 10.0 },
   "gpt-4o-mini":     { input: 0.15, output: 0.6  },
-  "o3-mini":         { input: 1.1,  output: 4.4  }
+  "o3-mini":         { input: 1.1,  output: 4.4  },
+  // Gemini (OpenAI-совместимый эндпоинт). Цены ориентировочные — сверить по
+  // https://ai.google.dev/gemini-api/docs/pricing перед продакшеном.
+  "gemini-2.5-flash":      { input: 0.30, output: 2.50 },
+  "gemini-2.5-flash-lite": { input: 0.10, output: 0.40 },
+  "gemini-2.0-flash":      { input: 0.10, output: 0.40 },
+  // Боевая модель текста (та же, что в прогонах). Цена на 2026-06.
+  "gemini-3.1-flash-lite": { input: 0.25, output: 1.50 }
 };
+
+/**
+ * ХУК РОТАЦИИ КЛЮЧЕЙ (под прод-ротатор разраба).
+ *
+ * По умолчанию ничего не меняется: берётся ОДИН ключ из env (как раньше).
+ * Для прод-нагрузки на пуле из множества ключей разраб подключает СВОЙ провайдер
+ * через setLlmKeyProvider(fn): функция вызывается перед каждым LLM-вызовом и
+ * возвращает следующий ПРИГОДНЫЙ ключ. Учёт лимитов на ключ (RPD/RPM/TPM,
+ * напр. 490 запросов/сутки, 15 rpm, 250k токенов/мин) — целиком на стороне
+ * провайдера разраба; этот модуль про лимиты не знает, он только спрашивает ключ.
+ *
+ * Порядок выбора ключа (selectApiKey):
+ *   1) внешний провайдер (если задан setLlmKeyProvider и вернул непустой ключ);
+ *   2) пул LLM_API_KEYS из env (через запятую) по кругу — round-robin БЕЗ учёта
+ *      лимитов, удобно для дев/смоука без полноценного ротатора;
+ *   3) одиночный ключ LLM_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY (легаси-дефолт).
+ *
+ * ВАЖНО: внутренние ретраи на 429/5xx (fetchWithRetry) переиспользуют ТОТ ЖЕ ключ
+ * в рамках одного вызова. Если провайдер должен менять ключ на каждую 429, выставьте
+ * LLM_MAX_RETRIES=0 и обрабатывайте 429 на уровне ротатора (повторный вызов с новым
+ * ключом). Whisper (transcribeAudio) этот хук НЕ использует — он всегда на OPENAI_API_KEY.
+ */
+export type LlmKeyProvider = () => string | undefined;
+let externalKeyProvider: LlmKeyProvider | null = null;
+export function setLlmKeyProvider(provider: LlmKeyProvider | null): void {
+  externalKeyProvider = provider;
+}
+
+let keyRrPointer = 0;
+function selectApiKey(): string | undefined {
+  if (externalKeyProvider) {
+    const k = externalKeyProvider();
+    if (k) return k; // провайдер отдал ключ; если вернул пусто (все исчерпаны) — падаем ниже
+  }
+  const pool = (process.env.LLM_API_KEYS || "")
+    .split(",")
+    .map((k) => k.trim())
+    .filter(Boolean);
+  if (pool.length > 0) {
+    const k = pool[keyRrPointer % pool.length];
+    keyRrPointer = (keyRrPointer + 1) % pool.length;
+    return k;
+  }
+  return process.env.LLM_API_KEY || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
+}
+
+/**
+ * Конфиг LLM-провайдера. По умолчанию — OpenAI (поведение как раньше, нулевой
+ * риск). Чтобы переключить на Gemini, задать в .env:
+ *   LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+ *   LLM_API_KEY=<GEMINI_API_KEY>   (или пул LLM_API_KEYS / провайдер, см. выше)
+ *   LLM_MODEL=gemini-2.5-flash     (или прежний OPENAI_MODEL)
+ * Эндпоинт принимает тот же формат chat/completions (messages, temperature,
+ * response_format=json_object, stream) и отдаёт choices[].delta/message + usage.
+ */
+function llmConfig(overrideModel?: string): { baseUrl: string; apiKey: string | undefined; model: string } {
+  const baseUrl = (process.env.LLM_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, "");
+  const apiKey = selectApiKey();
+  const model = overrideModel || process.env.LLM_MODEL || process.env.OPENAI_MODEL || "gpt-4.1";
+  return { baseUrl, apiKey, model };
+}
+
+/** Дефолтная модель для телеметрии/логов (без сетевого вызова). */
+function defaultModel(overrideModel?: string): string {
+  return overrideModel || process.env.LLM_MODEL || process.env.OPENAI_MODEL || "gpt-4.1";
+}
+
+// Временные сбои провайдера: rate limit (429), перегрузка/недоступность (5xx).
+// На них делаем повтор с экспоненциальной паузой + джиттер. Постоянные ошибки
+// (4xx кроме 429: неверный ключ, плохой запрос) НЕ ретраим — сразу отдаём.
+const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+const sleepMs = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+function backoffMs(attempt: number): number {
+  return 2000 * 2 ** attempt + Math.floor(Math.random() * 500); // ~2с, 4с, 8с + джиттер
+}
+
+/**
+ * fetch с повтором на временных ошибках провайдера (429/5xx). Уважает заголовок
+ * Retry-After, если пришёл. maxRetries по умолчанию из LLM_MAX_RETRIES (или 3).
+ */
+async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+  const maxRetries = Number(process.env.LLM_MAX_RETRIES || 3);
+  let attempt = 0;
+  for (;;) {
+    let response: Response;
+    try {
+      response = await fetch(url, init);
+    } catch (err) {
+      if (attempt >= maxRetries) throw err; // сетевой сбой — исчерпали попытки
+      await sleepMs(backoffMs(attempt));
+      attempt += 1;
+      continue;
+    }
+    if (!TRANSIENT_STATUSES.has(response.status) || attempt >= maxRetries) {
+      return response;
+    }
+    const retryAfter = Number(response.headers.get("retry-after"));
+    const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : backoffMs(attempt);
+    await sleepMs(waitMs);
+    attempt += 1;
+  }
+}
+
+/**
+ * Толерантный парсинг JSON из ответа LLM. Модели (особенно Gemini free-tier)
+ * иногда оборачивают JSON в ```json-фенсы или добавляют прозу до/после объекта.
+ * Пробуем по порядку: как есть → снять markdown-фенсы → вырезать первый {…}.
+ * Возвращает null, если всё мимо.
+ */
+function tryParseJson<T>(raw: string): T | null {
+  const attempts: string[] = [raw];
+  // снять ```json … ``` или ``` … ```
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) attempts.push(fenced[1]);
+  // вырезать от первой { до последней }
+  const first = raw.indexOf("{");
+  const last = raw.lastIndexOf("}");
+  if (first !== -1 && last > first) attempts.push(raw.slice(first, last + 1));
+
+  for (const candidate of attempts) {
+    try {
+      return JSON.parse(candidate.trim()) as T;
+    } catch {
+      // пробуем следующий вариант
+    }
+  }
+  return null;
+}
 
 /** Возвращает стоимость вызова в микро-долларах (USD * 1_000_000), целое. */
 export function calcCostMicroUsd(model: string, usage: LlmUsage): number {
@@ -51,20 +186,20 @@ export async function* completeStream(
   options: ChatCompletionOptions,
   onChunk?: (chunk: StreamChunk) => void
 ): AsyncGenerator<StreamChunk> {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const { baseUrl, apiKey, model } = llmConfig(options.model);
   if (!apiKey) {
     yield { type: "done", fullText: "" };
     return;
   }
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`
     },
     body: JSON.stringify({
-      model: options.model || process.env.OPENAI_MODEL || "gpt-4.1",
+      model,
       messages: [{ role: "system", content: options.system }, ...options.messages],
       temperature: options.temperature ?? 0.2,
       stream: true
@@ -73,7 +208,7 @@ export async function* completeStream(
 
   if (!response.ok || !response.body) {
     const errorText = await response.text();
-    throw new Error(`OpenAI stream failed: ${response.status} ${errorText}`);
+    throw new Error(`LLM stream failed: ${response.status} ${errorText}`);
   }
 
   const reader = response.body.getReader();
@@ -137,57 +272,65 @@ export type CompletionJsonResult<T> = {
  * `completeJson`, чтобы не ломать существующие импорты в @jazu/ai/index.ts.
  */
 export async function completeJsonWithUsage<T>(options: ChatCompletionOptions): Promise<CompletionJsonResult<T>> {
-  const model = options.model || process.env.OPENAI_MODEL || "gpt-4.1";
+  const { baseUrl, apiKey, model } = llmConfig(options.model);
   const startedAt = Date.now();
   const emptyUsage: LlmUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
 
-  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return { result: null, usage: emptyUsage, model, latencyMs: Date.now() - startedAt };
   }
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "system", content: options.system }, ...options.messages],
-      temperature: options.temperature ?? 0.2,
-      response_format: { type: "json_object" }
-    })
-  });
+  // Ретрай на НЕвалидный/пустой JSON. fetchWithRetry уже покрывает HTTP-сбои
+  // (429/5xx), но «ответ пришёл, но это не JSON» раньше сразу давал result=null
+  // → вызывающий код уходил в кривой fallback. На free-tier Gemini это частый
+  // случай. Переспрашиваем до LLM_JSON_RETRIES раз (при temperature>0 повтор
+  // обычно валиден). usage берём из последней попытки.
+  const maxParseRetries = Number(process.env.LLM_JSON_RETRIES ?? 2);
+  // Переприсваивается в каждой итерации до чтения; инициализатор был бы no-useless-assignment.
+  let usage!: LlmUsage;
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`OpenAI request failed: ${response.status} ${errorText}`);
+  for (let attempt = 0; ; attempt++) {
+    const response = await fetchWithRetry(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "system", content: options.system }, ...options.messages],
+        temperature: options.temperature ?? 0.2,
+        response_format: { type: "json_object" }
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`LLM request failed: ${response.status} ${errorText}`);
+    }
+
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string | null } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+    };
+
+    usage = {
+      promptTokens: data.usage?.prompt_tokens ?? 0,
+      completionTokens: data.usage?.completion_tokens ?? 0,
+      totalTokens: data.usage?.total_tokens ?? 0
+    };
+
+    const content = data.choices?.[0]?.message?.content;
+    const parsed = content ? tryParseJson<T>(content) : null;
+    if (parsed !== null) {
+      return { result: parsed, usage, model, latencyMs: Date.now() - startedAt };
+    }
+    if (attempt >= maxParseRetries) {
+      return { result: null, usage, model, latencyMs: Date.now() - startedAt };
+    }
+    // пустой/битый JSON — короткая пауза и переспрос
+    await sleepMs(backoffMs(attempt));
   }
-
-  const data = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string | null } }>;
-    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
-  };
-
-  const usage: LlmUsage = {
-    promptTokens: data.usage?.prompt_tokens ?? 0,
-    completionTokens: data.usage?.completion_tokens ?? 0,
-    totalTokens: data.usage?.total_tokens ?? 0
-  };
-
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) {
-    return { result: null, usage, model, latencyMs: Date.now() - startedAt };
-  }
-
-  let parsed: T | null;
-  try {
-    parsed = JSON.parse(content) as T;
-  } catch {
-    parsed = null;
-  }
-  return { result: parsed, usage, model, latencyMs: Date.now() - startedAt };
 }
 
 /** Backwards-compatible: только результат, без usage. */
@@ -243,7 +386,7 @@ export async function runJsonCallWithTelemetry<T>(
         userId: telemetry.userId ?? null,
         agentId: telemetry.agentId ?? null,
         status: "budget_blocked",
-        model: options.model || process.env.OPENAI_MODEL || "gpt-4.1",
+        model: defaultModel(options.model),
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
         latencyMs: 0
       });
