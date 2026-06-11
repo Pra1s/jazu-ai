@@ -406,9 +406,10 @@ export async function processWaInbound(
 
   const history = await prisma.waMessage.findMany({
     where: { conversationId: conversation.id },
-    orderBy: { createdAt: "asc" },
+    orderBy: { createdAt: "desc" },
     take: 20
   });
+  history.reverse();
 
   const telemetry = buildLlmTelemetry({
     prisma,
