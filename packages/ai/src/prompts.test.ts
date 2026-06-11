@@ -10,6 +10,9 @@ import {
   parsePromptSections,
   assemblePrompt,
   applySectionPatches,
+  mergeProfile,
+  stripEmptyPatchValues,
+  buildPromptFromProfile,
   ENRICHMENT_FIELD_SECTION,
   RUNTIME_FALLBACK
 } from "./prompts.js";
@@ -26,6 +29,60 @@ function profile(overrides: Partial<BusinessProfile> = {}): BusinessProfile {
     ...overrides
   } as BusinessProfile;
 }
+
+describe("stripEmptyPatchValues (К1: пустые значения не затирают профиль)", () => {
+  it("выкидывает null/undefined/пустую строку/пустой массив, оставляет реальные", () => {
+    const patch = stripEmptyPatchValues({
+      niche: "",
+      servicesList: [],
+      geography: "   ",
+      businessName: null,
+      leadGoal: undefined,
+      botModel: "admin",
+      offerings: ["стрижка"]
+    });
+    expect(patch).not.toHaveProperty("niche");
+    expect(patch).not.toHaveProperty("servicesList");
+    expect(patch).not.toHaveProperty("geography");
+    expect(patch).not.toHaveProperty("businessName");
+    expect(patch).not.toHaveProperty("leadGoal");
+    expect(patch).toEqual({ botModel: "admin", offerings: ["стрижка"] });
+  });
+
+  it("после чистки merge НЕ затирает уже собранные niche/servicesList", () => {
+    const base = profile({ niche: "барбершоп", servicesList: ["стрижка", "борода"] });
+    // LLM вернул пустые значения для уже известных полей (типичный Gemini free-tier).
+    const raw = stripEmptyPatchValues({ niche: "", servicesList: [], leadGoal: "запись" });
+    const merged = mergeProfile(base, raw);
+    expect(merged.niche).toBe("барбершоп");
+    expect(merged.servicesList).toEqual(["стрижка", "борода"]);
+    expect(merged.leadGoal).toBe("запись");
+  });
+
+  it("без чистки пустые значения затёрли бы базу (доказательство риска)", () => {
+    const base = profile({ niche: "барбершоп", servicesList: ["стрижка"] });
+    const merged = mergeProfile(base, { niche: "", servicesList: [] });
+    expect(merged.niche).toBe("");
+    expect(merged.servicesList).toEqual([]);
+  });
+});
+
+describe("buildPromptFromProfile (П3: прайс из формы не теряется)", () => {
+  it("рендерит строку Цены, когда pricingPolicy заполнен", () => {
+    const out = buildPromptFromProfile(profile({
+      niche: "барбершоп",
+      offerings: [],
+      servicesList: [],
+      pricingPolicy: "Стрижка 5000, борода 2000"
+    }));
+    expect(out).toContain("Цены: Стрижка 5000, борода 2000");
+  });
+
+  it("не вставляет висячую строку Цены при пустом pricingPolicy", () => {
+    const out = buildPromptFromProfile(profile({ niche: "барбершоп", offerings: [], servicesList: [] }));
+    expect(out).not.toContain("Цены:");
+  });
+});
 
 describe("resolveCarcass", () => {
   it("null + любая роль даёт дефолт роли, не inspection", () => {

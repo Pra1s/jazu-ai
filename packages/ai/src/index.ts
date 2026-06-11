@@ -26,6 +26,7 @@ import {
   getFallback,
   getNextQuestions,
   mergeProfile,
+  stripEmptyPatchValues,
   resolveCarcass,
   summarizeLead,
   applySectionPatches,
@@ -118,7 +119,7 @@ function heuristicPatch(userText: string, profile: BusinessProfile): Partial<Bus
 
   // geography — only when explicit city/location keywords + short extract
   if (!profile.geography) {
-    const geoMatch = text.match(/(?:в\s+)?(?:г\.|город|район|[А-Я][а-я]+ и [А-Я][а-я]+|Алматы|Астана|Москва|Питер|Ташкент|Алма-Ата)/i);
+    const geoMatch = text.match(/(?:в\s+)?(?:г\.|город|район|[А-Я][а-я]+ и [А-Я][а-я]+|Алматы|Астана|Алма-Ата|Шымкент|Караганда|Актобе|Тараз|Павлодар|Атырау|Костанай|Кызылорда|Актау|Семей|Уральск|Петропавловск|Усть-Каменогорск|Кокшетау|Талдыкорган|Темиртау|Туркестан|Москва|Питер|Ташкент)/i);
     if (geoMatch) {
       patch.geography = extractShortValue(text, 100);
     }
@@ -309,15 +310,10 @@ export async function buildBuilderTurn(
         }
       }
     }
-    // N1: LLM может вернуть null для ещё неизвестных полей (напр. businessName:null
-    // от Gemini). Схема профиля строковые поля как null не принимает → mergeProfile
-    // падает и ход уходит в fallback. Выкидываем null/undefined из патча: отсутствие
-    // ключа корректно подхватится из базы при merge.
-    for (const key of Object.keys(rawCompletionPatch)) {
-      if (rawCompletionPatch[key] === null || rawCompletionPatch[key] === undefined) {
-        delete rawCompletionPatch[key];
-      }
-    }
+    // N1 + К1: выкидываем из патча null/undefined (Gemini слал businessName:null,
+    // схема такое не принимала → падение в fallback) И пустые «»/[] (иначе пустое
+    // поле от LLM затирало бы уже собранное при merge). См. stripEmptyPatchValues.
+    stripEmptyPatchValues(rawCompletionPatch);
     const sanitizedCompletionPatch = rawCompletionPatch as Partial<BusinessProfile>;
     const mergedPatch = mergeProfile(nextProfile, sanitizedCompletionPatch);
     const promptDraft = completion.promptDraft || buildPromptFromProfile(mergedPatch);
