@@ -42,6 +42,12 @@ services:
       PHONE_HASH_PEPPER: ${PHONE_HASH_PEPPER:?PHONE_HASH_PEPPER is required (openssl rand -hex 32)}
       OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY is required}
       OPENAI_MODEL: ${OPENAI_MODEL:-}
+      # LLM-провайдер текстовых ответов (Gemini через OpenAI-совместимый эндпоинт).
+      # Если LLM_* пусты — работает дефолт на OpenAI (OPENAI_API_KEY/OPENAI_MODEL).
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       RESEND_API_KEY: ${RESEND_API_KEY:?RESEND_API_KEY is required}
       FROM_EMAIL: ${FROM_EMAIL:?FROM_EMAIL is required}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
@@ -149,6 +155,12 @@ services:
       REDIS_URL: redis://redis:6379
       OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY is required}
       OPENAI_MODEL: ${OPENAI_MODEL:-}
+      # LLM-провайдер текстовых ответов (Gemini через OpenAI-совместимый эндпоинт).
+      # Если LLM_* пусты — работает дефолт на OpenAI (OPENAI_API_KEY/OPENAI_MODEL).
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       # wa-worker для отправки WA-уведомлений владельцу о новых лидах.
       WA_WORKER_URL: http://wa-worker:4001
