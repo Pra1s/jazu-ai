@@ -184,37 +184,27 @@ function handoffNotificationTitle(handoffType: HandoffType): { plain: string; ht
   }
 }
 
-async function writeLeadIfNeeded(
+// Ранг срочности типа передачи (выше = срочнее). Нужен, чтобы при повторном
+// handoff в уже открытом лиде понять, «дозрел» ли клиент (например
+// out_of_scope → hot_lead) и стоит ли повторно дёрнуть владельца.
+const handoffRank: Record<string, number> = {
+  out_of_scope: 1,
+  requested: 2,
+  hot_lead: 3,
+  complaint: 3
+};
+
+// Отправка уведомлений владельцу о лиде/эскалации. Вынесено из writeLeadIfNeeded,
+// чтобы переиспользовать и в ветке создания нового лида, и при эскалации
+// существующего. Сам грузит agent (с user/waConnections) по agentId.
+async function sendHandoffNotification(
   prisma: PrismaClient,
   agentId: string,
-  conversationId: string,
   summary: string,
-  message: string,
-  shouldCreate: boolean,
-  options: WaInboundOptions,
-  handoffType: HandoffType = null,
-  clientPhone?: string | null
-): Promise<string | null> {
-  if (!shouldCreate) return null;
-  const existing = await prisma.lead.findFirst({
-    where: { conversationId, status: "new" }
-  });
-  if (existing) return existing.id;
-
-  const lead = await prisma.lead.create({
-    data: {
-      conversationId,
-      summary,
-      niche: null,
-      fields: {
-        sourceMessage: message,
-        createdAt: new Date().toISOString(),
-        ...(handoffType ? { handoffType } : {})
-      },
-      status: "new"
-    }
-  });
-
+  handoffType: HandoffType,
+  clientPhone: string | null | undefined,
+  options: WaInboundOptions
+): Promise<void> {
   const agent = await prisma.agent.findUnique({
     where: { id: agentId },
     include: { user: true, waConnections: { orderBy: { createdAt: "desc" }, take: 1 } }
@@ -256,6 +246,62 @@ async function writeLeadIfNeeded(
       [title.html, summary, ...(clientPhone ? [`Телефон: ${clientPhone}`] : []), `Agent: ${agent?.name ?? agentId}`].join("\n")
     );
   }
+}
+
+async function writeLeadIfNeeded(
+  prisma: PrismaClient,
+  agentId: string,
+  conversationId: string,
+  summary: string,
+  message: string,
+  shouldCreate: boolean,
+  options: WaInboundOptions,
+  handoffType: HandoffType = null,
+  clientPhone?: string | null
+): Promise<string | null> {
+  if (!shouldCreate) return null;
+  const existing = await prisma.lead.findFirst({
+    where: { conversationId, status: "new" }
+  });
+  if (existing) {
+    // Лид уже открыт. Если клиент «дозрел» (новый тип передачи срочнее
+    // сохранённого) — повышаем тип у лида и ПОВТОРНО уведомляем владельца.
+    // На равный/менее срочный тип молчим, чтобы не спамить на каждое сообщение.
+    const prevFields = (existing.fields as Record<string, unknown> | null) ?? {};
+    const prevType = typeof prevFields.handoffType === "string" ? prevFields.handoffType : null;
+    const prevRank = prevType ? (handoffRank[prevType] ?? 0) : 0;
+    const newRank = handoffType ? (handoffRank[handoffType] ?? 0) : 0;
+    if (newRank > prevRank) {
+      await prisma.lead.update({
+        where: { id: existing.id },
+        data: {
+          fields: {
+            ...prevFields,
+            ...(handoffType ? { handoffType } : {}),
+            escalatedAt: new Date().toISOString()
+          }
+        }
+      });
+      await sendHandoffNotification(prisma, agentId, summary, handoffType, clientPhone, options);
+    }
+    return existing.id;
+  }
+
+  const lead = await prisma.lead.create({
+    data: {
+      conversationId,
+      summary,
+      niche: null,
+      fields: {
+        sourceMessage: message,
+        createdAt: new Date().toISOString(),
+        ...(handoffType ? { handoffType } : {})
+      },
+      status: "new"
+    }
+  });
+
+  await sendHandoffNotification(prisma, agentId, summary, handoffType, clientPhone, options);
 
   return lead.id;
 }
@@ -474,14 +520,19 @@ export async function processWaInbound(
     }
   }
 
-  await prisma.waMessage.create({
-    data: {
-      conversationId: conversation.id,
-      direction: "out",
-      body: runtimeTurn.reply,
-      parts: jsonInput(toAssistantParts(runtimeTurn.reply, runtimeTurn.actionButton))
-    }
-  });
+  // Когда бот решает молчать (спам/офф-топик), reply пустой и в WhatsApp не
+  // уходит (guard в apps/jobs). Не персистим пустой out-пузырь: он засоряет
+  // ленту и ломает счётчик outboundLastHour/isFirstBotReply.
+  if (runtimeTurn.reply && runtimeTurn.reply.trim().length > 0) {
+    await prisma.waMessage.create({
+      data: {
+        conversationId: conversation.id,
+        direction: "out",
+        body: runtimeTurn.reply,
+        parts: jsonInput(toAssistantParts(runtimeTurn.reply, runtimeTurn.actionButton))
+      }
+    });
+  }
 
   await prisma.conversation.update({
     where: { id: conversation.id },
