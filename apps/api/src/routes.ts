@@ -2128,9 +2128,10 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     if (userMessage) {
       const history = await prisma.testMessage.findMany({
         where: { agentId: agent.id, createdAt: { lt: targetMessage?.createdAt ?? new Date() } },
-        orderBy: { createdAt: "asc" },
+        orderBy: { createdAt: "desc" },
         take: 16
       });
+      history.reverse();
       try {
         // Подмешиваем РОЛЬ/КАРКАС из authoritative-источника (Agent). Если правка
         // только что сменила модель (newBotModel) — берём её, чтобы регенерация
@@ -2146,10 +2147,12 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         const turn = await buildRuntimeTurn(
           regenProfile,
           userMessage,
-          history.map((item) => ({
-            role: item.role === "assistant" ? "assistant" : "user",
-            content: item.content
-          })),
+          history
+            .slice(0, -1)
+            .map((item) => ({
+              role: item.role === "assistant" ? "assistant" : "user",
+              content: item.content
+            })),
           {
             systemOverride: result.newPrompt,
             detectedNeed: session.detectedNeed,
@@ -2207,9 +2210,10 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
 
     const history = await prisma.testMessage.findMany({
       where: { agentId: agent.id },
-      orderBy: { createdAt: "asc" },
+      orderBy: { createdAt: "desc" },
       take: 16
     });
+    history.reverse();
 
     const stream = startSseStream(request, reply);
 
@@ -2225,10 +2229,12 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       const turn = await buildRuntimeTurn(
         runtimeProfile,
         message,
-        history.map((item) => ({
-          role: item.role === "assistant" ? "assistant" : "user",
-          content: item.content
-        })),
+        history
+          .slice(0, -1)
+          .map((item) => ({
+            role: item.role === "assistant" ? "assistant" : "user",
+            content: item.content
+          })),
         {
           systemOverride: agent.currentPrompt,
           detectedNeed: session.detectedNeed,
