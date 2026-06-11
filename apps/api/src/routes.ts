@@ -269,29 +269,12 @@ function buildPromptCard(
   };
 }
 
-function profileScore(profile: ReturnType<typeof businessProfileSchema.parse>): number {
-  let score = 0;
-  if (profile.businessName && profile.businessName.trim().length > 1) score += 2;
-  if (profile.niche && profile.niche.trim().length > 1) score += 2;
-  if (profile.description && profile.description.trim().length > 5) score += 1;
-  if (profile.offerings && profile.offerings.length > 0) score += 2;
-  if (profile.targetAudience) score += 1;
-  if (profile.geography) score += 1;
-  if (profile.hours) score += 1;
-  if (profile.bookingFlow) score += 1;
-  if (profile.handoffRules) score += 1;
-  if (profile.tone) score += 1;
-  return score;
-}
-
 function isProfileReadyForPrompt(profile: ReturnType<typeof businessProfileSchema.parse>): boolean {
-  const hasName = Boolean(profile.businessName && profile.businessName.trim().length > 1);
   const hasNiche = Boolean(profile.niche && profile.niche.trim().length > 1);
-  const hasOfferings = Array.isArray(profile.offerings) && profile.offerings.length > 0;
-  const hasDescription = Boolean(profile.description && profile.description.trim().length > 5);
-  if (!hasName || !hasNiche) return false;
-  if (!hasOfferings && !hasDescription) return false;
-  return profileScore(profile) >= 6;
+  const hasServices = Array.isArray(profile.servicesList) && profile.servicesList.length > 0;
+  const hasGeography = Boolean(profile.geography && profile.geography.trim().length > 1);
+  const hasLeadGoal = Boolean(profile.leadGoal && profile.leadGoal.trim().length > 1);
+  return hasNiche && hasServices && hasGeography && hasLeadGoal;
 }
 
 async function sleep(ms: number) {
@@ -1834,7 +1817,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         effectiveEvent = "create";
       }
 
-      // ГЕЙТ БАЗЫ (v2.2): не создаём промпт, пока не собраны услуги + гео + график.
+      // ГЕЙТ БАЗЫ (v3): не создаём промпт, пока не собраны услуги + гео + цель лида.
       // Конфликт с анти-зависанием/safety-net: если create форсирован к 6+ ходу,
       // НЕ блокируем — добиваем недостающую базу плейсхолдерами "не указано"
       // (только в памяти, профиль не перезаписываем), чтобы baseFilled стал
@@ -1843,7 +1826,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       const forcingCreate = effectiveEvent === "create" && userTurnsTotal >= 6;
       if (forcingCreate) {
         mergedProfile.geography ||= "не указано";
-        mergedProfile.hours ||= "не указано";
+        mergedProfile.leadGoal ||= "не указано";
         if (!(mergedProfile.servicesList?.length)) {
           mergedProfile.servicesList = ["не указано"];
         }
@@ -1851,7 +1834,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       const baseFilled =
         (mergedProfile.servicesList?.length ?? 0) > 0 &&
         !!mergedProfile.geography &&
-        !!mergedProfile.hours;
+        !!mergedProfile.leadGoal;
       if (effectiveEvent === "create" && !baseFilled) {
         effectiveEvent = existingPrompt ? "edit" : "skip";
       }
