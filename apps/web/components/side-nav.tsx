@@ -13,11 +13,20 @@ import {
   X,
   CreditCard,
   HelpCircle,
-  Headset
+  Headset,
+  MessageCircle
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import SidebarUserMenu from "@/components/sidebar-user-menu";
 import { useAuthStatus } from "@/lib/use-auth-status";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 // «Главная» убрана из меню авторизованного — лендинг только для гостей.
 const navItems = [
@@ -74,21 +83,47 @@ function NavList({
   );
 }
 
-const SUPPORT_WHATSAPP_URL = "https://wa.me/77770957126";
+const SUPPORT_WHATSAPP_PHONE = "77770957126";
+const SUPPORT_WHATSAPP_PREFILL = "Здравствуйте! Пишу по платформе Jazu — нужна помощь.";
+const SUPPORT_WHATSAPP_URL = `https://wa.me/${SUPPORT_WHATSAPP_PHONE}?text=${encodeURIComponent(
+  SUPPORT_WHATSAPP_PREFILL
+)}`;
 
 function SidebarSupportLink() {
+  const [open, setOpen] = useState(false);
+
   return (
     <div className="p-2 pb-0">
-      <a
-        href={SUPPORT_WHATSAPP_URL}
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label="Техподдержка в WhatsApp"
-        className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label="Связаться с Jazu"
+        className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
       >
         <Headset className="h-4 w-4 shrink-0" aria-hidden="true" />
-        Техподдержка
-      </a>
+        Связаться с Jazu
+      </button>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <div className="mb-1 flex h-11 w-11 items-center justify-center rounded-xl bg-secondary text-foreground">
+              <Headset className="h-5 w-5" aria-hidden="true" />
+            </div>
+            <DialogTitle>Нужна помощь?</DialogTitle>
+            <DialogDescription>
+              Есть вопросы по подключению или настройке? Напишите нам — поможем настроить всё.
+            </DialogDescription>
+          </DialogHeader>
+
+          <Button asChild size="lg" className="w-full">
+            <a href={SUPPORT_WHATSAPP_URL} target="_blank" rel="noopener noreferrer">
+              <MessageCircle className="h-4 w-4" aria-hidden="true" />
+              Написать в WhatsApp
+            </a>
+          </Button>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
