@@ -184,6 +184,16 @@ export default function SidebarUserMenu({ collapsed = false }: { collapsed?: boo
 
   return (
     <div className="border-t border-border p-2">
+      {!collapsed && (
+        <a
+          href="https://wa.me/77770957126"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mb-2 block px-2 text-xs text-muted-foreground underline-offset-2 transition hover:text-foreground hover:underline"
+        >
+          Связаться с нами
+        </a>
+      )}
       {/* Виджет квоты — над user-меню. Прогресс-бар + клик ведёт в /billing. */}
       {showQuotaInline && (
         <Link
