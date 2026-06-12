@@ -136,7 +136,9 @@ const VOICE_PLAYER_STYLES: Record<
   { barBg: string; barFg: string; btn: string; time: string }
 > = {
   platform: {
-    barBg: "bg-brand/50",
+    // bg-brand/50 не был в globals.css — столбики рендерились без цвета.
+    // /45 на пузыре /15 даёт заметный контраст до старта воспроизведения.
+    barBg: "bg-brand/45",
     barFg: "bg-brand",
     btn: "text-foreground/75 hover:text-foreground",
     time: "text-foreground/50"

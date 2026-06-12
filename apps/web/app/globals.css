@@ -90,6 +90,9 @@
   .bg-brand\/10 { background-color: hsl(var(--brand) / 0.10); }
   .bg-brand\/15 { background-color: hsl(var(--brand) / 0.15); }
   .bg-brand\/20 { background-color: hsl(var(--brand) / 0.20); }
+  .bg-brand\/35 { background-color: hsl(var(--brand) / 0.35); }
+  .bg-brand\/45 { background-color: hsl(var(--brand) / 0.45); }
+  .bg-brand\/55 { background-color: hsl(var(--brand) / 0.55); }
   .text-brand { color: hsl(var(--brand)); }
   .bg-test-canvas { background-color: hsl(var(--test-canvas)); }
 
