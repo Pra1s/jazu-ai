@@ -254,7 +254,7 @@ export default function BillingClient() {
     <div className="space-y-12">
       {/* Баланс + статус подписки */}
       {usage && (
-        <div className="flex flex-wrap items-baseline justify-between gap-2 border-b-2 border-foreground/15 pb-6">
+        <div className="flex flex-wrap items-baseline justify-between gap-2 border-y-2 border-foreground/15 py-6">
           <div className="flex items-baseline gap-3">
             <span className="text-4xl font-semibold tracking-tight text-foreground sm:text-5xl">
               {fmt(usage.remaining)}

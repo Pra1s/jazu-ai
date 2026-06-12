@@ -12,7 +12,8 @@ import {
   PanelLeft,
   X,
   CreditCard,
-  HelpCircle
+  HelpCircle,
+  ArrowUpRight
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import SidebarUserMenu from "@/components/sidebar-user-menu";
@@ -104,9 +105,10 @@ function SidebarSupportLink() {
         type="button"
         onClick={() => setOpen(true)}
         aria-label="Связаться с нами"
-        className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+        className="flex w-full items-center gap-1 rounded-lg px-3 py-2.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary"
       >
         Связаться с нами
+        <ArrowUpRight className="h-3 w-3 shrink-0 opacity-70" aria-hidden="true" />
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>
