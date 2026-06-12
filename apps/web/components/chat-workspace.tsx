@@ -165,7 +165,7 @@ function VoiceWaveformTrack({
   const { barBg, barFg } = VOICE_PLAYER_STYLES[variant];
   return (
     <div
-      className="relative min-w-0 flex-1 cursor-pointer"
+      className="relative w-fit shrink-0 cursor-pointer"
       style={{ height: VOICE_TRACK_H }}
       onClick={onSeek}
       role="slider"
@@ -175,7 +175,8 @@ function VoiceWaveformTrack({
       aria-valuemax={100}
       tabIndex={0}
     >
-      <div className="absolute inset-0 flex items-center gap-[2px]">
+      {/* w-fit: ширина = только столбики, без пустого flex-пространства */}
+      <div className="flex items-center gap-[2px]">
         {VOICE_WAVEFORM.map((h, i) => (
           <span
             key={`bg-${i}`}
@@ -246,7 +247,7 @@ function VoiceMessagePlayer({
   }
 
   return (
-    <div className="flex w-[min(280px,68vw)] items-center gap-2.5 py-0.5">
+    <div className="inline-flex items-center gap-2 py-0.5">
       <audio
         ref={audioRef}
         src={src}
