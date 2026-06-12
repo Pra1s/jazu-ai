@@ -297,27 +297,31 @@ export default function BillingClient() {
 
       {/* Enterprise — заявка, без оплаты и ползунка */}
       {enterprise && (
-        <div className="flex flex-col rounded-2xl border border-border bg-card p-7 sm:p-8">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-            {enterprise.label}
-          </div>
-          <div className="mt-5 text-2xl font-semibold text-foreground">Индивидуально</div>
-          <p className="mt-2 text-sm text-muted-foreground">{enterprise.description}</p>
-          {enterprise.features && (
-            <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-foreground marker:text-muted-foreground">
-              {enterprise.features.map((f) => (
-                <li key={f}>{f}</li>
-              ))}
-            </ul>
-          )}
-          <div className="mt-auto pt-7">
-            <Button
-              size="lg"
-              className="w-full rounded-full"
-              onClick={() => setEnterpriseOpen(true)}
-            >
-              Оставить заявку
-            </Button>
+        <div className="rounded-2xl border border-border bg-card p-7 sm:p-8">
+          <div className="grid gap-6 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-10">
+            <div className="min-w-0">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                {enterprise.label}
+              </div>
+              <div className="mt-5 text-2xl font-semibold text-foreground">Индивидуально</div>
+              <p className="mt-2 text-sm text-muted-foreground">{enterprise.description}</p>
+              {enterprise.features && (
+                <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-foreground marker:text-muted-foreground">
+                  {enterprise.features.map((f) => (
+                    <li key={f}>{f}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="sm:shrink-0">
+              <Button
+                size="lg"
+                className="w-full rounded-full sm:w-auto sm:min-w-[200px]"
+                onClick={() => setEnterpriseOpen(true)}
+              >
+                Оставить заявку
+              </Button>
+            </div>
           </div>
         </div>
       )}
