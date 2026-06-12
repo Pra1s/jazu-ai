@@ -73,9 +73,18 @@ const phoneBodySchema = z.object({
   phone: z.string().min(1)
 });
 
-const chatBodySchema = z.object({
-  message: z.string().min(1)
-});
+const chatBodySchema = z
+  .object({
+    message: z.string().min(1).optional(),
+    // Голосовое: сырой base64 аудио. ~6 МБ — большой лимит, принимаем
+    // практически любое голосовое. Распознаётся на сервере, для LLM идёт
+    // транскрипт, а в чате сохраняется аудио-часть (плеер).
+    audioBase64: z.string().min(1).max(8_000_000).optional(),
+    mimeType: z.string().max(100).optional()
+  })
+  .refine((b) => Boolean(b.message?.trim() || b.audioBase64), {
+    message: "message or audioBase64 required"
+  });
 
 const correctBodySchema = z.object({
   messageId: z.string().optional(),
@@ -174,6 +183,8 @@ type AssistantPart = {
   text?: string;
   action_button?: ActionButton;
   prompt_card?: PromptCard;
+  audio_base64?: string;
+  audio_mime?: string;
 };
 
 function toAssistantParts(text: string, actionButton?: unknown, promptCard?: PromptCard) {
@@ -185,6 +196,46 @@ function toAssistantParts(text: string, actionButton?: unknown, promptCard?: Pro
     parts.push({ type: "action_button", action_button: actionButtonSchema.parse(actionButton) });
   }
   return parts;
+}
+
+/**
+ * Разбирает тело чат-запроса в текст хода + parts для user-сообщения.
+ * Если пришло голосовое (audioBase64) — распознаём на сервере (для LLM),
+ * а в parts кладём аудио-часть, чтобы в ленте показывался плеер, а не текст.
+ * Транскрипт идёт в content/text (нужен истории и контексту LLM).
+ */
+async function resolveChatInput(
+  body: { message?: string; audioBase64?: string; mimeType?: string }
+): Promise<{ message: string; userParts: AssistantPart[] }> {
+  if (body.audioBase64) {
+    const buffer = Buffer.from(body.audioBase64, "base64");
+    let transcript = "";
+    try {
+      transcript = (
+        await transcribeAudio(buffer, {
+          mimeType: body.mimeType ?? "audio/webm",
+          filename: "voice.webm",
+          language: "ru"
+        })
+      ).trim();
+    } catch (err) {
+      console.error("[resolveChatInput] voice transcription failed", err);
+    }
+    const message = transcript || "[голосовое сообщение]";
+    return {
+      message,
+      userParts: [
+        {
+          type: "audio",
+          audio_base64: body.audioBase64,
+          audio_mime: body.mimeType ?? "audio/webm",
+          text: message
+        }
+      ]
+    };
+  }
+  const message = body.message?.trim() ?? "";
+  return { message, userParts: [{ type: "text", text: message }] };
 }
 
 function diffPromptVersions(prev: string | null, next: string): { added: string[]; removed: string[] } {
@@ -1724,16 +1775,18 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       rateLimit: { max: 30, timeWindow: "1 minute" }
     }
   }, async (request, reply) => {
-    const { message } = chatBodySchema.parse(request.body);
+    const body = chatBodySchema.parse(request.body);
     const { session, agent } = await buildWriteSessionView(request, reply);
     const profile = await ensureAgentProfile(agent.id);
+
+    const { message, userParts } = await resolveChatInput(body);
 
     await prisma.builderMessage.create({
       data: {
         agentId: agent.id,
         role: "user",
         content: message,
-        parts: jsonInput([{ type: "text", text: message }])
+        parts: jsonInput(userParts)
       }
     });
 
@@ -2208,16 +2261,18 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/test-chat/chat", async (request, reply) => {
-    const { message } = chatBodySchema.parse(request.body);
+    const body = chatBodySchema.parse(request.body);
     const { session, agent } = await buildWriteSessionView(request, reply);
     const profile = await ensureAgentProfile(agent.id);
+
+    const { message, userParts } = await resolveChatInput(body);
 
     await prisma.testMessage.create({
       data: {
         agentId: agent.id,
         role: "user",
         content: message,
-        parts: jsonInput([{ type: "text", text: message }])
+        parts: jsonInput(userParts)
       }
     });
 

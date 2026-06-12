@@ -86,6 +86,20 @@ function getPromptCard(parts: ChatMessage["parts"]): PromptCard | undefined {
   return part?.prompt_card;
 }
 
+function getAudioPart(parts: ChatMessage["parts"]): { audio_base64: string; audio_mime?: string } | undefined {
+  const part = parts.find(
+    (p) =>
+      typeof p === "object" &&
+      (p as { type?: string }).type === "audio" &&
+      Boolean((p as { audio_base64?: unknown }).audio_base64)
+  ) as { audio_base64?: string; audio_mime?: string } | undefined;
+  if (!part?.audio_base64) return undefined;
+  return {
+    audio_base64: part.audio_base64,
+    ...(part.audio_mime ? { audio_mime: part.audio_mime } : {})
+  };
+}
+
 function isStale(parts: ChatMessage["parts"]): boolean {
   return parts.some(
     (p) =>
@@ -316,12 +330,21 @@ function MessageRow({
   const actionButton = getActionButton(message.parts);
   const promptCard = !isUser ? getPromptCard(message.parts) : undefined;
   const stale = !isUser && isStale(message.parts);
+  const audioPart = isUser ? getAudioPart(message.parts) : undefined;
 
   if (isUser) {
     return (
       <div className="flex justify-end">
         <div className="max-w-[85%] rounded-2xl rounded-br-md bg-brand/15 px-4 py-2.5 text-[15px] leading-relaxed text-foreground">
-          <span className="whitespace-pre-wrap">{message.content}</span>
+          {audioPart ? (
+            <audio
+              controls
+              className="w-[240px] max-w-full"
+              src={`data:${audioPart.audio_mime || "audio/webm"};base64,${audioPart.audio_base64}`}
+            />
+          ) : (
+            <span className="whitespace-pre-wrap">{message.content}</span>
+          )}
         </div>
       </div>
     );
@@ -418,9 +441,12 @@ export default function ChatWorkspace() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const extraDataBtnRef = useRef<HTMLButtonElement>(null);
 
-  // ── Голосовой ввод (STT) ────────────────────────────────────────────────
+  // ── Голосовой ввод ──────────────────────────────────────────────────────
+  // Записанное голосовое уходит в чат как аудио-пузырь (плеер), а не как
+  // распознанный текст. Сервер распознаёт речь для LLM, но в ленте показываем
+  // именно аудио.
   const [recording, setRecording] = useState(false);
-  const [transcribing, setTranscribing] = useState(false);
+  const [sendingVoice, setSendingVoice] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
@@ -443,7 +469,7 @@ export default function ChatWorkspace() {
       recorder.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
         const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
-        void transcribeBlob(blob, recorder.mimeType || "audio/webm");
+        void sendVoiceMessage(blob, recorder.mimeType || "audio/webm");
       };
       mediaRecorderRef.current = recorder;
       recorder.start();
@@ -453,29 +479,101 @@ export default function ChatWorkspace() {
     }
   }
 
-  async function transcribeBlob(blob: Blob, mimeType: string) {
+  function blobToBase64(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = typeof reader.result === "string" ? reader.result : "";
+        // result = "data:<mime>;base64,<...>" — отрезаем префикс до запятой.
+        resolve(result.slice(result.indexOf(",") + 1));
+      };
+      reader.onerror = () => reject(reader.error ?? new Error("Не удалось прочитать аудио"));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function sendVoiceMessage(blob: Blob, mimeType: string) {
     setRecording(false);
-    if (blob.size === 0) return;
-    setTranscribing(true);
+    if (blob.size === 0 || busy) return;
+    setSendingVoice(true);
+    setBusy(true);
+    const sid = crypto.randomUUID();
+    setStreamingId(sid);
     try {
-      const buf = await blob.arrayBuffer();
-      let binary = "";
-      const bytes = new Uint8Array(buf);
-      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
-      const audioBase64 = btoa(binary);
-      const res = await apiJson<{ ok: boolean; text?: string; error?: string }>("/transcribe", {
-        method: "POST",
-        body: JSON.stringify({ audioBase64, mimeType, language: "ru" })
-      });
-      if (res.ok && res.text) {
-        setInput((prev) => (prev ? `${prev} ${res.text}` : res.text ?? ""));
+      const audioBase64 = await blobToBase64(blob);
+      const audioPart = { type: "audio", audio_base64: audioBase64, audio_mime: mimeType };
+      const optimistic: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: "",
+        parts: [audioPart] as ChatMessage["parts"],
+        createdAt: new Date().toISOString()
+      };
+      const placeholder: ChatMessage = {
+        id: sid,
+        role: "assistant",
+        content: "",
+        parts: [],
+        createdAt: new Date().toISOString()
+      };
+
+      if (mode === "setup") {
+        setBuilderMessages((prev) => [...prev, optimistic, placeholder]);
+        const turn = await apiSse<TurnResponse>("/agent/chat", { audioBase64, mimeType }, (token) => {
+          setBuilderMessages((prev) =>
+            prev.map((m) => (m.id === sid ? { ...m, content: m.content + token } : m))
+          );
+        });
+        setBuilderMessages((prev) =>
+          prev.map((m) => {
+            if (m.id !== sid) return m;
+            const final = turn.assistantText || m.content;
+            const fallbackParts: AssistantPart[] = [
+              { type: "text", text: final },
+              ...(turn.actionButton ? [{ type: "action_button" as const, action_button: turn.actionButton }] : [])
+            ];
+            const parts = turn.assistantParts && turn.assistantParts.length > 0 ? turn.assistantParts : fallbackParts;
+            return { ...m, content: final, parts };
+          })
+        );
+        if (turn.promptCard || (turn.assistantParts && turn.assistantParts.some((p) => p.type === "prompt_card"))) {
+          setFreshPromptCardId(sid);
+        }
+        if (turn.promptDraft) setPrompt(turn.promptDraft);
+        await refreshPrompt();
+        notifyPromptProgress();
       } else {
-        toast.error(res.error ?? "Не удалось распознать речь");
+        setTestMessages((prev) => [...prev, optimistic, placeholder]);
+        userMessageCountRef.current += 1;
+        const turn = await apiSse<TurnResponse>("/test-chat/chat", { audioBase64, mimeType }, (token) => {
+          setTestMessages((prev) =>
+            prev.map((m) => (m.id === sid ? { ...m, content: m.content + token } : m))
+          );
+        });
+        setTestMessages((prev) =>
+          prev.map((m) => {
+            if (m.id !== sid) return m;
+            const final = turn.reply || turn.assistantText || m.content;
+            return {
+              ...m,
+              content: final,
+              parts: [
+                { type: "text", text: final },
+                ...(turn.actionButton ? [{ type: "action_button", action_button: turn.actionButton }] : [])
+              ] as ChatMessage["parts"]
+            };
+          })
+        );
+        maybeFireChatTriggers(turn);
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Ошибка распознавания");
+      toast.error(err instanceof Error ? err.message : "Ошибка при отправке голосового");
+      setBuilderMessages((prev) => prev.filter((m) => m.id !== sid));
+      setTestMessages((prev) => prev.filter((m) => m.id !== sid));
     } finally {
-      setTranscribing(false);
+      setBusy(false);
+      setStreamingId(null);
+      setSendingVoice(false);
     }
   }
 
@@ -919,8 +1017,8 @@ export default function ChatWorkspace() {
             placeholder={
               recording
                 ? "Идёт запись… нажмите микрофон, чтобы остановить"
-                : transcribing
-                ? "Распознаём речь…"
+                : sendingVoice
+                ? "Отправляем голосовое…"
                 : mode === "setup"
                 ? "Опишите бизнес или поправьте бота…"
                 : "Напишите от лица клиента…"
@@ -955,7 +1053,7 @@ export default function ChatWorkspace() {
               <button
                 type="button"
                 onClick={() => void toggleRecording()}
-                disabled={busy || inputDisabled || transcribing}
+                disabled={(busy && !recording) || inputDisabled || sendingVoice}
                 className={cn(
                   "flex h-10 w-10 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50",
                   recording
@@ -970,7 +1068,7 @@ export default function ChatWorkspace() {
               <button
                 type="button"
                 onClick={() => void submitMessage()}
-                disabled={busy || inputDisabled || transcribing || !input.trim()}
+                disabled={busy || inputDisabled || sendingVoice || !input.trim()}
                 aria-label="Отправить"
                 className={cn(
                   "flex h-10 w-10 items-center justify-center rounded-full text-white transition-colors",

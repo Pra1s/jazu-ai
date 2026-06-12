@@ -67,7 +67,11 @@ export const messagePartSchema = z.object({
   text: z.string().optional(),
   action_button: actionButtonSchema.optional(),
   prompt_card: promptCardSchema.optional(),
-  stale: z.boolean().optional()
+  stale: z.boolean().optional(),
+  // Голосовое сообщение пользователя: сырой base64 без префикса data: и MIME.
+  // В ленте рендерится как аудио-плеер; транскрипт хранится в content/text.
+  audio_base64: z.string().optional(),
+  audio_mime: z.string().optional()
 });
 
 export const chatMessageSchema = z.object({
