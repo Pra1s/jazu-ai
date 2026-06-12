@@ -73,6 +73,21 @@ function NavList({
   );
 }
 
+const SUPPORT_WHATSAPP_URL = "https://wa.me/77770957126";
+
+function SidebarContactLink() {
+  return (
+    <a
+      href={SUPPORT_WHATSAPP_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="block px-4 pb-2 text-xs text-muted-foreground underline-offset-2 transition hover:text-foreground hover:underline"
+    >
+      Связаться с нами
+    </a>
+  );
+}
+
 function Logo() {
   return (
     <Link href="/" className="flex items-center gap-2.5">
@@ -189,6 +204,7 @@ export function SideNav() {
           onNavigate={() => setOpen(false)}
         />
         <div className="mt-auto">
+          <SidebarContactLink />
           <SidebarUserMenu />
         </div>
       </aside>
@@ -200,6 +216,7 @@ export function SideNav() {
         </div>
         <NavList pathname={pathname} needsPhone={needsPhone} />
         <div className="mt-auto">
+          <SidebarContactLink />
           <SidebarUserMenu />
         </div>
       </aside>
