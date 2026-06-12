@@ -178,6 +178,38 @@ describe("buildRuntimeEnvelope", () => {
     const reply = out.split("## Формат вывода")[1] ?? out;
     expect(reply).not.toMatch(/[—–]/);
   });
+
+  it("V3 покрывает ассортимент: запрет выдуманных позиций и перефраз (П-К2)", () => {
+    const out = buildRuntimeEnvelope("BIZ", profile({ botModel: "salesman" }), null);
+    expect(out).toContain("АССОРТИМЕНТ — тоже факты");
+    expect(out).toContain("Перефразы — то же враньё");
+  });
+
+  it("booking-механика: цена из знаний разрешена, огульный запрет убран (Р3)", () => {
+    const out = buildRuntimeEnvelope("BIZ", profile({ botModel: "admin" }), null);
+    expect(out).toContain("## МЕХАНИКА (booking)");
+    expect(out).not.toContain("Цену до записи не обсуждаем");
+    expect(out).toContain("Цену называй ТОЛЬКО из справочных знаний");
+  });
+
+  it("роль admin без «запись на конкретный слот» (контр-сигнал П1 убран)", () => {
+    const out = buildRuntimeEnvelope("BIZ", profile({ botModel: "admin" }), null);
+    expect(out).not.toContain("Цель: запись на конкретный слот");
+    expect(out).toContain("точное время подтверждает мастер/администратор");
+  });
+
+  it("блок СЕГОДНЯ с датой по Алматы, дата инжектируема (П-К4)", () => {
+    const out = buildRuntimeEnvelope(
+      "BIZ",
+      profile({ botModel: "admin" }),
+      null,
+      null,
+      new Date("2026-06-12T10:00:00+05:00")
+    );
+    expect(out).toContain("## СЕГОДНЯ");
+    expect(out).toContain("пятница");
+    expect(out).toContain("12 июня 2026");
+  });
 });
 
 describe("buildBuilderSystemPrompt", () => {
@@ -192,6 +224,17 @@ describe("buildBuilderSystemPrompt", () => {
   it("содержит маппинг роль→каркас из formatRoleCarcassMapping()", () => {
     const out = buildBuilderSystemPrompt(profile());
     expect(out).toContain(formatRoleCarcassMapping());
+  });
+
+  it("create-ход: запрет риторических вопросов и CTA «Протестируем?» (П-К3)", () => {
+    const out = buildBuilderSystemPrompt(profile());
+    expect(out).toContain("«Протестируем?», «Готовы?», «Запускаем?»");
+    expect(out).toContain("«Протестируем?» это тоже вопрос");
+  });
+
+  it("описание admin без «конкретный слот» (контр-сигнал П1 убран и в билдере)", () => {
+    const out = buildBuilderSystemPrompt(profile());
+    expect(out).not.toContain("довести до записи на конкретный слот");
   });
 });
 

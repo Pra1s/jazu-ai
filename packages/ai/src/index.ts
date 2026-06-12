@@ -469,7 +469,11 @@ export async function buildRuntimeTurn(
     }
     const completion = wrapper.result;
 
-    if (!completion || !completion.reply) {
+    // Р1: пустая строка reply — ОСОЗНАННОЕ молчание (спам/офф-топик по контракту
+    // envelope «пусто если спам»), её пропускаем дальше как есть: бэк (К5-гард в
+    // handler.ts) пустой пузырь не персистит и в WhatsApp не отправляет. Ошибкой
+    // считаем только отсутствие строки (битый/неполный JSON) — там fallback.
+    if (!completion || typeof completion.reply !== "string") {
       throw new Error("empty completion");
     }
 
