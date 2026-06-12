@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronRight, Send, RotateCcw, Mic, Pencil, Play, FileText, Smartphone } from "lucide-react";
+import { ChevronDown, ChevronRight, Send, RotateCcw, Mic, Pencil, Play, Pause, FileText, Smartphone } from "lucide-react";
 import {
   type ActionButton,
   type BusinessProfile,
@@ -106,6 +106,110 @@ function isStale(parts: ChatMessage["parts"]): boolean {
       typeof p === "object" &&
       ((p as { type?: string }).type === "stale_marker" ||
         (p as { stale?: boolean }).stale === true)
+  );
+}
+
+function formatVoiceTime(sec: number): string {
+  const s = Number.isFinite(sec) && sec > 0 ? sec : 0;
+  const m = Math.floor(s / 60);
+  const r = Math.floor(s % 60);
+  return `${m}:${r.toString().padStart(2, "0")}`;
+}
+
+// Детерминированная псевдо-волна (смесь синусов) — стабильный «вид» голосового,
+// как в мессенджерах. Высоты в долях 0.35..1.0 от высоты дорожки.
+const VOICE_WAVEFORM = Array.from({ length: 38 }, (_, i) => {
+  const v = Math.abs(Math.sin(i * 1.2) * 0.6 + Math.sin(i * 0.5 + 1) * 0.4);
+  return 0.35 + Math.min(1, v) * 0.65;
+});
+
+// Кастомный плеер голосового: кнопка play/pause + волна + длительность.
+// Стиль под платформу (brand). Без иконки-аватара.
+function VoiceMessagePlayer({ src }: { src: string }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [current, setCurrent] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const started = current > 0.05;
+  const progress = duration > 0 ? Math.min(1, current / duration) : 0;
+
+  function toggle() {
+    const el = audioRef.current;
+    if (!el) return;
+    if (playing) el.pause();
+    else void el.play();
+  }
+
+  function seek(e: React.MouseEvent<HTMLDivElement>) {
+    const el = audioRef.current;
+    if (!el || !Number.isFinite(duration) || duration <= 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    el.currentTime = ratio * duration;
+    setCurrent(el.currentTime);
+  }
+
+  return (
+    <div className="flex w-[min(280px,68vw)] items-center gap-3 py-0.5">
+      <audio
+        ref={audioRef}
+        src={src}
+        preload="metadata"
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => {
+          setPlaying(false);
+          setCurrent(0);
+        }}
+        onTimeUpdate={(e) => setCurrent(e.currentTarget.currentTime)}
+        onLoadedMetadata={(e) => {
+          const d = e.currentTarget.duration;
+          if (Number.isFinite(d)) setDuration(d);
+        }}
+        onDurationChange={(e) => {
+          const d = e.currentTarget.duration;
+          if (Number.isFinite(d)) setDuration(d);
+        }}
+      />
+      <button
+        type="button"
+        onClick={toggle}
+        aria-label={playing ? "Пауза" : "Воспроизвести"}
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-brand text-brand-foreground shadow-sm transition hover:opacity-90 active:scale-95"
+      >
+        {playing ? (
+          <Pause className="h-4 w-4 fill-current" />
+        ) : (
+          <Play className="h-4 w-4 translate-x-px fill-current" />
+        )}
+      </button>
+
+      <div
+        className="flex h-8 flex-1 cursor-pointer items-center justify-between"
+        onClick={seek}
+        role="slider"
+        aria-label="Перемотка"
+        aria-valuenow={Math.round(progress * 100)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        tabIndex={0}
+      >
+        {VOICE_WAVEFORM.map((h, i) => {
+          const filled = i / VOICE_WAVEFORM.length <= progress;
+          return (
+            <span
+              key={i}
+              className={cn("w-[2.5px] rounded-full transition-colors", filled ? "bg-brand" : "bg-brand/30")}
+              style={{ height: `${Math.round(h * 100)}%` }}
+            />
+          );
+        })}
+      </div>
+
+      <span className="shrink-0 text-[11px] tabular-nums text-foreground/55">
+        {formatVoiceTime(started ? current : duration)}
+      </span>
+    </div>
   );
 }
 
@@ -335,11 +439,14 @@ function MessageRow({
   if (isUser) {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-brand/15 px-4 py-2.5 text-[15px] leading-relaxed text-foreground">
+        <div
+          className={cn(
+            "max-w-[85%] rounded-2xl rounded-br-md bg-brand/15 text-[15px] leading-relaxed text-foreground",
+            audioPart ? "px-2.5 py-1.5" : "px-4 py-2.5"
+          )}
+        >
           {audioPart ? (
-            <audio
-              controls
-              className="w-[240px] max-w-full"
+            <VoiceMessagePlayer
               src={`data:${audioPart.audio_mime || "audio/webm"};base64,${audioPart.audio_base64}`}
             />
           ) : (
