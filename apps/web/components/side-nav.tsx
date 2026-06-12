@@ -12,7 +12,8 @@ import {
   PanelLeft,
   X,
   CreditCard,
-  HelpCircle
+  HelpCircle,
+  Headset
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import SidebarUserMenu from "@/components/sidebar-user-menu";
@@ -75,16 +76,20 @@ function NavList({
 
 const SUPPORT_WHATSAPP_URL = "https://wa.me/77770957126";
 
-function SidebarContactLink() {
+function SidebarSupportLink() {
   return (
-    <a
-      href={SUPPORT_WHATSAPP_URL}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="block px-4 pb-2 text-xs text-muted-foreground underline-offset-2 transition hover:text-foreground hover:underline"
-    >
-      Связаться с нами
-    </a>
+    <div className="p-2 pb-0">
+      <a
+        href={SUPPORT_WHATSAPP_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Техподдержка в WhatsApp"
+        className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+      >
+        <Headset className="h-4 w-4 shrink-0" aria-hidden="true" />
+        Техподдержка
+      </a>
+    </div>
   );
 }
 
@@ -204,7 +209,7 @@ export function SideNav() {
           onNavigate={() => setOpen(false)}
         />
         <div className="mt-auto">
-          <SidebarContactLink />
+          <SidebarSupportLink />
           <SidebarUserMenu />
         </div>
       </aside>
@@ -216,7 +221,7 @@ export function SideNav() {
         </div>
         <NavList pathname={pathname} needsPhone={needsPhone} />
         <div className="mt-auto">
-          <SidebarContactLink />
+          <SidebarSupportLink />
           <SidebarUserMenu />
         </div>
       </aside>
