@@ -79,6 +79,7 @@ function NavList({
           </Link>
         );
       })}
+      <SidebarSupportLink />
     </nav>
   );
 }
@@ -93,7 +94,7 @@ function SidebarSupportLink() {
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="p-2 pb-0">
+    <>
       <button
         type="button"
         onClick={() => setOpen(true)}
@@ -124,7 +125,7 @@ function SidebarSupportLink() {
           </Button>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 }
 
@@ -244,7 +245,6 @@ export function SideNav() {
           onNavigate={() => setOpen(false)}
         />
         <div className="mt-auto">
-          <SidebarSupportLink />
           <SidebarUserMenu />
         </div>
       </aside>
@@ -256,7 +256,6 @@ export function SideNav() {
         </div>
         <NavList pathname={pathname} needsPhone={needsPhone} />
         <div className="mt-auto">
-          <SidebarSupportLink />
           <SidebarUserMenu />
         </div>
       </aside>
