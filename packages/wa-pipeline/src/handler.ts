@@ -191,7 +191,10 @@ const handoffRank: Record<string, number> = {
   out_of_scope: 1,
   requested: 2,
   hot_lead: 3,
-  complaint: 3
+  // complaint срочнее hot_lead: жалоба ПОСЛЕ горячего лида должна повторно
+  // уведомить владельца (конфликт важнее продажи). Обратная сторона: hot_lead
+  // после complaint не эскалирует — но раньше при равенстве 3=3 он тоже молчал.
+  complaint: 4
 };
 
 // Отправка уведомлений владельцу о лиде/эскалации. Вынесено из writeLeadIfNeeded,
