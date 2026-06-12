@@ -1544,18 +1544,29 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     const splitLines = (s?: string) =>
       (s ?? "").split(/[\n;]+/).map((x) => x.trim()).filter(Boolean);
 
+    // Семантика «пустое поле = нечего сказать, не трогаем» (как в enrichment).
+    // Форма шлёт ВСЕ поля всегда, незаполненные — пустой строкой; писать их в
+    // patch нельзя: mergeProfile спредит ...patch без ??-защиты и пустое значение
+    // затёрло бы уже собранный профиль (services/pricing/hours/...).
     const patch: Partial<typeof profile> = {};
-    if (body.companyName !== undefined) patch.businessName = body.companyName.trim();
-    if (body.services !== undefined) patch.servicesList = splitLines(body.services);
-    if (body.pricing !== undefined) patch.pricingPolicy = body.pricing.trim();
-    if (body.branches !== undefined) {
+    if (body.companyName !== undefined && body.companyName.trim()) patch.businessName = body.companyName.trim();
+    if (body.services !== undefined) {
+      const list = splitLines(body.services);
+      if (list.length > 0) patch.servicesList = list;
+    }
+    if (body.pricing !== undefined && body.pricing.trim()) patch.pricingPolicy = body.pricing.trim();
+    if (body.branches !== undefined && body.branches.trim()) {
       // Филиалы и график — одно поле, чтобы в промпте адрес и часы каждого
       // филиала не разносились по разным секциям. Старый addressPolicy
-      // очищаем: его содержимое переехало в объединённое поле (см. префилл).
+      // очищаем ТОЛЬКО при непустых филиалах: его содержимое переехало в
+      // объединённое поле (см. префилл). Пустые филиалы addressPolicy не трогают.
       patch.hours = body.branches.trim();
       patch.addressPolicy = "";
     }
-    if (body.restrictions !== undefined) patch.notAllowed = splitLines(body.restrictions);
+    if (body.restrictions !== undefined) {
+      const list = splitLines(body.restrictions);
+      if (list.length > 0) patch.notAllowed = list;
+    }
     // Ссылки и скрипт складываем в notes/integrations как доп-контекст.
     const noteParts: string[] = [];
     if (body.links) noteParts.push(`Ссылки: ${body.links.trim()}`);
@@ -1759,9 +1770,16 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         create: { agentId: agent.id, data: mergedProfile }
       });
 
-      // Сохраняем каркас воронки, как только билдер его определил, и если у
-      // агента он ещё не зафиксирован. Каркас задаётся один раз — по нише.
-      if (turn.carcass && !agent.carcass) {
+      const existingPrompt = await prisma.promptVersion.findFirst({
+        where: { agentId: agent.id },
+        orderBy: { createdAt: "desc" }
+      });
+
+      // Каркас воронки билдер «болтает» между ходами онбординга. Разрешаем
+      // перезапись, пока промпта ещё нет (create не случился) — тогда в БД
+      // осядет каркас ФИНАЛЬНОГО хода билдера. После появления промпта —
+      // фиксируем, чтобы рантайм не прыгал.
+      if (turn.carcass && (!agent.carcass || !existingPrompt)) {
         await prisma.agent.update({
           where: { id: agent.id },
           data: { carcass: turn.carcass }
@@ -1777,11 +1795,6 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
           data: { botModel: turn.botModel }
         });
       }
-
-      const existingPrompt = await prisma.promptVersion.findFirst({
-        where: { agentId: agent.id },
-        orderBy: { createdAt: "desc" }
-      });
 
       const profileReady = isProfileReadyForPrompt(mergedProfile);
       let promptDraft = existingPrompt?.content ?? "";
