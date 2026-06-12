@@ -116,26 +116,55 @@ function formatVoiceTime(sec: number): string {
   return `${m}:${r.toString().padStart(2, "0")}`;
 }
 
-// Детерминированная псевдо-волна (смесь синусов) — стабильный «вид» голосового,
-// как в мессенджерах. Высоты в долях 0.35..1.0 от высоты дорожки.
+// Детерминированная псевдо-волна (смесь синусов) — стабильный «вид» голосового.
+// Высоты в долях 0.35..1.0; в px умножаем на VOICE_TRACK_H (не % — иначе
+// во flex столбики схлопываются в 0 и волна не видна до старта).
+const VOICE_TRACK_H = 28;
 const VOICE_WAVEFORM = Array.from({ length: 38 }, (_, i) => {
   const v = Math.abs(Math.sin(i * 1.2) * 0.6 + Math.sin(i * 0.5 + 1) * 0.4);
   return 0.35 + Math.min(1, v) * 0.65;
 });
 
-// Дорожка волны: фоновый слой всегда виден, поверх — заливка по ширине
-// (плавное движение прогресса без дискретной смены цвета столбиков).
+function voiceBarPx(h: number): number {
+  return Math.max(3, Math.round(h * VOICE_TRACK_H));
+}
+
+type VoicePlayerVariant = "platform" | "whatsapp";
+
+const VOICE_PLAYER_STYLES: Record<
+  VoicePlayerVariant,
+  { barBg: string; barFg: string; btn: string; time: string }
+> = {
+  platform: {
+    barBg: "bg-brand/50",
+    barFg: "bg-brand",
+    btn: "text-foreground/75 hover:text-foreground",
+    time: "text-foreground/50"
+  },
+  whatsapp: {
+    barBg: "bg-[#667781]/50",
+    barFg: "bg-[#3b4a54]",
+    btn: "text-[#54656f] hover:text-[#111b21]",
+    time: "text-[#667781]"
+  }
+};
+
+// Дорожка волны: фоновый слой всегда виден, поверх — заливка по ширине.
 function VoiceWaveformTrack({
   progress,
-  onSeek
+  onSeek,
+  variant
 }: {
   progress: number;
   onSeek: (e: React.MouseEvent<HTMLDivElement>) => void;
+  variant: VoicePlayerVariant;
 }) {
   const pct = Math.min(100, Math.max(0, progress * 100));
+  const { barBg, barFg } = VOICE_PLAYER_STYLES[variant];
   return (
     <div
-      className="relative h-8 min-w-0 flex-1 cursor-pointer"
+      className="relative min-w-0 flex-1 cursor-pointer"
+      style={{ height: VOICE_TRACK_H }}
       onClick={onSeek}
       role="slider"
       aria-label="Перемотка"
@@ -144,17 +173,15 @@ function VoiceWaveformTrack({
       aria-valuemax={100}
       tabIndex={0}
     >
-      {/* Фон: приглушённая волна — видна сразу, до старта воспроизведения */}
       <div className="absolute inset-0 flex items-center gap-[2px]">
         {VOICE_WAVEFORM.map((h, i) => (
           <span
             key={`bg-${i}`}
-            className="w-[2px] shrink-0 rounded-full bg-brand/40"
-            style={{ height: `${Math.round(h * 100)}%` }}
+            className={cn("w-[2px] shrink-0 rounded-full", barBg)}
+            style={{ height: voiceBarPx(h) }}
           />
         ))}
       </div>
-      {/* Передний план: яркая волна, обрезается по прогрессу */}
       <div
         className="absolute inset-y-0 left-0 flex items-center gap-[2px] overflow-hidden"
         style={{ width: `${pct}%` }}
@@ -162,8 +189,8 @@ function VoiceWaveformTrack({
         {VOICE_WAVEFORM.map((h, i) => (
           <span
             key={`fg-${i}`}
-            className="w-[2px] shrink-0 rounded-full bg-brand"
-            style={{ height: `${Math.round(h * 100)}%` }}
+            className={cn("w-[2px] shrink-0 rounded-full", barFg)}
+            style={{ height: voiceBarPx(h) }}
           />
         ))}
       </div>
@@ -171,14 +198,21 @@ function VoiceWaveformTrack({
   );
 }
 
-// Кастомный плеер голосового: минималистичная кнопка + волна + длительность.
-function VoiceMessagePlayer({ src }: { src: string }) {
+// Кастомный плеер голосового. variant=whatsapp — вкладка «Тест», platform — «Настройка».
+function VoiceMessagePlayer({
+  src,
+  variant = "platform"
+}: {
+  src: string;
+  variant?: VoicePlayerVariant;
+}) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [current, setCurrent] = useState(0);
   const [duration, setDuration] = useState(0);
   const started = current > 0.05;
   const progress = duration > 0 ? Math.min(1, current / duration) : 0;
+  const styles = VOICE_PLAYER_STYLES[variant];
 
   // Плавное обновление позиции (onTimeUpdate даёт ~4 Гц и дёргается).
   useEffect(() => {
@@ -234,7 +268,10 @@ function VoiceMessagePlayer({ src }: { src: string }) {
         type="button"
         onClick={toggle}
         aria-label={playing ? "Пауза" : "Воспроизвести"}
-        className="flex h-8 w-8 shrink-0 items-center justify-center text-foreground/75 transition hover:text-foreground active:scale-95"
+        className={cn(
+          "flex h-8 w-8 shrink-0 items-center justify-center transition active:scale-95",
+          styles.btn
+        )}
       >
         {playing ? (
           <Pause className="h-[18px] w-[18px] fill-current" />
@@ -243,9 +280,9 @@ function VoiceMessagePlayer({ src }: { src: string }) {
         )}
       </button>
 
-      <VoiceWaveformTrack progress={progress} onSeek={seek} />
+      <VoiceWaveformTrack progress={progress} onSeek={seek} variant={variant} />
 
-      <span className="shrink-0 text-[11px] tabular-nums text-foreground/50">
+      <span className={cn("shrink-0 text-[11px] tabular-nums", styles.time)}>
         {formatVoiceTime(started ? current : duration)}
       </span>
     </div>
@@ -476,16 +513,24 @@ function MessageRow({
   const audioPart = isUser ? getAudioPart(message.parts) : undefined;
 
   if (isUser) {
+    const voiceVariant: VoicePlayerVariant = mode === "test" ? "whatsapp" : "platform";
     return (
       <div className="flex justify-end">
         <div
           className={cn(
-            "max-w-[85%] rounded-2xl rounded-br-md bg-brand/15 text-[15px] leading-relaxed text-foreground",
-            audioPart ? "px-2.5 py-1.5" : "px-4 py-2.5"
+            "max-w-[85%] rounded-2xl rounded-br-md text-[15px] leading-relaxed text-foreground",
+            audioPart
+              ? mode === "test"
+                ? "bg-[#d9fdd3] px-3 py-2"
+                : "bg-brand/15 px-2.5 py-1.5"
+              : mode === "test"
+                ? "bg-[#d9fdd3] px-4 py-2.5"
+                : "bg-brand/15 px-4 py-2.5"
           )}
         >
           {audioPart ? (
             <VoiceMessagePlayer
+              variant={voiceVariant}
               src={`data:${audioPart.audio_mime || "audio/webm"};base64,${audioPart.audio_base64}`}
             />
           ) : (
