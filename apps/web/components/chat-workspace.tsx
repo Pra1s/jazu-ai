@@ -123,8 +123,55 @@ const VOICE_WAVEFORM = Array.from({ length: 38 }, (_, i) => {
   return 0.35 + Math.min(1, v) * 0.65;
 });
 
-// Кастомный плеер голосового: кнопка play/pause + волна + длительность.
-// Стиль под платформу (brand). Без иконки-аватара.
+// Дорожка волны: фоновый слой всегда виден, поверх — заливка по ширине
+// (плавное движение прогресса без дискретной смены цвета столбиков).
+function VoiceWaveformTrack({
+  progress,
+  onSeek
+}: {
+  progress: number;
+  onSeek: (e: React.MouseEvent<HTMLDivElement>) => void;
+}) {
+  const pct = Math.min(100, Math.max(0, progress * 100));
+  return (
+    <div
+      className="relative h-8 min-w-0 flex-1 cursor-pointer"
+      onClick={onSeek}
+      role="slider"
+      aria-label="Перемотка"
+      aria-valuenow={Math.round(pct)}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      tabIndex={0}
+    >
+      {/* Фон: приглушённая волна — видна сразу, до старта воспроизведения */}
+      <div className="absolute inset-0 flex items-center gap-[2px]">
+        {VOICE_WAVEFORM.map((h, i) => (
+          <span
+            key={`bg-${i}`}
+            className="w-[2px] shrink-0 rounded-full bg-brand/40"
+            style={{ height: `${Math.round(h * 100)}%` }}
+          />
+        ))}
+      </div>
+      {/* Передний план: яркая волна, обрезается по прогрессу */}
+      <div
+        className="absolute inset-y-0 left-0 flex items-center gap-[2px] overflow-hidden"
+        style={{ width: `${pct}%` }}
+      >
+        {VOICE_WAVEFORM.map((h, i) => (
+          <span
+            key={`fg-${i}`}
+            className="w-[2px] shrink-0 rounded-full bg-brand"
+            style={{ height: `${Math.round(h * 100)}%` }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Кастомный плеер голосового: минималистичная кнопка + волна + длительность.
 function VoiceMessagePlayer({ src }: { src: string }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -132,6 +179,19 @@ function VoiceMessagePlayer({ src }: { src: string }) {
   const [duration, setDuration] = useState(0);
   const started = current > 0.05;
   const progress = duration > 0 ? Math.min(1, current / duration) : 0;
+
+  // Плавное обновление позиции (onTimeUpdate даёт ~4 Гц и дёргается).
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!playing || !el) return;
+    let raf = 0;
+    const tick = () => {
+      setCurrent(el.currentTime);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing]);
 
   function toggle() {
     const el = audioRef.current;
@@ -150,7 +210,7 @@ function VoiceMessagePlayer({ src }: { src: string }) {
   }
 
   return (
-    <div className="flex w-[min(280px,68vw)] items-center gap-3 py-0.5">
+    <div className="flex w-[min(280px,68vw)] items-center gap-2.5 py-0.5">
       <audio
         ref={audioRef}
         src={src}
@@ -161,7 +221,6 @@ function VoiceMessagePlayer({ src }: { src: string }) {
           setPlaying(false);
           setCurrent(0);
         }}
-        onTimeUpdate={(e) => setCurrent(e.currentTarget.currentTime)}
         onLoadedMetadata={(e) => {
           const d = e.currentTarget.duration;
           if (Number.isFinite(d)) setDuration(d);
@@ -175,38 +234,18 @@ function VoiceMessagePlayer({ src }: { src: string }) {
         type="button"
         onClick={toggle}
         aria-label={playing ? "Пауза" : "Воспроизвести"}
-        className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-brand text-brand-foreground shadow-sm transition hover:opacity-90 active:scale-95"
+        className="flex h-8 w-8 shrink-0 items-center justify-center text-foreground/75 transition hover:text-foreground active:scale-95"
       >
         {playing ? (
-          <Pause className="h-4 w-4 fill-current" />
+          <Pause className="h-[18px] w-[18px] fill-current" />
         ) : (
-          <Play className="h-4 w-4 translate-x-px fill-current" />
+          <Play className="h-[18px] w-[18px] translate-x-px fill-current" />
         )}
       </button>
 
-      <div
-        className="flex h-8 flex-1 cursor-pointer items-center justify-between"
-        onClick={seek}
-        role="slider"
-        aria-label="Перемотка"
-        aria-valuenow={Math.round(progress * 100)}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        tabIndex={0}
-      >
-        {VOICE_WAVEFORM.map((h, i) => {
-          const filled = i / VOICE_WAVEFORM.length <= progress;
-          return (
-            <span
-              key={i}
-              className={cn("w-[2.5px] rounded-full transition-colors", filled ? "bg-brand" : "bg-brand/30")}
-              style={{ height: `${Math.round(h * 100)}%` }}
-            />
-          );
-        })}
-      </div>
+      <VoiceWaveformTrack progress={progress} onSeek={seek} />
 
-      <span className="shrink-0 text-[11px] tabular-nums text-foreground/55">
+      <span className="shrink-0 text-[11px] tabular-nums text-foreground/50">
         {formatVoiceTime(started ? current : duration)}
       </span>
     </div>
