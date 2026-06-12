@@ -12,8 +12,7 @@ import {
   PanelLeft,
   X,
   CreditCard,
-  HelpCircle,
-  Headset
+  HelpCircle
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import SidebarUserMenu from "@/components/sidebar-user-menu";
@@ -105,11 +104,10 @@ function SidebarSupportLink() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        aria-label="Связаться с Jazu"
+        aria-label="Связаться с нами"
         className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
       >
-        <Headset className="h-4 w-4 shrink-0" aria-hidden="true" />
-        Связаться с Jazu
+        Связаться с нами
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>
