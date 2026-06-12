@@ -3,8 +3,10 @@ import QRCode from "qrcode";
 import {
   Browsers,
   DisconnectReason,
+  downloadMediaMessage,
   fetchLatestBaileysVersion,
   makeWASocket,
+  type WAMessage,
 } from "@whiskeysockets/baileys";
 import { env } from "./env.js";
 import { useDbAuthState } from "./db-auth-state.js";
@@ -70,8 +72,48 @@ type WAMessageLike = {
     imageMessage?: { caption?: string | null } | null;
     videoMessage?: { caption?: string | null } | null;
     documentMessage?: { caption?: string | null } | null;
+    /** Голосовое/аудио. ptt=true — кружок-голосовое; mimetype обычно
+     *  "audio/ogg; codecs=opus". Скачиваем байты и отдаём в STT. */
+    audioMessage?: { mimetype?: string | null; seconds?: number | null; ptt?: boolean | null } | null;
   } | null;
 };
+
+/** Потолок размера аудио (~25 МБ — лимит STT-провайдеров). Голосовые WhatsApp
+ *  почти всегда сильно меньше; берём с запасом, чтобы принимать практически всё. */
+const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Скачивает байты голосового/аудио сообщения и кодирует в base64.
+ * Возвращает null, если аудио нет, оно слишком большое или скачать не удалось —
+ * в таких случаях сообщение просто пропускается (бот не падает).
+ */
+async function downloadVoiceAudio(
+  message: WAMessageLike
+): Promise<{ base64: string; mimeType: string } | null> {
+  const audio = message.message?.audioMessage;
+  if (!audio) {
+    return null;
+  }
+  try {
+    // Свежие notify-сообщения скачиваются без reuploadRequest (ctx опционален).
+    const buffer = await downloadMediaMessage(
+      message as unknown as WAMessage,
+      "buffer",
+      {}
+    );
+    if (buffer.length > MAX_AUDIO_BYTES) {
+      console.warn(`WA voice audio too large (${buffer.length} bytes) — skipping`);
+      return null;
+    }
+    return {
+      base64: buffer.toString("base64"),
+      mimeType: audio.mimetype || "audio/ogg; codecs=opus"
+    };
+  } catch (err) {
+    console.error("Failed to download WA voice audio:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
 
 /** Baileys присылает messageTimestamp либо как number, либо как Long
  *  (зависит от proto-парсинга). Унифицируем в number или undefined. */
@@ -309,7 +351,9 @@ async function enqueueInbound(
   message: string,
   waMessageId: string | undefined,
   workerSessionId: string,
-  messageTimestamp: number | undefined
+  messageTimestamp: number | undefined,
+  audioBase64?: string,
+  audioMimeType?: string
 ): Promise<void> {
   const queue = getInboundQueue();
   // Inbound у нас приходит не из HTTP, поэтому request-id генерим тут.
@@ -323,7 +367,9 @@ async function enqueueInbound(
     requestId,
     ...(senderName !== undefined ? { senderName } : {}),
     ...(waMessageId !== undefined ? { waMessageId } : {}),
-    ...(messageTimestamp !== undefined ? { messageTimestamp } : {})
+    ...(messageTimestamp !== undefined ? { messageTimestamp } : {}),
+    ...(audioBase64 !== undefined ? { audioBase64 } : {}),
+    ...(audioMimeType !== undefined ? { audioMimeType } : {})
   };
   await queue.add("wa-inbound", payload, {
     // Тот же dedupe-ключ, что и в API endpoint /whatsapp/inbound/enqueue.
@@ -699,8 +745,14 @@ export class ConnectionManager {
         }
 
         const text = getTextMessage(message);
+        // Нет текста — пробуем голосовое/аудио. Скачиваем байты тут (в воркере
+        // есть сокет), а распознавание делает wa-pipeline уже после dedupe.
+        let voiceAudio: { base64: string; mimeType: string } | null = null;
         if (!text) {
-          continue;
+          voiceAudio = await downloadVoiceAudio(message);
+          if (!voiceAudio) {
+            continue;
+          }
         }
 
         const chatId = message.key.remoteJid;
@@ -720,7 +772,17 @@ export class ConnectionManager {
         // Baileys event loop не блокируется ни на LLM, ни на DB.
         if (env.REDIS_URL) {
           try {
-            await enqueueInbound(agentId, chatId, senderName, text, waMsgId, managed.workerSessionId, messageTimestamp);
+            await enqueueInbound(
+              agentId,
+              chatId,
+              senderName,
+              text ?? "",
+              waMsgId,
+              managed.workerSessionId,
+              messageTimestamp,
+              voiceAudio?.base64,
+              voiceAudio?.mimeType
+            );
             continue;
           } catch (err) {
             console.error(
@@ -732,6 +794,11 @@ export class ConnectionManager {
 
         // Legacy fallback (dev без Redis или после ошибки enqueue).
         // Внимание: блокирует Baileys event loop — для нагрузки не годится.
+        // Голосовые в legacy-пути не поддержаны (там нет STT) — пропускаем.
+        if (!text) {
+          console.warn("Voice message received but Redis is off — skipping (legacy path has no STT)");
+          continue;
+        }
         let lastError: unknown;
         for (let attempt = 1; attempt <= 3; attempt++) {
           try {

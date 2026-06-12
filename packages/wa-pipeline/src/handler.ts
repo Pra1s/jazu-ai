@@ -1,7 +1,8 @@
 import {
   buildRuntimeTurn,
   createInitialProfile,
-  summarizeLead
+  summarizeLead,
+  transcribeAudio
 } from "@jazu/ai";
 import { prisma as defaultPrisma, type Prisma } from "@jazu/db";
 import {
@@ -39,6 +40,13 @@ export type WaInboundInput = {
   chatId: string;
   senderName?: string;
   message: string;
+  /**
+   * Голосовое сообщение: байты media в base64. Если message пустой, а это поле
+   * заполнено — распознаём через transcribeAudio (после dedupe/квоты).
+   */
+  audioBase64?: string;
+  /** MIME аудио (обычно "audio/ogg; codecs=opus"). */
+  audioMimeType?: string;
   waMessageId?: string;
   /**
    * Если передан — проверяется, что текущий WaConnection.workerSessionId
@@ -414,6 +422,73 @@ export async function processWaInbound(
     }
   }
 
+  // Голосовое сообщение: текста нет, но есть аудио → распознаём. Делаем ПОСЛЕ
+  // dedupe, чтобы не платить за STT по дублям. Внутри transcribeAudio —
+  // Gemini → OpenAI fallback. Лимитов по длине нет: принимаем любое аудио.
+  const audioBase64 = input.audioBase64;
+  const isVoiceMessage = !input.message.trim() && Boolean(audioBase64);
+  let messageText = input.message;
+  if (isVoiceMessage && audioBase64) {
+    try {
+      const audioBytes = Buffer.from(audioBase64, "base64");
+      messageText = (
+        await transcribeAudio(audioBytes, {
+          mimeType: input.audioMimeType || "audio/ogg",
+          filename: "voice.ogg"
+        })
+      ).trim();
+    } catch (err) {
+      console.error("[wa-inbound] voice transcription failed", err);
+      messageText = "";
+    }
+  }
+
+  // Распознать не удалось (битое/пустое аудио или оба STT-провайдера упали).
+  // Сохраняем входящее как голосовое и мягко просим текстом — вместо тишины
+  // бота. LLM не дёргаем (нечего обрабатывать).
+  if (isVoiceMessage && !messageText) {
+    const priorOutbound = await prisma.waMessage.count({
+      where: { conversationId: conversation.id, direction: "out" }
+    });
+    await prisma.waMessage.create({
+      data: {
+        conversationId: conversation.id,
+        direction: "in",
+        body: "[голосовое сообщение]",
+        waMsgId: input.waMessageId ?? null,
+        parts: jsonInput([{ type: "text", text: "[голосовое сообщение]" }])
+      }
+    });
+    const fallbackReply =
+      "Извините, не получилось распознать голосовое. Напишите, пожалуйста, текстом.";
+    await prisma.waMessage.create({
+      data: {
+        conversationId: conversation.id,
+        direction: "out",
+        body: fallbackReply,
+        parts: jsonInput(toAssistantParts(fallbackReply, undefined))
+      }
+    });
+    await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: {
+        customerName: input.senderName ?? conversation.customerName,
+        lastMessageAt: new Date(),
+        status: "open"
+      }
+    });
+    return {
+      status: "ok",
+      reply: fallbackReply,
+      summary: "",
+      leadId: null,
+      conversationId: conversation.id,
+      shouldHandoff: false,
+      agentOwnerUserId: agent.userId ?? null,
+      isFirstBotReply: priorOutbound === 0
+    };
+  }
+
   // Bot-loop protection: считаем outbound за последний час по этому чату.
   // Если бот уже отбомбил > лимита — молчим. Один inbound при этом всё равно
   // сохраним в БД, чтобы было видно «вот тут начался цикл».
@@ -431,9 +506,9 @@ export async function processWaInbound(
     data: {
       conversationId: conversation.id,
       direction: "in",
-      body: input.message,
+      body: messageText,
       waMsgId: input.waMessageId ?? null,
-      parts: jsonInput([{ type: "text", text: input.message }])
+      parts: jsonInput([{ type: "text", text: messageText }])
     }
   });
 
@@ -478,7 +553,7 @@ export async function processWaInbound(
 
   const runtimeTurn = await buildRuntimeTurn(
     runtimeProfile,
-    input.message,
+    messageText,
     history
       .slice(0, -1)
       .map((item) => ({
@@ -546,7 +621,7 @@ export async function processWaInbound(
     }
   });
 
-  const summary = runtimeTurn.summary || summarizeLead(profile, input.message);
+  const summary = runtimeTurn.summary || summarizeLead(profile, messageText);
   const clientPhone = input.chatId.split("@")[0] ?? null;
   const noName = !runtimeTurn.extractedName && !conversation.detectedName;
   if (
@@ -561,7 +636,7 @@ export async function processWaInbound(
     agent.id,
     conversation.id,
     runtimeTurn.summary || summary,
-    input.message,
+    messageText,
     runtimeTurn.shouldHandoff,
     options,
     runtimeTurn.handoffType ?? null,

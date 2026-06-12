@@ -48,6 +48,9 @@ services:
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # STT (распознавание голосовых). Пусто = gemini + OpenAI fallback.
+      STT_PROVIDER: ${STT_PROVIDER:-}
+      STT_MODEL: ${STT_MODEL:-}
       RESEND_API_KEY: ${RESEND_API_KEY:?RESEND_API_KEY is required}
       FROM_EMAIL: ${FROM_EMAIL:?FROM_EMAIL is required}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
@@ -161,6 +164,9 @@ services:
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # STT (распознавание голосовых). Пусто = gemini + OpenAI fallback.
+      STT_PROVIDER: ${STT_PROVIDER:-}
+      STT_MODEL: ${STT_MODEL:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       # wa-worker для отправки WA-уведомлений владельцу о новых лидах.
       WA_WORKER_URL: http://wa-worker:4001

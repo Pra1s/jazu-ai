@@ -421,13 +421,12 @@ export async function runJsonCallWithTelemetry<T>(
   }
 }
 
-/**
- * Транскрипция аудио через OpenAI Whisper (speech-to-text).
- * Принимает байты аудио + имя файла, возвращает распознанный текст.
- */
-export async function transcribeAudio(
+type TranscribeOptions = { filename?: string; mimeType?: string; language?: string };
+
+/** Транскрипция через OpenAI Whisper (speech-to-text). "" если нет ключа. */
+async function transcribeWithOpenAI(
   audio: ArrayBuffer | Uint8Array,
-  options: { filename?: string; mimeType?: string; language?: string } = {}
+  options: TranscribeOptions
 ): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return "";
@@ -454,6 +453,92 @@ export async function transcribeAudio(
 
   const data = (await response.json()) as { text?: string };
   return (data.text ?? "").trim();
+}
+
+/**
+ * Транскрипция через Gemini (нативный generateContent с inline-аудио).
+ * OpenAI-совместимый эндпоинт аудио не принимает, поэтому именно нативный REST.
+ * "" если нет ключа.
+ */
+async function transcribeWithGemini(
+  audio: ArrayBuffer | Uint8Array,
+  options: TranscribeOptions
+): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY || process.env.LLM_API_KEY;
+  if (!apiKey) return "";
+
+  const model = process.env.STT_MODEL || "gemini-2.5-flash";
+  // Gemini ждёт чистый MIME без параметров ("audio/ogg", не "audio/ogg; codecs=opus").
+  const mimeType = (options.mimeType || "audio/ogg").split(";")[0]?.trim() || "audio/ogg";
+  const bytes = audio instanceof Uint8Array ? audio : new Uint8Array(audio);
+  const base64 = Buffer.from(bytes).toString("base64");
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [
+        {
+          parts: [
+            { inline_data: { mime_type: mimeType, data: base64 } },
+            { text: "Распознай речь из этого аудио и верни ТОЛЬКО распознанный текст, без комментариев и пояснений." }
+          ]
+        }
+      ],
+      generationConfig: { temperature: 0 }
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gemini transcription failed: ${response.status} ${errorText}`);
+  }
+
+  const data = (await response.json()) as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+  return text.trim();
+}
+
+/**
+ * Транскрипция аудио (speech-to-text) с переключаемым провайдером.
+ * Порядок задаётся STT_PROVIDER (gemini|openai, по умолчанию gemini); второй
+ * провайдер используется как fallback при ошибке или пустом результате.
+ * Возвращает "" если оба провайдера без ключей; бросает, если оба упали с ошибкой.
+ */
+export async function transcribeAudio(
+  audio: ArrayBuffer | Uint8Array,
+  options: TranscribeOptions = {}
+): Promise<string> {
+  const primary = (process.env.STT_PROVIDER || "gemini").toLowerCase();
+  const order: Array<"gemini" | "openai"> =
+    primary === "openai" ? ["openai", "gemini"] : ["gemini", "openai"];
+
+  let lastError: unknown = null;
+  for (const provider of order) {
+    try {
+      const text =
+        provider === "gemini"
+          ? await transcribeWithGemini(audio, options)
+          : await transcribeWithOpenAI(audio, options);
+      if (text) return text;
+      // Пустой результат (нет ключа / тишина в аудио) — пробуем следующего.
+    } catch (err) {
+      lastError = err;
+      console.error(
+        `[transcribeAudio] provider ${provider} failed:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+
+  if (lastError) {
+    // Детали каждого провайдера уже залогированы выше через console.error.
+    throw lastError instanceof Error ? lastError : new Error("transcription failed");
+  }
+  return "";
 }
 
 async function safeOnCall(telemetry: LlmTelemetryHooks | undefined, record: LlmCallTelemetry): Promise<void> {

@@ -40,6 +40,11 @@ export type WaInboundJob = {
   chatId: string;
   senderName?: string;
   message: string;
+  /** Голосовое сообщение: декодированные байты media в base64. Текста при этом
+   *  нет (message=""), распознавание делает wa-pipeline (Gemini → OpenAI). */
+  audioBase64?: string;
+  /** MIME аудио из Baileys (обычно "audio/ogg; codecs=opus"). */
+  audioMimeType?: string;
   waMessageId?: string;
   /**
    * id текущего worker-сокета, чтобы при race-condition (старый сокет успел
