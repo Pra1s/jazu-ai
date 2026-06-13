@@ -1,29 +1,47 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { AlertTriangle, X } from "lucide-react";
 import { businessProfileSchema, type BusinessProfile } from "@jazu/shared";
 import { apiJson } from "@/lib/api";
+import { useAuthStatus } from "@/lib/use-auth-status";
 import ExtraDataDialog from "@/components/extra-data-dialog";
 
+type WaStatusResponse = {
+  workerStatus?: { status?: string } | null;
+  connection?: { status?: string } | null;
+};
+
 // Глобальный баннер в кабинете: пока не заполнены ключевые данные о бизнесе,
-// бот отвечает общими фразами. Показывается на всех страницах кабинета.
+// бот отвечает общими фразами. Показывается ТОЛЬКО при полном доступе к
+// кабинету — когда юзер уже подключил номер телефона и бот подключён к
+// WhatsApp. До активации (онбординг, экран подключения) баннером не спамим.
 // Крестик скрывает баннер только в памяти (до перезагрузки страницы): пока
 // данные не заполнены, при каждом новом заходе/обновлении алерт виден снова.
 export default function ExtraDataBanner() {
+  const pathname = usePathname();
+  const authStatus = useAuthStatus();
+  const needsPhone = authStatus?.ok === true && authStatus.needsPhone === true;
+
   const [profile, setProfile] = useState<BusinessProfile | null>(null);
   const [hasPrompt, setHasPrompt] = useState(false);
+  const [waConnected, setWaConnected] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [hidden, setHidden] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      const [promptData, progress] = await Promise.all([
+      const [promptData, progress, waStatus] = await Promise.all([
         apiJson<{ businessProfile?: unknown }>("/agent/prompt"),
-        apiJson<{ hasPrompt: boolean }>("/agent/progress")
+        apiJson<{ hasPrompt: boolean }>("/agent/progress"),
+        apiJson<WaStatusResponse>("/whatsapp/status").catch(() => null)
       ]);
       setProfile(businessProfileSchema.parse(promptData.businessProfile ?? {}));
       setHasPrompt(progress.hasPrompt);
+      const waState =
+        waStatus?.workerStatus?.status ?? waStatus?.connection?.status ?? "disconnected";
+      setWaConnected(waState === "connected");
     } catch {
       /* non-critical */
     }
@@ -31,11 +49,14 @@ export default function ExtraDataBanner() {
 
   useEffect(() => {
     void refresh();
-    // Промпт/профиль могли измениться из чата настройки или окна доп-данных.
+    // Промпт/профиль могли измениться из чата настройки или окна доп-данных,
+    // а статус WhatsApp — после подключения на экране /whatsapp. Перечитываем
+    // также при смене маршрута, чтобы баннер появился сразу при первом полном
+    // заходе в кабинет.
     const onProgress = () => void refresh();
     window.addEventListener("jazu:promptProgress", onProgress);
     return () => window.removeEventListener("jazu:promptProgress", onProgress);
-  }, [refresh]);
+  }, [refresh, pathname]);
 
 
   // Каких ключевых данных не хватает — без них бот не знает конкретику бизнеса.
@@ -49,7 +70,15 @@ export default function ExtraDataBanner() {
     }
   }
 
-  const show = profile !== null && hasPrompt && !hidden && missing.length > 0;
+  // Показываем только при полном доступе: номер подключён (!needsPhone) и бот
+  // подключён к WhatsApp. Иначе не отвлекаем юзера на этапе онбординга.
+  const show =
+    profile !== null &&
+    hasPrompt &&
+    !hidden &&
+    missing.length > 0 &&
+    !needsPhone &&
+    waConnected;
 
   return (
     <>
