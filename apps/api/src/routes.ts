@@ -205,7 +205,7 @@ function toAssistantParts(text: string, actionButton?: unknown, promptCard?: Pro
  * Транскрипт идёт в content/text (нужен истории и контексту LLM).
  */
 async function resolveChatInput(
-  body: { message?: string; audioBase64?: string; mimeType?: string }
+  body: z.infer<typeof chatBodySchema>
 ): Promise<{ message: string; userParts: AssistantPart[] }> {
   if (body.audioBase64) {
     const buffer = Buffer.from(body.audioBase64, "base64");

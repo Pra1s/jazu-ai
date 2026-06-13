@@ -3,6 +3,13 @@
 Хронология решённых багов: что случилось, почему, как решили. Новые записи —
 сверху. Правила ведения см. в `.cursor/rules/bugfix-journal.mdc`.
 
+## 2026-06-13 — apps/api не проходил typecheck (exactOptionalPropertyTypes)
+
+- **Что случилось:** на `origin/main` `apps/api` падал typecheck — `routes.ts(1782)` и `routes.ts(2268)`, ошибка TS2379 на вызовах `resolveChatInput(body)`: `Type 'string | undefined' is not assignable to type 'string'`. В CI не ловилось (strict-typecheck по воркспейсу, видимо, не гоняется на пуше).
+- **Почему:** регрессия от голосовой фичи (запись от 2026-06-12). `chatBodySchema.parse()` через zod даёт тип `{ message?: string | undefined; audioBase64?: string | undefined; mimeType?: string | undefined }`, а параметр `resolveChatInput` был описан как `{ message?: string; ... }` — без `| undefined`. При `exactOptionalPropertyTypes: true` (`tsconfig.base.json`) `message?: string` означает «строго `string`, не `undefined`», поэтому zod-тело не присваивалось.
+- **Как решили:** параметр `resolveChatInput` типизирован прямо из схемы — `body: z.infer<typeof chatBodySchema>` (`apps/api/src/routes.ts`). Теперь тип параметра всегда совпадает с тем, что возвращает `parse()`, и не разъедется при изменениях схемы.
+- **Как проверить / не повторить:** `pnpm --filter @jazu/api exec tsc --noEmit` — зелёный. При добавлении хелперов, принимающих результат `*.parse()` zod-схемы с опциональными полями, типизировать параметр через `z.infer<typeof schema>`, а не вручную (иначе из-за `exactOptionalPropertyTypes` всплывёт TS2379). Желательно добавить `tsc --noEmit` по воркспейсу в CI.
+
 ## 2026-06-12 — Голосовое в веб-чате как аудио-файл (а не текст)
 
 - **Что случилось:** в веб-чате (настройка и тест) запись голосового шла через `/transcribe`, а распознанный текст просто вставлялся в поле ввода — пользователь отправлял его как обычное текстовое сообщение. Голосового как такового в ленте не было видно.
