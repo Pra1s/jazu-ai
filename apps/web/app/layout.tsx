@@ -6,6 +6,7 @@ import AppShell from "@/components/app-shell";
 import GuestRouteGuard from "@/components/guest-route-guard";
 import PhoneRequiredGuard from "@/components/phone-required-guard";
 import { PostHogIdentify } from "@/components/posthog-identify";
+import { AttributionCapture } from "@/components/attribution-capture";
 
 const inter = Inter({
   subsets: ["latin", "cyrillic"],
@@ -31,6 +32,7 @@ export default function RootLayout({
         style={{ fontFamily: "var(--font-inter), system-ui, sans-serif" }}
       >
         <PostHogIdentify />
+        <AttributionCapture />
         <AppShell>
           <GuestRouteGuard>
             <PhoneRequiredGuard>{children}</PhoneRequiredGuard>

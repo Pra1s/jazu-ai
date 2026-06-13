@@ -10,6 +10,7 @@ import { FormAlert } from "@/components/ui/form-alert";
 import { cn } from "@/lib/cn";
 import { useAuthStatus } from "@/lib/use-auth-status";
 import SiteFooter from "@/components/site-footer";
+import { track, AnalyticsEvent } from "@/lib/analytics";
 
 type BuilderTurn = {
   assistantText: string;
@@ -54,6 +55,8 @@ export default function LandingClient() {
     if (!business.trim() || busy) return;
     setBusy(true);
     setError(null);
+    // Первый осознанный шаг воронки: пользователь начал собирать бота.
+    track(AnalyticsEvent.BuilderStarted);
     try {
       await apiJson("/session", { method: "POST" });
       await apiSse<BuilderTurn>("/agent/chat", { message: business.trim() });

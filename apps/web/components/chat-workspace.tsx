@@ -11,6 +11,7 @@ import {
   businessProfileSchema
 } from "@jazu/shared";
 import { apiJson, apiSse } from "@/lib/api";
+import { track, AnalyticsEvent, type TriggerReason } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -795,13 +796,34 @@ export default function ChatWorkspace() {
   // Показ непропускаемой подсказки у кнопки «Подключить WhatsApp». Блокируем
   // ввод и просим шапку скрыть свой мягкий coachmark, чтобы подсказки не
   // накладывались друг на друга.
-  function showConnectHint(opts: { title: string; description: string }) {
+  function showConnectHint(opts: { title: string; description: string; reason: TriggerReason }) {
+    // Аналитика: показали CTA на регистрацию. trigger_reason отделяет «продукт
+    // сработал» (lead_handoff) от таймаутов (message_limit / three_edits).
+    track(AnalyticsEvent.RegistrationOffered, { trigger_reason: opts.reason });
     setInputDisabled(true);
-    setStickyHint(opts);
+    setStickyHint({ title: opts.title, description: opts.description });
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("jazu:connectHintShown"));
     }
   }
+
+  // Аналитика воронки: builder_completed — когда промпт впервые собран
+  // (hasPrompt стал true). bot_test_started — когда юзер впервые перешёл во
+  // вкладку теста. Каждое — ровно раз за сессию компонента (guard через ref).
+  const builderCompletedFiredRef = useRef(false);
+  const testStartedFiredRef = useRef(false);
+  useEffect(() => {
+    if (hasPrompt && !builderCompletedFiredRef.current) {
+      builderCompletedFiredRef.current = true;
+      track(AnalyticsEvent.BuilderCompleted);
+    }
+  }, [hasPrompt]);
+  useEffect(() => {
+    if (mode === "test" && !testStartedFiredRef.current) {
+      testStartedFiredRef.current = true;
+      track(AnalyticsEvent.BotTestStarted);
+    }
+  }, [mode]);
 
   async function refreshPrompt() {
     try {
@@ -972,7 +994,8 @@ export default function ChatWorkspace() {
       showConnectHint({
         title: "Ваш бот только что закрыл тестового лида! ⚡️",
         description:
-          "Готовы получать такие же заявки от реальных клиентов? Привяжите WhatsApp в 1 клик, чтобы сохранить бота и подключить его к реальным клиентам."
+          "Готовы получать такие же заявки от реальных клиентов? Привяжите WhatsApp в 1 клик, чтобы сохранить бота и подключить его к реальным клиентам.",
+        reason: "lead_handoff"
       });
       return;
     }
@@ -984,7 +1007,8 @@ export default function ChatWorkspace() {
       showConnectHint({
         title: "Ваш ИИ-продавец отлично держит удар! 🥊",
         description:
-          "Система полностью готова к бою. Привяжите WhatsApp в 1 клик, чтобы забрать этого бота себе и подключить к реальным клиентам."
+          "Система полностью готова к бою. Привяжите WhatsApp в 1 клик, чтобы забрать этого бота себе и подключить к реальным клиентам.",
+        reason: "message_limit"
       });
     }
   }
@@ -1026,7 +1050,8 @@ export default function ChatWorkspace() {
           showConnectHint({
             title: "Идеально! Бот усвоил ваши правила.",
             description:
-              "Сохраните прогресс, чтобы настройки не потерялись, привяжите WhatsApp и подключите бота к реальным клиентам."
+              "Сохраните прогресс, чтобы настройки не потерялись, привяжите WhatsApp и подключите бота к реальным клиентам.",
+            reason: "three_edits"
           });
         }, 5000);
       }

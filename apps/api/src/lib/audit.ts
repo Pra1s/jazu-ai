@@ -27,6 +27,17 @@ export type AuditEvent =
   | "session.revoked"
   | "account.deleted";
 
+/**
+ * Карта «технический AuditEvent → читаемое имя воронки» ТОЛЬКО для зеркала в
+ * PostHog. Имена, которых тут нет, уходят в PostHog как есть. Таблицу AuditLog
+ * и саму бизнес-логику это не затрагивает — аудит/безопасность остаются на
+ * технических именах, читаемые имена получает только аналитика.
+ */
+const POSTHOG_EVENT_NAMES: Partial<Record<AuditEvent, string>> = {
+  "wa.connected": "whatsapp_connected",
+  "purchase.completed": "purchase_completed"
+};
+
 type AuditOptions = {
   event: AuditEvent;
   userId?: string | null;
@@ -68,10 +79,11 @@ export async function recordAudit(options: AuditOptions): Promise<void> {
   // Зеркалируем событие в PostHog. Только если userId задан — PostHog
   // требует distinctId, а гостевые события (login.failed и т.п.) к юзеру
   // не привязаны. capturePostHog — no-op без инициализации и не бросает.
+  // Имя переводим в каноническое для аналитики (см. POSTHOG_EVENT_NAMES).
   if (options.userId) {
     capturePostHog({
       distinctId: options.userId,
-      event: options.event,
+      event: POSTHOG_EVENT_NAMES[options.event] ?? options.event,
       ...(options.metadata !== undefined ? { properties: options.metadata } : {})
     });
   }

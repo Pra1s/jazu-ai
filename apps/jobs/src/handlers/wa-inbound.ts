@@ -1,6 +1,7 @@
 import { getOutboundQueue, type Job, type WaInboundJob, type WaOutboundJob } from "@jazu/queue";
 import { processWaInbound } from "@jazu/wa-pipeline";
 import { capturePostHog } from "@jazu/observability";
+import { prisma } from "@jazu/db";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 
@@ -63,12 +64,41 @@ export async function handleWaInbound(job: Job<WaInboundJob>): Promise<void> {
       };
       await getOutboundQueue().add("wa-outbound", outbound);
     }
+
+    // Аналитика: активация владельца. bot_activated = «бот реально обработал
+    // первый живой диалог» (ответил живому клиенту). Шлём РОВНО раз на
+    // владельца: атомарный updateMany с guard botActivatedAt=null — если
+    // строка обновилась (была пустой), значит активация первая → отправляем
+    // событие; иначе молчим. Исключает повторы и гонки между параллельными
+    // воркерами. Ошибку БД глушим — аналитика не должна ронять обработку.
+    // Гард isFirstBotReply: активация возможна только на первом ответе в
+    // переписке, поэтому проверяем лишь там — не дёргаем БД на каждое сообщение.
+    if (result.reply && result.reply.trim().length > 0 && result.isFirstBotReply && result.agentOwnerUserId) {
+      try {
+        const activated = await prisma.user.updateMany({
+          where: { id: result.agentOwnerUserId, botActivatedAt: null },
+          data: { botActivatedAt: new Date() }
+        });
+        if (activated.count > 0) {
+          capturePostHog({
+            distinctId: result.agentOwnerUserId,
+            event: "bot_activated",
+            properties: { agentId }
+          });
+        }
+      } catch (err) {
+        log.warn({ err: err instanceof Error ? err.message : err }, "bot_activated mark failed");
+      }
+    }
+
     // Аналитика: новый лид. shouldHandoff = AI решил передать менеджеру на
     // этом ходу (момент «горячего» лида). distinctId — владелец агента.
+    // Имя client_lead_created — отдельный неймспейс воронки реальных клиентов
+    // (не путать с воронкой привлечения самого владельца).
     if (result.shouldHandoff && result.leadId && result.agentOwnerUserId) {
       capturePostHog({
         distinctId: result.agentOwnerUserId,
-        event: "lead_created",
+        event: "client_lead_created",
         properties: { agentId, leadId: result.leadId }
       });
     }

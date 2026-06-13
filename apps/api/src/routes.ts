@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { prisma, type Prisma } from "@jazu/db";
+import { capturePostHog } from "@jazu/observability";
 import { actionButtonSchema, businessProfileSchema, type ActionButton, type Carcass, type PromptCard } from "@jazu/shared";
 import {
   applyEnrichment,
@@ -707,6 +708,10 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
             name: email.split("@").at(0) ?? email
           }
         });
+    // Аналитика: регистрация (новый юзер) — отделяем от повторных login.success.
+    if (!existing) {
+      capturePostHog({ distinctId: user.id, event: "signup_completed", properties: { method: "email_code" } });
+    }
 
     const existingSession = await getOrCreateSession(request, reply);
 
@@ -824,6 +829,10 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
             phone: phoneFromToken
           }
         });
+    // Аналитика: регистрация (новый юзер) через magic-link.
+    if (!existing) {
+      capturePostHog({ distinctId: user.id, event: "signup_completed", properties: { method: "magic_link" } });
+    }
 
     // 4. Берём текущую сессию (которая, скорее всего, ещё анонимная).
     const existingSession = await getOrCreateSession(request, reply);
@@ -1293,6 +1302,8 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
             avatarUrl: profile.picture ?? null
           }
         });
+        // Аналитика: регистрация (новый юзер) через Google.
+        capturePostHog({ distinctId: user.id, event: "signup_completed", properties: { method: "google" } });
       }
     }
 
