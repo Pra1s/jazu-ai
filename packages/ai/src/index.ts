@@ -67,6 +67,9 @@ export type RuntimeTurn = {
   // 3.1 (П1/R2): имя клиента, если назвал в этом ходе ("" если нет). Зеркало extractedNeed,
   // бэк сохраняет в буфер detectedName и прокидывает обратно (см. план-патч П3).
   extractedName?: string;
+  // Телефон, если клиент НАЗВАЛ его в этом ходе (кейс «оформляет третье лицо»);
+  // "" если не называл. Бэк кладёт его на карточку лида приоритетнее номера чата.
+  extractedPhone?: string;
   actionButton?: ActionButton | undefined;
 };
 
@@ -443,6 +446,7 @@ export async function buildRuntimeTurn(
       extractedNeed?: string;
       needChanged?: boolean;
       extractedName?: string;
+      extractedPhone?: string;
       actionButton?: ActionButton;
     }>({
       system: runtimeSystem,
@@ -487,6 +491,11 @@ export async function buildRuntimeTurn(
     const extractedName = typeof completion.extractedName === "string"
       ? completion.extractedName.trim()
       : "";
+    // Телефон, названный клиентом в этом ходе (если оформляет третье лицо). Бэк
+    // нормализует и кладёт на карточку приоритетнее номера WA-чата (см. phone.ts).
+    const extractedPhone = typeof completion.extractedPhone === "string"
+      ? completion.extractedPhone.trim()
+      : "";
 
     return {
       // 3.1 (П6): механически чистим тире/пробелы в исходящем reply сразу после парсинга.
@@ -497,6 +506,7 @@ export async function buildRuntimeTurn(
       extractedNeed,
       needChanged,
       extractedName,
+      extractedPhone,
       ...(completion.actionButton ? { actionButton: completion.actionButton } : {})
     };
   } catch (error) {

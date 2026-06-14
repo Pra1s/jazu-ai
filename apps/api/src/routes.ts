@@ -106,6 +106,7 @@ const whatsappInboundSchema = z.object({
   agentId: z.string().min(1),
   chatId: z.string().min(1),
   senderName: z.string().optional(),
+  senderPhone: z.string().optional(),
   message: z.string().min(1),
   waMessageId: z.string().optional(),
   // Baileys.message.messageTimestamp — Unix-секунды. Используется для
@@ -2973,6 +2974,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         agentId: payload.agentId,
         chatId: payload.chatId,
         ...(payload.senderName !== undefined ? { senderName: payload.senderName } : {}),
+        ...(payload.senderPhone !== undefined ? { senderPhone: payload.senderPhone } : {}),
         message: payload.message,
         ...(payload.waMessageId !== undefined ? { waMessageId: payload.waMessageId } : {}),
         ...(workerSessionId ? { workerSessionId } : {}),
@@ -3067,6 +3069,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
           agentId: payload.agentId,
           chatId: payload.chatId,
           ...(payload.senderName !== undefined ? { senderName: payload.senderName } : {}),
+          ...(payload.senderPhone !== undefined ? { senderPhone: payload.senderPhone } : {}),
           message: payload.message,
           ...(payload.waMessageId !== undefined ? { waMessageId: payload.waMessageId } : {}),
           ...(workerSessionId ? { workerSessionId } : {}),

@@ -344,10 +344,27 @@ function collectHistoryChatIds(payload: {
  * Положить inbound в Redis-очередь wa:inbound. Используется как основной
  * путь обработки — освобождает Baileys event loop моментально.
  */
+/**
+ * Реальный телефон клиента из ключа сообщения (только цифры). Для WhatsApp-LID
+ * чатов remoteJid это `<lid>@lid` (НЕ номер), а PN лежит в remoteJidAlt. Берём
+ * ту из {remoteJid, remoteJidAlt}, что оканчивается на @s.whatsapp.net.
+ */
+function realPhoneFromKey(key: { remoteJid?: string | null; remoteJidAlt?: string }): string | undefined {
+  for (const jid of [key.remoteJid, key.remoteJidAlt]) {
+    if (jid && jid.endsWith("@s.whatsapp.net")) {
+      // Отбрасываем суффикс устройства "<номер>:<device>"; строгая проверка цифр.
+      const user = jid.slice(0, jid.indexOf("@")).split(":")[0] ?? "";
+      if (/^\d{7,15}$/.test(user)) return user;
+    }
+  }
+  return undefined;
+}
+
 async function enqueueInbound(
   agentId: string,
   chatId: string,
   senderName: string | undefined,
+  senderPhone: string | undefined,
   message: string,
   waMessageId: string | undefined,
   workerSessionId: string,
@@ -366,6 +383,7 @@ async function enqueueInbound(
     workerSessionId,
     requestId,
     ...(senderName !== undefined ? { senderName } : {}),
+    ...(senderPhone !== undefined ? { senderPhone } : {}),
     ...(waMessageId !== undefined ? { waMessageId } : {}),
     ...(messageTimestamp !== undefined ? { messageTimestamp } : {}),
     ...(audioBase64 !== undefined ? { audioBase64 } : {}),
@@ -386,6 +404,7 @@ async function sendInboundToApi(
   agentId: string,
   chatId: string,
   senderName: string | undefined,
+  senderPhone: string | undefined,
   message: string,
   waMessageId: string | undefined,
   workerSessionId: string,
@@ -402,6 +421,7 @@ async function sendInboundToApi(
       agentId,
       chatId,
       senderName,
+      senderPhone,
       message,
       waMessageId,
       messageTimestamp
@@ -761,6 +781,8 @@ export class ConnectionManager {
         }
 
         const senderName = message.pushName || undefined;
+        // Реальный номер клиента (для @lid-чатов chatId им не является).
+        const senderPhone = realPhoneFromKey(message.key);
         const waMsgId = message.key.id ?? undefined;
         const participant = message.key.participant ?? undefined;
         const messageTimestamp = extractMessageTimestamp(message.messageTimestamp);
@@ -776,6 +798,7 @@ export class ConnectionManager {
               agentId,
               chatId,
               senderName,
+              senderPhone,
               text ?? "",
               waMsgId,
               managed.workerSessionId,
@@ -806,6 +829,7 @@ export class ConnectionManager {
               agentId,
               chatId,
               senderName,
+              senderPhone,
               text,
               waMsgId,
               managed.workerSessionId,

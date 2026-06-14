@@ -14,6 +14,7 @@ import {
 import { sendTelegramLead, sendWhatsappOwnerNotification } from "./notifications.js";
 import { trackConversationUsage, type UsageView } from "./billing.js";
 import { buildLlmTelemetry } from "./llm-telemetry.js";
+import { resolveLeadPhones } from "./phone.js";
 
 type PrismaClient = typeof defaultPrisma;
 
@@ -39,6 +40,12 @@ export type WaInboundInput = {
   agentId: string;
   chatId: string;
   senderName?: string;
+  /**
+   * Реальный телефон клиента (только цифры), резолвнутый воркером из ключа
+   * сообщения. Нужен, потому что для WhatsApp-LID чатов chatId — это не номер.
+   * Если не пришёл (старый воркер / PN-чат) — фолбэк на chatId в resolveLeadPhones.
+   */
+  senderPhone?: string;
   message: string;
   /**
    * Голосовое сообщение: байты media в base64. Если message пустой, а это поле
@@ -213,7 +220,8 @@ async function sendHandoffNotification(
   agentId: string,
   summary: string,
   handoffType: HandoffType,
-  clientPhone: string | null | undefined,
+  whatsappPhone: string | null,
+  contactPhone: string | null,
   options: WaInboundOptions
 ): Promise<void> {
   const agent = await prisma.agent.findUnique({
@@ -225,7 +233,8 @@ async function sendHandoffNotification(
   const notificationLines = [
     title.plain,
     summary,
-    ...(clientPhone ? [`Телефон: ${clientPhone}`] : []),
+    ...(whatsappPhone ? [`Номер WhatsApp: ${whatsappPhone}`] : []),
+    ...(contactPhone ? [`Номер для связи: ${contactPhone}`] : []),
     `Агент: ${agent?.name ?? agentId}`
   ];
 
@@ -254,7 +263,7 @@ async function sendHandoffNotification(
     void sendTelegramLead(
       options.telegramBotToken,
       agent.user.telegramChatId,
-      [title.html, summary, ...(clientPhone ? [`Телефон: ${clientPhone}`] : []), `Agent: ${agent?.name ?? agentId}`].join("\n")
+      [title.html, summary, ...(whatsappPhone ? [`Номер WhatsApp: ${whatsappPhone}`] : []), ...(contactPhone ? [`Номер для связи: ${contactPhone}`] : []), `Agent: ${agent?.name ?? agentId}`].join("\n")
     );
   }
 }
@@ -268,7 +277,8 @@ async function writeLeadIfNeeded(
   shouldCreate: boolean,
   options: WaInboundOptions,
   handoffType: HandoffType = null,
-  clientPhone?: string | null
+  whatsappPhone: string | null = null,
+  contactPhone: string | null = null
 ): Promise<string | null> {
   if (!shouldCreate) return null;
   const existing = await prisma.lead.findFirst({
@@ -293,7 +303,7 @@ async function writeLeadIfNeeded(
           }
         }
       });
-      await sendHandoffNotification(prisma, agentId, summary, handoffType, clientPhone, options);
+      await sendHandoffNotification(prisma, agentId, summary, handoffType, whatsappPhone, contactPhone, options);
     }
     return existing.id;
   }
@@ -312,7 +322,7 @@ async function writeLeadIfNeeded(
     }
   });
 
-  await sendHandoffNotification(prisma, agentId, summary, handoffType, clientPhone, options);
+  await sendHandoffNotification(prisma, agentId, summary, handoffType, whatsappPhone, contactPhone, options);
 
   return lead.id;
 }
@@ -622,7 +632,13 @@ export async function processWaInbound(
   });
 
   const summary = runtimeTurn.summary || summarizeLead(profile, messageText);
-  const clientPhone = input.chatId.split("@")[0] ?? null;
+  // Два номера для карточки: базовый WA-номер чата (реальный, не lid) и отдельно
+  // «номер для связи», если клиент назвал другой. lid номером НЕ считаем.
+  const { whatsappPhone, contactPhone } = resolveLeadPhones({
+    chatId: input.chatId,
+    senderPhone: input.senderPhone,
+    extractedPhone: runtimeTurn.extractedPhone
+  });
   const noName = !runtimeTurn.extractedName && !conversation.detectedName;
   if (
     runtimeTurn.shouldHandoff
@@ -640,7 +656,8 @@ export async function processWaInbound(
     runtimeTurn.shouldHandoff,
     options,
     runtimeTurn.handoffType ?? null,
-    clientPhone
+    whatsappPhone,
+    contactPhone
   );
 
   return {

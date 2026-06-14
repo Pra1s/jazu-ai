@@ -39,6 +39,9 @@ export type WaInboundJob = {
   agentId: string;
   chatId: string;
   senderName?: string;
+  /** Реальный телефон клиента (цифры), резолвнутый воркером из ключа сообщения
+   *  (для @lid-чатов chatId номером не является — см. wa-pipeline/phone.ts). */
+  senderPhone?: string;
   message: string;
   /** Голосовое сообщение: декодированные байты media в base64. Текста при этом
    *  нет (message=""), распознавание делает wa-pipeline (Gemini → OpenAI). */
