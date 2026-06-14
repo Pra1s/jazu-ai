@@ -22,6 +22,7 @@ type AuthStatus =
       userId: string;
       email: string | null;
       name: string | null;
+      phone: string | null;
     }
   | null;
 
@@ -36,7 +37,7 @@ async function fetchStatus(): Promise<AuthStatus> {
     const data = (await res.json()) as {
       success?: boolean;
       needsPhone?: boolean;
-      user?: { id?: string; email?: string | null; name?: string | null } | null;
+      user?: { id?: string; email?: string | null; name?: string | null; phone?: string | null } | null;
     };
     if (!data.success || !data.user?.id) return { ok: false };
     return {
@@ -44,7 +45,8 @@ async function fetchStatus(): Promise<AuthStatus> {
       needsPhone: Boolean(data.needsPhone),
       userId: data.user.id,
       email: data.user.email ?? null,
-      name: data.user.name ?? null
+      name: data.user.name ?? null,
+      phone: data.user.phone ?? null
     };
   } catch {
     return { ok: false };

@@ -29,7 +29,8 @@ export function PostHogIdentify() {
       lastKey.current = key;
       posthog.identify(status.userId, {
         ...(status.email ? { email: status.email } : {}),
-        ...(status.name ? { name: status.name } : {})
+        ...(status.name ? { name: status.name } : {}),
+        ...(status.phone ? { phone: status.phone } : {})
       });
     } else {
       if (lastKey.current === "anon") return;
