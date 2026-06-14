@@ -18,6 +18,7 @@ import {
 import { cn } from "@/lib/cn";
 import SidebarUserMenu from "@/components/sidebar-user-menu";
 import { useAuthStatus } from "@/lib/use-auth-status";
+import { SUPPORT_WHATSAPP_URL } from "@/lib/support-whatsapp";
 import {
   Dialog,
   DialogContent,
@@ -89,12 +90,6 @@ function WhatsAppIcon({ className }: { className?: string }) {
     </svg>
   );
 }
-
-const SUPPORT_WHATSAPP_PHONE = "77770957126";
-const SUPPORT_WHATSAPP_PREFILL = "Здравствуйте! Пишу по платформе Jazu.";
-const SUPPORT_WHATSAPP_URL = `https://wa.me/${SUPPORT_WHATSAPP_PHONE}?text=${encodeURIComponent(
-  SUPPORT_WHATSAPP_PREFILL
-)}`;
 
 function SidebarSupportLink() {
   const [open, setOpen] = useState(false);

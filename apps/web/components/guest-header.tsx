@@ -14,6 +14,7 @@ function WhatsAppIcon({ className }: { className?: string }) {
 }
 import { apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { SUPPORT_WHATSAPP_URL } from "@/lib/support-whatsapp";
 
 type ProgressResponse = {
   hasPrompt: boolean;
@@ -183,7 +184,7 @@ export default function GuestHeader() {
               подключением или решить любой вопрос.
             </p>
             <a
-              href="https://wa.me/77000000000"
+              href={SUPPORT_WHATSAPP_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-[#25D366] py-2.5 text-sm font-semibold text-white transition hover:bg-[#1ebe5c]"
