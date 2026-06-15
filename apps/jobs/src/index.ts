@@ -5,8 +5,10 @@ import {
   closeRedisWriter,
   getRedisWriter,
   QUEUE_WA_INBOUND,
+  QUEUE_LEAD_NOTIFY,
   startWorker,
-  type WaInboundJob
+  type WaInboundJob,
+  type LeadNotifyJob
 } from "@jazu/queue";
 import {
   captureError,
@@ -19,6 +21,7 @@ import {
 } from "@jazu/observability";
 import { env } from "./env.js";
 import { handleWaInbound } from "./handlers/wa-inbound.js";
+import { handleLeadNotify } from "./handlers/lead-notify.js";
 import { logger } from "./logger.js";
 import { startRetentionCron } from "./retention.js";
 import { startSubscriptionRemindersCron } from "./subscription-reminders.js";
@@ -44,6 +47,23 @@ const waInboundWorker = startWorker<WaInboundJob>(QUEUE_WA_INBOUND, handleWaInbo
 
 waInboundWorker.worker.on("ready", () => {
   logger.info({ queue: QUEUE_WA_INBOUND }, "worker ready");
+});
+
+// Отложенная отправка карточек лидов (придержка ~2 мин для «номера для связи»).
+const leadNotifyWorker = startWorker<LeadNotifyJob>(QUEUE_LEAD_NOTIFY, handleLeadNotify, {
+  concurrency: 5
+});
+
+leadNotifyWorker.worker.on("ready", () => {
+  logger.info({ queue: QUEUE_LEAD_NOTIFY }, "worker ready");
+});
+
+leadNotifyWorker.worker.on("failed", (job, err) => {
+  captureError(err, {
+    route: "jobs:lead-notify",
+    agentId: (job?.data)?.agentId ?? null,
+    extra: { jobId: job?.id, leadId: (job?.data)?.leadId ?? null }
+  });
 });
 
 waInboundWorker.worker.on("completed", (job) => {
@@ -136,6 +156,11 @@ async function shutdown(signal: string): Promise<void> {
     await waInboundWorker.close();
   } catch (err) {
     logger.error({ err }, "error closing wa:inbound worker");
+  }
+  try {
+    await leadNotifyWorker.close();
+  } catch (err) {
+    logger.error({ err }, "error closing lead-notify worker");
   }
   try {
     await closeAllQueues();

@@ -11,6 +11,7 @@ import {
   type ActionButton,
   type Carcass
 } from "@jazu/shared";
+import { getLeadNotifyQueue } from "@jazu/queue";
 import { sendTelegramLead, sendWhatsappOwnerNotification } from "./notifications.js";
 import { trackConversationUsage, type UsageView } from "./billing.js";
 import { buildLlmTelemetry } from "./llm-telemetry.js";
@@ -137,6 +138,12 @@ export type WaInboundOptions = {
    * По умолчанию 30 (норма ~5-10 ответов в час даже у активного диалога).
    */
   botLoopMaxRepliesPerHour?: number;
+  /**
+   * Задержка перед отправкой карточки лида владельцу (мс). Карточку придерживаем,
+   * чтобы поймать «номер для связи», названный сразу после закрытия, и отправить
+   * ОДНУ полную карточку. По умолчанию 120000 (2 мин). См. notifyLeadById.
+   */
+  leadNotifyDelayMs?: number | undefined;
 };
 
 const DEFAULT_BOT_LOOP_LIMIT = 30;
@@ -212,6 +219,25 @@ const handoffRank: Record<string, number> = {
   complaint: 4
 };
 
+// Лейбл «Агент» на карточке лида: имя агента у владельцев не настраивается
+// (стандартное значение), поэтому показываем единый брендовый лейбл.
+const LEAD_CARD_AGENT_LABEL = "jazu.chat";
+
+// LLM иногда префиксует summary ярлыком типа («Горячий лид: …»), который и так
+// есть в заголовке карточки. Срезаем дубль, сохраняя маркер «[имя не указано]».
+function formatLeadSummary(summary: string): string {
+  const noName = /^\[имя не указано\]\s*/;
+  const hasNoName = noName.test(summary);
+  const body = summary
+    .replace(noName, "")
+    .replace(
+      /^(?:🔥|⚠️|❓|📞|🔔)?\s*(?:Горячий лид|Жалоба(?:\s*-\s*срочно)?|Нестандартный вопрос|Просят менеджера|Новый лид)\s*:\s*/i,
+      ""
+    )
+    .trim();
+  return hasNoName ? `[имя не указано] ${body}` : body;
+}
+
 // Отправка уведомлений владельцу о лиде/эскалации. Вынесено из writeLeadIfNeeded,
 // чтобы переиспользовать и в ветке создания нового лида, и при эскалации
 // существующего. Сам грузит agent (с user/waConnections) по agentId.
@@ -230,12 +256,13 @@ async function sendHandoffNotification(
   });
 
   const title = handoffNotificationTitle(handoffType);
+  const leadLine = `Данные лида: ${formatLeadSummary(summary)}`;
   const notificationLines = [
     title.plain,
-    summary,
+    leadLine,
     ...(whatsappPhone ? [`Номер WhatsApp: ${whatsappPhone}`] : []),
     ...(contactPhone ? [`Номер для связи: ${contactPhone}`] : []),
-    `Агент: ${agent?.name ?? agentId}`
+    `Агент: ${LEAD_CARD_AGENT_LABEL}`
   ];
 
   // Канал 1 (основной): WhatsApp на личный номер владельца через его бота.
@@ -263,9 +290,22 @@ async function sendHandoffNotification(
     void sendTelegramLead(
       options.telegramBotToken,
       agent.user.telegramChatId,
-      [title.html, summary, ...(whatsappPhone ? [`Номер WhatsApp: ${whatsappPhone}`] : []), ...(contactPhone ? [`Номер для связи: ${contactPhone}`] : []), `Agent: ${agent?.name ?? agentId}`].join("\n")
+      [title.html, leadLine, ...(whatsappPhone ? [`Номер WhatsApp: ${whatsappPhone}`] : []), ...(contactPhone ? [`Номер для связи: ${contactPhone}`] : []), `Агент: ${LEAD_CARD_AGENT_LABEL}`].join("\n")
     );
   }
+}
+
+// Дефолтная задержка отправки карточки лида (мс). Переопределяется
+// options.leadNotifyDelayMs (env LEAD_NOTIFY_DELAY_MS в jobs). 2 минуты.
+const DEFAULT_LEAD_NOTIFY_DELAY_MS = 120_000;
+
+// Дебаунсим карточку ТОЛЬКО для горячего лида: там есть подтверждение номера
+// («по этому номеру?»), и клиент может назвать «номер для связи» сразу после
+// закрытия — придержка ловит его в одну карточку. Остальные типы (жалоба,
+// нестандартный вопрос, просят менеджера, общий) срочные и без позднего номера —
+// шлём сразу.
+function shouldDebounceLeadCard(handoffType: HandoffType): boolean {
+  return handoffType === "hot_lead";
 }
 
 async function writeLeadIfNeeded(
@@ -293,17 +333,27 @@ async function writeLeadIfNeeded(
     const prevRank = prevType ? (handoffRank[prevType] ?? 0) : 0;
     const newRank = handoffType ? (handoffRank[handoffType] ?? 0) : 0;
     if (newRank > prevRank) {
+      // Шлём сейчас, если карточка уже ушла (догоняем эскалацию) ИЛИ новый тип не
+      // дебаунсится (напр. hot_lead → жалоба: жалоба срочная, нельзя ждать
+      // отложенную карточку). Иначе — оставляем отложенному заданию.
+      const sendNow = prevFields.notified === true || !shouldDebounceLeadCard(handoffType);
       await prisma.lead.update({
         where: { id: existing.id },
         data: {
           fields: {
             ...prevFields,
             ...(handoffType ? { handoffType } : {}),
+            ...(whatsappPhone ? { whatsappPhone } : {}),
+            ...(contactPhone ? { contactPhone } : {}),
+            ...(sendNow ? { notified: true, notifiedAt: new Date().toISOString() } : {}),
             escalatedAt: new Date().toISOString()
           }
         }
       });
-      await sendHandoffNotification(prisma, agentId, summary, handoffType, whatsappPhone, contactPhone, options);
+      // sendNow помечает notified=true → отложенное задание (если было) потом no-op.
+      if (sendNow) {
+        await sendHandoffNotification(prisma, agentId, summary, handoffType, whatsappPhone, contactPhone, options);
+      }
     }
     return existing.id;
   }
@@ -316,15 +366,90 @@ async function writeLeadIfNeeded(
       fields: {
         sourceMessage: message,
         createdAt: new Date().toISOString(),
-        ...(handoffType ? { handoffType } : {})
+        // Мгновенные типы помечаем notified сразу (карточка уходит ниже инлайн);
+        // дебаунсится только hot_lead.
+        notified: !shouldDebounceLeadCard(handoffType),
+        ...(handoffType ? { handoffType } : {}),
+        ...(whatsappPhone ? { whatsappPhone } : {}),
+        ...(contactPhone ? { contactPhone } : {})
       },
       status: "new"
     }
   });
 
-  await sendHandoffNotification(prisma, agentId, summary, handoffType, whatsappPhone, contactPhone, options);
+  if (shouldDebounceLeadCard(handoffType)) {
+    // hot_lead: карточку НЕ шлём сразу — придерживаем ~2 мин, чтобы поймать «номер
+    // для связи» (его называют сразу после закрытия) и отправить ОДНУ полную
+    // карточку. jobId = lead.id (cuid) → одно задание на лид, БЕЗ ':' (BullMQ не
+    // рекомендует двоеточие в jobId). Отправит notifyLeadById (consumer в jobs).
+    const delayMs = options.leadNotifyDelayMs ?? DEFAULT_LEAD_NOTIFY_DELAY_MS;
+    await getLeadNotifyQueue().add(
+      "lead-notify",
+      { leadId: lead.id, agentId },
+      { delay: delayMs, jobId: lead.id }
+    );
+  } else {
+    // Жалоба / нестандартный вопрос / просят менеджера / общий лид — срочные, без
+    // flow с поздним «номером для связи». Шлём карточку владельцу сразу.
+    await sendHandoffNotification(prisma, agentId, summary, handoffType, whatsappPhone, contactPhone, options);
+  }
 
   return lead.id;
+}
+
+// Номер для связи, названный ПОСЛЕ закрытия лида, дописываем в открытый лид МОЛЧА
+// (без отправки): если карточка ещё в окне задержки — отложенное задание подхватит
+// номер и пришлёт ОДНУ полную карточку; если карточка уже ушла — номер останется на
+// записи лида (виден в кабинете), второй карточкой владельца НЕ спамим.
+async function updateOpenLeadContactPhone(
+  prisma: PrismaClient,
+  conversationId: string,
+  whatsappPhone: string | null,
+  contactPhone: string | null
+): Promise<void> {
+  if (!contactPhone) return;
+  const lead = await prisma.lead.findFirst({
+    where: { conversationId, status: "new" },
+    orderBy: { createdAt: "desc" }
+  });
+  if (!lead) return;
+  const fields = (lead.fields as Record<string, unknown> | null) ?? {};
+  if (fields.contactPhone === contactPhone) return; // уже записан — ничего не делаем
+  await prisma.lead.update({
+    where: { id: lead.id },
+    data: {
+      fields: {
+        ...fields,
+        contactPhone,
+        ...(whatsappPhone ? { whatsappPhone } : {}),
+        contactPhoneUpdatedAt: new Date().toISOString()
+      }
+    }
+  });
+}
+
+// Отправка карточки лида владельцу по leadId — вызывается из отложенного задания
+// lead-notify (через ~2 мин после закрытия). К этому моменту в lead.fields уже
+// собрано всё (включая «номер для связи»), поэтому карточка одна и полная.
+// Идемпотентно: если карточка уже отправлена (fields.notified) — выходим.
+export async function notifyLeadById(
+  prisma: PrismaClient,
+  leadId: string,
+  agentId: string,
+  options: WaInboundOptions
+): Promise<void> {
+  const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+  if (!lead) return;
+  const fields = (lead.fields as Record<string, unknown> | null) ?? {};
+  if (fields.notified === true) return; // уже отправлено — не дублируем
+  const handoffType = typeof fields.handoffType === "string" ? (fields.handoffType as HandoffType) : null;
+  const whatsappPhone = typeof fields.whatsappPhone === "string" ? fields.whatsappPhone : null;
+  const contactPhone = typeof fields.contactPhone === "string" ? fields.contactPhone : null;
+  await sendHandoffNotification(prisma, agentId, lead.summary, handoffType, whatsappPhone, contactPhone, options);
+  await prisma.lead.update({
+    where: { id: leadId },
+    data: { fields: { ...fields, notified: true, notifiedAt: new Date().toISOString() } }
+  });
 }
 
 export async function processWaInbound(
@@ -659,6 +784,10 @@ export async function processWaInbound(
     whatsappPhone,
     contactPhone
   );
+
+  // Номер для связи, названный после закрытия, дописываем в открытый лид МОЛЧА —
+  // отложенная карточка подхватит его (или останется в кабинете). Без второй карточки.
+  await updateOpenLeadContactPhone(prisma, conversation.id, whatsappPhone, contactPhone);
 
   return {
     status: "ok",

@@ -38,7 +38,8 @@ export async function handleWaInbound(job: Job<WaInboundJob>): Promise<void> {
   const result = await processWaInbound(job.data, {
     telegramBotToken: env.TELEGRAM_BOT_TOKEN,
     workerUrl: env.WA_WORKER_URL,
-    internalToken: env.API_INTERNAL_TOKEN
+    internalToken: env.API_INTERNAL_TOKEN,
+    leadNotifyDelayMs: env.LEAD_NOTIFY_DELAY_MS
   });
 
   const elapsedMs = Date.now() - started;

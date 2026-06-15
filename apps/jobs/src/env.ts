@@ -43,7 +43,13 @@ const schema = z.object({
   WA_REPLY_DELAY_FIRST_MIN_MS: z.coerce.number().int().positive().default(45_000),
   WA_REPLY_DELAY_FIRST_MAX_MS: z.coerce.number().int().positive().default(60_000),
   WA_REPLY_DELAY_MIN_MS: z.coerce.number().int().positive().default(20_000),
-  WA_REPLY_DELAY_MAX_MS: z.coerce.number().int().positive().default(35_000)
+  WA_REPLY_DELAY_MAX_MS: z.coerce.number().int().positive().default(35_000),
+  /**
+   * Задержка отправки карточки лида владельцу (мс). Карточку придерживаем, чтобы
+   * поймать «номер для связи», названный сразу после закрытия, и отправить ОДНУ
+   * полную карточку. По умолчанию 120000 (2 мин); поставь 180000 для 3 мин.
+   */
+  LEAD_NOTIFY_DELAY_MS: z.coerce.number().int().positive().default(120_000)
 });
 
 export const env = schema.parse(process.env);

@@ -7,13 +7,16 @@ export {
 export {
   QUEUE_WA_INBOUND,
   QUEUE_WA_OUTBOUND,
+  QUEUE_LEAD_NOTIFY,
   getQueue,
   getInboundQueue,
   getOutboundQueue,
+  getLeadNotifyQueue,
   startWorker,
   closeAllQueues,
   type WaInboundJob,
   type WaOutboundJob,
+  type LeadNotifyJob,
   type StartedWorker
 } from "./queues.js";
 

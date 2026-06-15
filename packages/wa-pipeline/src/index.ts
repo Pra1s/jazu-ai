@@ -21,6 +21,7 @@ export { sendTelegramLead } from "./notifications.js";
 
 export {
   processWaInbound,
+  notifyLeadById,
   type WaInboundInput,
   type WaInboundResult,
   type WaInboundOptions

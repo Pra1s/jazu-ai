@@ -34,6 +34,11 @@ import { buildRedisForWorker, getRedisWriter } from "./redis.js";
 // разделитель в Redis-ключах), поэтому отделяем сегменты дефисом.
 export const QUEUE_WA_INBOUND = "wa-inbound";
 export const QUEUE_WA_OUTBOUND = "wa-outbound";
+// Отложенная отправка карточки лида владельцу. Карточку придерживаем на пару
+// минут после закрытия лида, чтобы поймать «номер для связи» (его называют сразу
+// после закрытия) и отправить ОДНУ полную карточку, а не две. См.
+// wa-pipeline: writeLeadIfNeeded (enqueue) → notifyLeadById (consumer в jobs).
+export const QUEUE_LEAD_NOTIFY = "lead-notify";
 
 export type WaInboundJob = {
   agentId: string;
@@ -86,6 +91,13 @@ export type WaOutboundJob = {
   participant?: string;
 };
 
+export type LeadNotifyJob = {
+  /** Лид, по которому шлём карточку владельцу. */
+  leadId: string;
+  /** Агент-владелец лида (нужен для загрузки получателя уведомления). */
+  agentId: string;
+};
+
 const DEFAULT_QUEUE_OPTIONS: Omit<QueueOptions, "connection"> = {
   defaultJobOptions: {
     // Successful jobs — храним сутки + не больше 1000 штук, чтобы Redis не
@@ -118,6 +130,10 @@ export function getInboundQueue(): Queue<WaInboundJob> {
 
 export function getOutboundQueue(): Queue<WaOutboundJob> {
   return getQueue<WaOutboundJob>(QUEUE_WA_OUTBOUND);
+}
+
+export function getLeadNotifyQueue(): Queue<LeadNotifyJob> {
+  return getQueue<LeadNotifyJob>(QUEUE_LEAD_NOTIFY);
 }
 
 export type StartedWorker<T> = {
