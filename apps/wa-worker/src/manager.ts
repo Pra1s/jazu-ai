@@ -549,6 +549,11 @@ export class ConnectionManager {
       // вернуться на Browsers.ubuntu('Chrome')). Красивое имя устройства в
       // Linked Devices не стоит сломанной привязки.
       browser: Browsers.ubuntu("Chrome"),
+      // НЕ держим бота «в сети» постоянно. По умолчанию Baileys шлёт presence
+      // "available" сразу после коннекта и держит онлайн всё время — выглядит
+      // не по-человечески. Вместо этого появляемся в сети только на время
+      // ответа клиенту (см. waitWithTyping/stopTyping в humanize-reply.ts).
+      markOnlineOnConnect: false,
       // Запрашиваем максимально полную историю чатов при привязке. Нужно для
       // pre-connection snapshot: чем полнее history-sync, тем больше старых
       // чатов мы пометим как «до-коннектные» и бот в них не полезет.

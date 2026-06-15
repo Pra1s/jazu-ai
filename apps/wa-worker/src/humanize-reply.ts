@@ -70,6 +70,10 @@ export async function waitWithTyping(
 
   await sleep(silentWait);
 
+  // Появляемся в сети только сейчас — когда реально начинаем отвечать
+  // (печатать). До этого момента бот оффлайн (markOnlineOnConnect: false).
+  await socket.sendPresenceUpdate("available", chatId).catch(() => undefined);
+
   const typingUntil = Date.now() + typingDuration;
   while (Date.now() < typingUntil) {
     await socket.sendPresenceUpdate("composing", chatId).catch(() => undefined);
@@ -87,4 +91,6 @@ export async function stopTyping(
   chatId: string
 ): Promise<void> {
   await socket.sendPresenceUpdate("paused", chatId).catch(() => undefined);
+  // Уходим из сети сразу после ответа — бот не должен «висеть онлайн».
+  await socket.sendPresenceUpdate("unavailable", chatId).catch(() => undefined);
 }
