@@ -30,10 +30,9 @@ const envSchema = z.object({
   WA_REPLY_DELAY_FIRST_MAX_MS: z.coerce.number().int().positive().default(60_000),
   WA_REPLY_DELAY_MIN_MS: z.coerce.number().int().positive().default(20_000),
   WA_REPLY_DELAY_MAX_MS: z.coerce.number().int().positive().default(35_000),
-  WA_READ_DELAY_FIRST_MIN_MS: z.coerce.number().int().positive().default(5_000),
-  WA_READ_DELAY_FIRST_MAX_MS: z.coerce.number().int().positive().default(15_000),
-  WA_READ_DELAY_MIN_MS: z.coerce.number().int().positive().default(2_000),
-  WA_READ_DELAY_MAX_MS: z.coerce.number().int().positive().default(6_000),
+  /** За сколько до начала ответа бот «читает» входящее (синие галочки). */
+  WA_READ_LEAD_MIN_MS: z.coerce.number().int().positive().default(4_000),
+  WA_READ_LEAD_MAX_MS: z.coerce.number().int().positive().default(6_000),
   WA_TYPING_FIRST_MIN_MS: z.coerce.number().int().positive().default(8_000),
   WA_TYPING_FIRST_MAX_MS: z.coerce.number().int().positive().default(20_000),
   WA_TYPING_MIN_MS: z.coerce.number().int().positive().default(5_000),

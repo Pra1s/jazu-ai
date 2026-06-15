@@ -12,7 +12,6 @@ import { env } from "./env.js";
 import { useDbAuthState } from "./db-auth-state.js";
 import { getInboundQueue, type WaInboundJob } from "@jazu/queue";
 import {
-  computeReadDelayMs,
   randomInt,
   stopTyping,
   waitWithTyping,
@@ -441,6 +440,13 @@ export class ConnectionManager {
   private repliedChats = new Set<string>();
   /** Сериализация send/humanize на один chatId. */
   private chatSendLocks = new Map<string, Promise<void>>();
+  /**
+   * Последнее непрочитанное входящее на чат (chatKey → ключ сообщения).
+   * Прочтение (синие галочки) ставим НЕ сразу по приходу, а за ~5с до начала
+   * ответа — см. onRead в sendUnlocked / waitWithTyping. Так бот выглядит
+   * по-человечески: «открыл чат, прочитал, начал печатать».
+   */
+  private pendingReads = new Map<string, { waMsgId: string; participant?: string }>();
 
   private getConnection(agentId: string) {
     return this.connections.get(agentId);
@@ -470,40 +476,30 @@ export class ConnectionManager {
     this.repliedChats.add(chatKey(agentId, chatId));
   }
 
-  /** Синие галочки «прочитано» — не блокирует Baileys event loop. */
-  scheduleReadReceipt(
+  /**
+   * Ставит синие галочки «прочитано» на последнее входящее в чате.
+   * Вызывается из onRead за ~5с до начала ответа (а не сразу по приходу),
+   * чтобы выглядеть по-человечески. No-op, если читать нечего.
+   */
+  private async markChatRead(
     agentId: string,
     socket: NonNullable<ManagedConnection["socket"]>,
-    chatId: string,
-    waMsgId: string | undefined,
-    participant: string | undefined
-  ): void {
-    if (!env.WA_HUMANIZE_REPLIES || !waMsgId) return;
-
-    const isFirstInChat = !this.hasRepliedBefore(agentId, chatId);
-    const delayMs = computeReadDelayMs(
-      isFirstInChat,
-      env.WA_READ_DELAY_FIRST_MIN_MS,
-      env.WA_READ_DELAY_FIRST_MAX_MS,
-      env.WA_READ_DELAY_MIN_MS,
-      env.WA_READ_DELAY_MAX_MS
-    );
-
-    void (async () => {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-      const connection = this.getConnection(agentId);
-      if (!connection?.socket || connection.socket !== socket) return;
-      await connection.socket
-        .readMessages([
-          {
-            remoteJid: chatId,
-            id: waMsgId,
-            fromMe: false,
-            ...(participant ? { participant } : {})
-          }
-        ])
-        .catch(() => undefined);
-    })();
+    chatId: string
+  ): Promise<void> {
+    const key = chatKey(agentId, chatId);
+    const pending = this.pendingReads.get(key);
+    if (!pending) return;
+    this.pendingReads.delete(key);
+    await socket
+      .readMessages([
+        {
+          remoteJid: chatId,
+          id: pending.waMsgId,
+          fromMe: false,
+          ...(pending.participant ? { participant: pending.participant } : {})
+        }
+      ])
+      .catch(() => undefined);
   }
 
   async start(
@@ -792,7 +788,14 @@ export class ConnectionManager {
         const participant = message.key.participant ?? undefined;
         const messageTimestamp = extractMessageTimestamp(message.messageTimestamp);
 
-        this.scheduleReadReceipt(agentId, socket, chatId, waMsgId, participant);
+        // Не читаем сразу. Запоминаем последнее входящее — прочитаем его за
+        // ~5с до начала ответа (см. sendUnlocked → onRead).
+        if (env.WA_HUMANIZE_REPLIES && waMsgId) {
+          this.pendingReads.set(chatKey(agentId, chatId), {
+            waMsgId,
+            ...(participant ? { participant } : {})
+          });
+        }
 
         // Production path: enqueue в Redis. Ответ прилетит обратно через
         // wa:outbound и его отправит outboundWorker (другой consumer ниже).
@@ -1084,12 +1087,19 @@ export class ConnectionManager {
     }
 
     if (env.WA_HUMANIZE_REPLIES && payload.humanize) {
+      const socket = connection.socket;
+      const chatId = payload.chatId;
       await waitWithTyping(
-        connection.socket,
-        payload.chatId,
+        socket,
+        chatId,
         payload.humanize.targetReplyAtMs,
         payload.humanize.isFirstBotReply,
-        humanizeTimingConfig()
+        humanizeTimingConfig(),
+        {
+          // Прочитать входящее за ~5с до начала «печатает…».
+          readLeadMs: randomInt(env.WA_READ_LEAD_MIN_MS, env.WA_READ_LEAD_MAX_MS),
+          onRead: () => this.markChatRead(agentId, socket, chatId)
+        }
       );
     }
 

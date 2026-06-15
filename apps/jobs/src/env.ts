@@ -40,8 +40,8 @@ const schema = z.object({
    * удаляются ночью cron-задачей. 0 = выключено.
    */
   RETENTION_DAYS: z.coerce.number().int().min(0).default(90),
-  WA_REPLY_DELAY_FIRST_MIN_MS: z.coerce.number().int().positive().default(90_000),
-  WA_REPLY_DELAY_FIRST_MAX_MS: z.coerce.number().int().positive().default(150_000),
+  WA_REPLY_DELAY_FIRST_MIN_MS: z.coerce.number().int().positive().default(45_000),
+  WA_REPLY_DELAY_FIRST_MAX_MS: z.coerce.number().int().positive().default(60_000),
   WA_REPLY_DELAY_MIN_MS: z.coerce.number().int().positive().default(20_000),
   WA_REPLY_DELAY_MAX_MS: z.coerce.number().int().positive().default(35_000)
 });

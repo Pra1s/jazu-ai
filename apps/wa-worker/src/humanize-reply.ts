@@ -32,18 +32,6 @@ export function computeTypingDurationMs(
   return Math.min(randomInt(minMs, maxMs), remainingWaitMs);
 }
 
-export function computeReadDelayMs(
-  isFirstInChat: boolean,
-  readDelayFirstMinMs: number,
-  readDelayFirstMaxMs: number,
-  readDelayMinMs: number,
-  readDelayMaxMs: number
-): number {
-  return isFirstInChat
-    ? randomInt(readDelayFirstMinMs, readDelayFirstMaxMs)
-    : randomInt(readDelayMinMs, readDelayMaxMs);
-}
-
 const TYPING_REFRESH_MS = 8_000;
 
 function sleep(ms: number): Promise<void> {
@@ -51,24 +39,48 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export type ReadBeforeReply = {
+  /** За сколько мс до начала «печатает…» поставить «прочитано». */
+  readLeadMs: number;
+  /** Колбэк, который ставит синие галочки на входящее. */
+  onRead: () => Promise<void>;
+};
+
 /**
  * Ждём до targetReplyAtMs, показываем «печатает…» в конце окна,
  * затем вызывающий код отправляет сообщение и зовёт stopTyping().
+ *
+ * Если передан `read`, то примерно за read.readLeadMs до начала печати
+ * вызываем read.onRead() — так бот «читает» сообщение перед самым ответом,
+ * а не сразу по приходу.
  */
 export async function waitWithTyping(
   socket: Pick<WASocket, "sendPresenceUpdate">,
   chatId: string,
   targetReplyAtMs: number,
   isFirstBotReply: boolean,
-  config: HumanizeTimingConfig
+  config: HumanizeTimingConfig,
+  read?: ReadBeforeReply
 ): Promise<void> {
   const remainingWait = computeRemainingWait(targetReplyAtMs);
-  if (remainingWait <= 0) return;
+  if (remainingWait <= 0) {
+    // Окно уже вышло — читаем и сразу отвечаем.
+    if (read) await read.onRead();
+    return;
+  }
 
   const typingDuration = computeTypingDurationMs(isFirstBotReply, remainingWait, config);
   const silentWait = remainingWait - typingDuration;
 
-  await sleep(silentWait);
+  if (read) {
+    // Молчим, читаем за ~readLeadMs до печати, ждём остаток до печати.
+    const waitBeforeRead = Math.max(0, silentWait - read.readLeadMs);
+    await sleep(waitBeforeRead);
+    await read.onRead();
+    await sleep(silentWait - waitBeforeRead);
+  } else {
+    await sleep(silentWait);
+  }
 
   // Появляемся в сети только сейчас — когда реально начинаем отвечать
   // (печатать). До этого момента бот оффлайн (markOnlineOnConnect: false).
