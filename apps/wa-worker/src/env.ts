@@ -26,8 +26,8 @@ const envSchema = z.object({
     .optional()
     .transform((v) => v !== "false" && v !== "0")
     .default(true),
-  WA_REPLY_DELAY_FIRST_MIN_MS: z.coerce.number().int().positive().default(90_000),
-  WA_REPLY_DELAY_FIRST_MAX_MS: z.coerce.number().int().positive().default(150_000),
+  WA_REPLY_DELAY_FIRST_MIN_MS: z.coerce.number().int().positive().default(45_000),
+  WA_REPLY_DELAY_FIRST_MAX_MS: z.coerce.number().int().positive().default(60_000),
   WA_REPLY_DELAY_MIN_MS: z.coerce.number().int().positive().default(20_000),
   WA_REPLY_DELAY_MAX_MS: z.coerce.number().int().positive().default(35_000),
   WA_READ_DELAY_FIRST_MIN_MS: z.coerce.number().int().positive().default(5_000),
