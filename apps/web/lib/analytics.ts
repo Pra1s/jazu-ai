@@ -7,6 +7,7 @@ import posthog from "posthog-js";
  * purchase_completed) живут на бэкенде и сюда не входят.
  */
 export const AnalyticsEvent = {
+  LandingViewed: "landing_viewed",
   BuilderStarted: "builder_started",
   BuilderCompleted: "builder_completed",
   BotTestStarted: "bot_test_started",

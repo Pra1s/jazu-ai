@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowDown, ArrowRight, Bot, MessageSquare, Sparkles, Zap } from "lucide-react";
 import { apiJson, apiSse } from "@/lib/api";
@@ -113,6 +113,18 @@ export default function LandingClient() {
       router.replace("/dashboard");
     }
   }, [authStatus, router]);
+
+  // Аналитика: landing_viewed — верх воронки привлечения. Шлём раз на визит,
+  // только когда статус разрешился в «гость» (authStatus.ok === false):
+  // авторизованных тут не считаем — их редиректит в кабинет, это не вход в
+  // воронку. Ref — чтобы не задвоить при ре-рендерах в рамках одного визита.
+  const landingViewedFiredRef = useRef(false);
+  useEffect(() => {
+    if (authStatus?.ok === false && !landingViewedFiredRef.current) {
+      landingViewedFiredRef.current = true;
+      track(AnalyticsEvent.LandingViewed);
+    }
+  }, [authStatus]);
 
   async function start() {
     if (!business.trim() || busy) return;

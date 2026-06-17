@@ -43,6 +43,11 @@ type AuditOptions = {
   userId?: string | null;
   request?: Pick<FastifyRequest, "ip" | "headers" | "id"> | null;
   metadata?: Record<string, unknown>;
+  // Зеркалить ли событие в PostHog (аналитика воронки). По умолчанию true.
+  // Ставим false, когда audit-лог нужен на каждый раз, а конверсию в PostHog —
+  // только однократно (напр. wa.connected: реконнекты логируем, но не считаем
+  // новой конверсией whatsapp_connected). На AuditLog не влияет.
+  mirrorToPostHog?: boolean;
 };
 
 /**
@@ -80,7 +85,7 @@ export async function recordAudit(options: AuditOptions): Promise<void> {
   // требует distinctId, а гостевые события (login.failed и т.п.) к юзеру
   // не привязаны. capturePostHog — no-op без инициализации и не бросает.
   // Имя переводим в каноническое для аналитики (см. POSTHOG_EVENT_NAMES).
-  if (options.userId) {
+  if (options.userId && options.mirrorToPostHog !== false) {
     capturePostHog({
       distinctId: options.userId,
       event: POSTHOG_EVENT_NAMES[options.event] ?? options.event,

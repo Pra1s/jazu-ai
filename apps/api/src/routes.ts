@@ -2700,11 +2700,24 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         select: { userId: true }
       });
       if (agent?.userId) {
+        // whatsapp_connected — конверсия привлечения, считаем РОВНО раз на юзера.
+        // Атомарный guard: updateMany по whatsappConnectedAt=null. Если строка
+        // обновилась — это первый коннект → зеркалим в PostHog; реконнекты всё
+        // равно пишем в AuditLog (безопасность/ops), но новой конверсии не плодят.
+        let firstConnect = false;
+        try {
+          const marked = await prisma.user.updateMany({
+            where: { id: agent.userId, whatsappConnectedAt: null },
+            data: { whatsappConnectedAt: new Date() }
+          });
+          firstConnect = marked.count > 0;
+        } catch { /* guard не критичен — audit-лог ниже пишем в любом случае */ }
         await recordAudit({
           event: "wa.connected",
           userId: agent.userId,
           request,
-          metadata: { agentId: body.agentId, phone: body.phone ?? null }
+          metadata: { agentId: body.agentId, phone: body.phone ?? null },
+          mirrorToPostHog: firstConnect
         });
       }
     }

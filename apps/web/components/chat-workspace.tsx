@@ -807,10 +807,15 @@ export default function ChatWorkspace() {
     }
   }
 
-  // Аналитика воронки: builder_completed — когда промпт впервые собран
-  // (hasPrompt стал true). bot_test_started — когда юзер впервые перешёл во
-  // вкладку теста. Каждое — ровно раз за сессию компонента (guard через ref).
+  // Аналитика воронки: builder_completed — когда промпт ВПЕРВЫЕ собран в этой
+  // сессии (переход hasPrompt false→true во время работы билдера).
+  // bot_test_started — когда юзер впервые перешёл во вкладку теста. Каждое —
+  // ровно раз за сессию компонента (guard через ref). ВАЖНО: вернувшийся юзер,
+  // у которого промпт уже есть, при заходе/перезагрузке /dashboard НЕ должен
+  // считаться новым завершением — иначе builder_completed раздувается (по разу
+  // на каждый маунт). Подавление — в refreshPrompt через initialPromptResolvedRef.
   const builderCompletedFiredRef = useRef(false);
+  const initialPromptResolvedRef = useRef(false);
   const testStartedFiredRef = useRef(false);
   useEffect(() => {
     if (hasPrompt && !builderCompletedFiredRef.current) {
@@ -819,10 +824,20 @@ export default function ChatWorkspace() {
     }
   }, [hasPrompt]);
   useEffect(() => {
-    if (mode === "test" && !testStartedFiredRef.current) {
-      testStartedFiredRef.current = true;
-      track(AnalyticsEvent.BotTestStarted);
-    }
+    if (mode !== "test" || testStartedFiredRef.current) return;
+    testStartedFiredRef.current = true;
+    // bot_test_started — milestone воронки «дошёл до теста», должен считаться
+    // раз на юзера, а не заново при каждом заходе в режим теста в новой сессии
+    // (per-mount ref сбрасывается на перезагрузке). Серверного «уже тестировал»
+    // нет → durable-флаг в localStorage (раз на браузер). Мягкий: очистка кэша/
+    // другое устройство сбросит — допустимо, это не цель Meta, а метрика воронки.
+    try {
+      if (typeof window !== "undefined") {
+        if (window.localStorage.getItem("jazu_bot_test_started") === "1") return;
+        window.localStorage.setItem("jazu_bot_test_started", "1");
+      }
+    } catch { /* localStorage недоступен (приватный режим) — шлём как обычно */ }
+    track(AnalyticsEvent.BotTestStarted);
   }, [mode]);
 
   async function refreshPrompt() {
@@ -833,6 +848,16 @@ export default function ChatWorkspace() {
     } catch { /* non-critical */ }
     try {
       const progress = await apiJson<{ hasPrompt: boolean }>("/agent/progress");
+      // Первое разрешение состояния промпта в этой сессии. Если промпт УЖЕ
+      // собран — это вернувшийся юзер, а не новое завершение билдера: заранее
+      // взводим guard, чтобы эффект ниже не выстрелил builder_completed на
+      // загрузке. Реальное завершение = переход false→true уже после этого.
+      if (!initialPromptResolvedRef.current) {
+        initialPromptResolvedRef.current = true;
+        if (progress.hasPrompt) {
+          builderCompletedFiredRef.current = true;
+        }
+      }
       setHasPrompt(progress.hasPrompt);
     } catch { /* non-critical */ }
   }
