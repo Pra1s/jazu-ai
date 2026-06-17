@@ -77,6 +77,11 @@
   }
 }
 
+@keyframes brand-border-pulse {
+  0%, 100% { border-color: hsl(var(--brand) / 0.30); }
+  50% { border-color: hsl(var(--brand) / 0.75); }
+}
+
 @layer utilities {
   .bg-background { background-color: hsl(var(--background)); }
   .bg-card { background-color: hsl(var(--card)); }
@@ -94,6 +99,19 @@
   .bg-brand\/45 { background-color: hsl(var(--brand) / 0.45); }
   .bg-brand\/55 { background-color: hsl(var(--brand) / 0.55); }
   .text-brand { color: hsl(var(--brand)); }
+  .bg-brand\/90 { background-color: hsl(var(--brand) / 0.90); }
+  .border-brand\/30 { border-color: hsl(var(--brand) / 0.30); }
+  .border-brand\/40 { border-color: hsl(var(--brand) / 0.40); }
+  .border-brand\/60 { border-color: hsl(var(--brand) / 0.60); }
+
+  /* Ненавязчивый пульс бордера поля ввода (только пока поле пустое) */
+  .animate-brand-border {
+    border-color: hsl(var(--brand) / 0.40);
+    animation: brand-border-pulse 2.4s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .animate-brand-border { animation: none; }
+  }
   .bg-test-canvas { background-color: hsl(var(--test-canvas)); }
 
   .text-foreground { color: hsl(var(--foreground)); }
