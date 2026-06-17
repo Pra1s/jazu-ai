@@ -82,6 +82,17 @@
   50% { border-color: hsl(var(--brand) / 0.75); }
 }
 
+@keyframes demo-fade {
+  0% { opacity: 0; transform: translateY(6px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+/* Заливка активного индикатора-примера (синхронно с автопереключением) */
+@keyframes indicator-fill {
+  from { width: 0%; }
+  to { width: 100%; }
+}
+
 @layer utilities {
   .bg-background { background-color: hsl(var(--background)); }
   .bg-card { background-color: hsl(var(--card)); }
@@ -111,6 +122,17 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .animate-brand-border { animation: none; }
+  }
+
+  /* Плавная смена примеров диалога в демо-блоке */
+  .animate-demo-fade { animation: demo-fade 0.45s ease-out; }
+  @media (prefers-reduced-motion: reduce) {
+    .animate-demo-fade { animation: none; }
+  }
+
+  .animate-indicator-fill { animation: indicator-fill 5s linear forwards; }
+  @media (prefers-reduced-motion: reduce) {
+    .animate-indicator-fill { width: 100%; animation: none; }
   }
   .bg-test-canvas { background-color: hsl(var(--test-canvas)); }
 
