@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowDown,
@@ -228,6 +228,79 @@ const faqs = [
   }
 ];
 
+// Карточка ввода — переиспользуется в hero и в финальном CTA.
+// Вынесена из LandingClient и мемоизирована: typewriter живёт ВНУТРИ карточки,
+// поэтому тики печати плейсхолдера перерисовывают только её, а не весь лендинг
+// (раньше это вызывало лаги при скролле — печать шла каждые 30–60 мс).
+const InputCard = memo(function InputCard({
+  idSuffix,
+  className,
+  business,
+  onChange,
+  onStart,
+  busy,
+  error
+}: {
+  idSuffix: string;
+  className?: string;
+  business: string;
+  onChange: (value: string) => void;
+  onStart: () => void;
+  busy: boolean;
+  error: string | null;
+}) {
+  const empty = business.trim().length === 0;
+  const typedExample = useTypewriter(PLACEHOLDER_EXAMPLES, empty);
+
+  return (
+    <div
+      className={cn(
+        "rounded-2xl border border-brand/40 bg-card p-4 shadow-[0_0_0_4px_hsl(var(--brand)/0.10),0_8px_30px_-12px_hsl(var(--brand)/0.35)] sm:p-5",
+        className
+      )}
+    >
+      <label htmlFor={`business-desc-${idSuffix}`} className="block text-sm font-medium text-foreground">
+        Расскажите, чем занимается ваш бизнес
+      </label>
+      <textarea
+        id={`business-desc-${idSuffix}`}
+        value={business}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            onStart();
+          }
+        }}
+        rows={5}
+        className={cn(
+          "mt-3 w-full resize-none rounded-xl border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none transition placeholder:text-muted-foreground",
+          empty ? "animate-brand-border" : "border-brand/40",
+          "focus:border-brand/60 focus:ring-2 focus:ring-[hsl(var(--brand)/0.18)]"
+        )}
+        placeholder={empty ? `Например: ${typedExample}▌` : "Например: доставка цветов по городу"}
+      />
+      <div className="mt-3 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Sparkles className="h-3.5 w-3.5 shrink-0 text-[#25D366]" />
+          Тест бота бесплатно
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <Button variant="brand" className="px-8" onClick={onStart} disabled={busy || empty}>
+            {busy ? "Создаю промпт…" : "Начать"}
+            {!busy && <ArrowRight className="h-4 w-4" />}
+          </Button>
+        </div>
+      </div>
+
+      {error && (
+        <FormAlert variant="error" className="mt-3">
+          {error}
+        </FormAlert>
+      )}
+    </div>
+  );
+});
+
 export default function LandingClient() {
   const router = useRouter();
   const authStatus = useAuthStatus();
@@ -235,7 +308,6 @@ export default function LandingClient() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const empty = business.trim().length === 0;
-  const typedExample = useTypewriter(PLACEHOLDER_EXAMPLES, empty);
 
   // Демо-блок: автопереключение примеров диалога
   const [activeDemo, setActiveDemo] = useState(0);
@@ -267,7 +339,7 @@ export default function LandingClient() {
     }
   }, [authStatus]);
 
-  async function start() {
+  const start = useCallback(async () => {
     if (!business.trim() || busy) return;
     setBusy(true);
     setError(null);
@@ -282,61 +354,9 @@ export default function LandingClient() {
     } finally {
       setBusy(false);
     }
-  }
+  }, [business, busy, router]);
 
-  // Карточка ввода — переиспользуем в hero и в финальном CTA (без копипаста логики)
-  const inputCard = (idSuffix: string, className?: string) => (
-    <div
-      className={cn(
-        "rounded-2xl border border-brand/40 bg-card p-4 shadow-[0_0_0_4px_hsl(var(--brand)/0.10),0_8px_30px_-12px_hsl(var(--brand)/0.35)] sm:p-5",
-        className
-      )}
-    >
-      <label htmlFor={`business-desc-${idSuffix}`} className="block text-sm font-medium text-foreground">
-        Расскажите, чем занимается ваш бизнес
-      </label>
-      <textarea
-        id={`business-desc-${idSuffix}`}
-        value={business}
-        onChange={(e) => setBusiness(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-            void start();
-          }
-        }}
-        rows={5}
-        className={cn(
-          "mt-3 w-full resize-none rounded-xl border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none transition placeholder:text-muted-foreground",
-          empty ? "animate-brand-border" : "border-brand/40",
-          "focus:border-brand/60 focus:ring-2 focus:ring-[hsl(var(--brand)/0.18)]"
-        )}
-        placeholder={empty ? `Например: ${typedExample}▌` : "Например: доставка цветов по городу"}
-      />
-      <div className="mt-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Sparkles className="h-3.5 w-3.5 shrink-0 text-[#25D366]" />
-          Тест бота бесплатно
-        </div>
-        <div className="flex shrink-0 gap-2">
-          <Button
-            variant="brand"
-            className="px-8"
-            onClick={() => void start()}
-            disabled={busy || !business.trim()}
-          >
-            {busy ? "Создаю промпт…" : "Начать"}
-            {!busy && <ArrowRight className="h-4 w-4" />}
-          </Button>
-        </div>
-      </div>
-
-      {error && (
-        <FormAlert variant="error" className="mt-3">
-          {error}
-        </FormAlert>
-      )}
-    </div>
-  );
+  const handleChange = useCallback((value: string) => setBusiness(value), []);
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -375,7 +395,15 @@ export default function LandingClient() {
       </div>
 
       {/* Input — brand-обводка и свечение остаются и после начала ввода */}
-      {inputCard("hero", "mt-3")}
+      <InputCard
+        idSuffix="hero"
+        className="mt-3"
+        business={business}
+        onChange={handleChange}
+        onStart={start}
+        busy={busy}
+        error={error}
+      />
 
       {/* Чипы доверия */}
       <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
@@ -391,7 +419,7 @@ export default function LandingClient() {
       </div>
 
       {/* Как это работает */}
-      <section className="mt-16 sm:mt-24">
+      <section className="mt-16 cv-auto sm:mt-24">
         <h2 className="text-center text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
           Как это работает
         </h2>
@@ -415,7 +443,7 @@ export default function LandingClient() {
       </section>
 
       {/* Демо: как отвечает бот (статичный мокап) */}
-      <section className="mt-16 sm:mt-24">
+      <section className="mt-16 cv-auto sm:mt-24">
         <h2 className="text-center text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
           Как отвечает бот
         </h2>
@@ -470,7 +498,7 @@ export default function LandingClient() {
               <span
                 className={cn(
                   "block h-full rounded-full bg-brand",
-                  i === activeDemo ? "animate-indicator-fill" : "w-0"
+                  i === activeDemo ? "w-full animate-indicator-fill" : "w-0"
                 )}
               />
             </button>
@@ -479,7 +507,7 @@ export default function LandingClient() {
       </section>
 
       {/* Выгоды */}
-      <section className="mt-16 sm:mt-24">
+      <section className="mt-16 cv-auto sm:mt-24">
         <h2 className="text-center text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
           Почему это работает
         </h2>
@@ -497,7 +525,7 @@ export default function LandingClient() {
       </section>
 
       {/* FAQ */}
-      <section className="mt-16 sm:mt-24">
+      <section className="mt-16 cv-auto sm:mt-24">
         <h2 className="text-center text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
           Частые вопросы
         </h2>
@@ -531,7 +559,7 @@ export default function LandingClient() {
       </section>
 
       {/* Финальный CTA — дублируем блок ввода */}
-      <section className="mt-16 sm:mt-24">
+      <section className="mt-16 cv-auto sm:mt-24">
         <div className="rounded-3xl border border-border bg-secondary px-4 py-10 text-center sm:px-8 sm:py-14">
           <h2 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
             Соберите AI-менеджера за 5 минут
@@ -539,7 +567,16 @@ export default function LandingClient() {
           <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
             Опишите бизнес и протестируйте ответы бесплатно — без карты.
           </p>
-          <div className="mx-auto mt-6 max-w-2xl text-left">{inputCard("cta")}</div>
+          <div className="mx-auto mt-6 max-w-2xl text-left">
+            <InputCard
+              idSuffix="cta"
+              business={business}
+              onChange={handleChange}
+              onStart={start}
+              busy={busy}
+              error={error}
+            />
+          </div>
         </div>
       </section>
 

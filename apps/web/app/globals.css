@@ -87,10 +87,11 @@
   100% { opacity: 1; transform: translateY(0); }
 }
 
-/* Заливка активного индикатора-примера (синхронно с автопереключением) */
+/* Заливка активного индикатора-примера (синхронно с автопереключением).
+   Через scaleX (а не width) — анимация композитится на GPU без reflow/layout. */
 @keyframes indicator-fill {
-  from { width: 0%; }
-  to { width: 100%; }
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
 }
 
 @layer utilities {
@@ -130,11 +131,23 @@
     .animate-demo-fade { animation: none; }
   }
 
-  .animate-indicator-fill { animation: indicator-fill 5s linear forwards; }
+  .animate-indicator-fill {
+    transform-origin: left;
+    animation: indicator-fill 5s linear forwards;
+  }
   @media (prefers-reduced-motion: reduce) {
-    .animate-indicator-fill { width: 100%; animation: none; }
+    .animate-indicator-fill { transform: scaleX(1); animation: none; }
   }
   .bg-test-canvas { background-color: hsl(var(--test-canvas)); }
+
+  /* Off-screen секции не считаются/не отрисовываются, пока не подъедут в вьюпорт.
+     Снижает стоимость первой отрисовки и работу при скролле длинной страницы.
+     contain-intrinsic-size резервирует высоту, чтобы скроллбар не прыгал.
+     Старые браузеры свойство игнорируют — деградирует безопасно. */
+  .cv-auto {
+    content-visibility: auto;
+    contain-intrinsic-size: 0 600px;
+  }
 
   .text-foreground { color: hsl(var(--foreground)); }
   .text-muted-foreground { color: hsl(var(--muted-foreground)); }
