@@ -149,14 +149,25 @@ export default function GuestTour() {
       return;
     }
     measure();
+    // Скролл/resize стреляют десятками за кадр — коалесим в один замер через
+    // rAF, чтобы не дёргать layout (getBoundingClientRect) на каждом событии.
+    let raf = 0;
+    const onScrollResize = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = 0;
+        measure();
+      });
+    };
     // Цели меняют размер/положение (растущий textarea, ресайз, прокрутка).
     const id = window.setInterval(measure, 250);
-    window.addEventListener("resize", measure);
-    window.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", onScrollResize);
+    window.addEventListener("scroll", onScrollResize, true);
     return () => {
       window.clearInterval(id);
-      window.removeEventListener("resize", measure);
-      window.removeEventListener("scroll", measure, true);
+      if (raf) window.cancelAnimationFrame(raf);
+      window.removeEventListener("resize", onScrollResize);
+      window.removeEventListener("scroll", onScrollResize, true);
     };
   }, [active, measure]);
 

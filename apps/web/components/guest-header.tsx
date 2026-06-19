@@ -45,6 +45,14 @@ export default function GuestHeader() {
   // к кнопке в шапке, на которую указывает непропускаемая подсказка теста.
   const [coachmark, setCoachmark] = useState(false);
 
+  const isAuthPath = pathname.startsWith("/auth");
+  const isWhatsappPath = pathname.startsWith("/whatsapp");
+  const isLanding = pathname === "/";
+  // На дашборде (не лендинг, не /auth, не /whatsapp) всегда показываем кнопку
+  // «Подключить WhatsApp». На лендинге — «Войти».
+  const showWaCta = !isLanding && !isAuthPath && !isWhatsappPath;
+  const hasPrompt = !!progress?.hasPrompt;
+
   const refreshProgress = useCallback(async () => {
     try {
       const data = await apiJson<ProgressResponse>("/agent/progress");
@@ -55,6 +63,9 @@ export default function GuestHeader() {
   }, []);
 
   useEffect(() => {
+    // Прогресс нужен только там, где показываем CTA «Подключить WhatsApp»
+    // (его hasPrompt). На лендинге/auth/whatsapp не дёргаем сеть впустую.
+    if (!showWaCta) return;
     void refreshProgress();
     const handler = () => void refreshProgress();
     const coachmarkHandler = () => setCoachmark(true);
@@ -64,15 +75,7 @@ export default function GuestHeader() {
       window.removeEventListener("jazu:promptProgress", handler);
       window.removeEventListener("jazu:connectHintShown", coachmarkHandler);
     };
-  }, [refreshProgress]);
-
-  const isAuthPath = pathname.startsWith("/auth");
-  const isWhatsappPath = pathname.startsWith("/whatsapp");
-  const isLanding = pathname === "/";
-  // На дашборде (не лендинг, не /auth, не /whatsapp) всегда показываем кнопку
-  // «Подключить WhatsApp». На лендинге — «Войти».
-  const showWaCta = !isLanding && !isAuthPath && !isWhatsappPath;
-  const hasPrompt = !!progress?.hasPrompt;
+  }, [showWaCta, refreshProgress]);
 
   function handleConnectClick() {
     if (!hasPrompt) {
