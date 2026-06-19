@@ -60,6 +60,7 @@ import {
 import { getInboundQueue } from "@jazu/queue";
 import { sendMagicCodeEmail, sendTelegramLead, sendEnterpriseLeadEmail } from "./lib/notifications.js";
 import { recordAudit } from "./lib/audit.js";
+import { conversionActionForEvent, uploadAdConversion } from "./lib/google-ads.js";
 
 const magicLinkBodySchema = z.object({
   email: z.string().email(),
@@ -574,6 +575,40 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       readyToFinalize: session.readyToFinalize,
       isGenerating: session.isGenerating
     };
+  });
+
+  // Конверсия из воронки -> Google Ads (S2S через Data Manager API). Публичный,
+  // без auth: это тот же сигнал, что уходит в PostHog (см. apps/web/lib/analytics.ts),
+  // поэтому Google совпадает с аналитикой. Отвечаем сразу, ingest — в фоне.
+  app.post("/track/ad-conversion", async (request, reply) => {
+    const body = (request.body ?? {}) as {
+      event?: string;
+      gclid?: string;
+      gbraid?: string;
+      wbraid?: string;
+    };
+    void (async () => {
+      try {
+        if (!body.event) return;
+        const conversionActionId = conversionActionForEvent(body.event);
+        if (!conversionActionId) return;
+        const clickIds = {
+          gclid: typeof body.gclid === "string" ? body.gclid : undefined,
+          gbraid: typeof body.gbraid === "string" ? body.gbraid : undefined,
+          wbraid: typeof body.wbraid === "string" ? body.wbraid : undefined
+        };
+        if (!clickIds.gclid && !clickIds.gbraid && !clickIds.wbraid) return;
+        const result = await uploadAdConversion({ conversionActionId, clickIds });
+        if (result.ok) {
+          app.log.info({ event: body.event }, "google-ads conversion uploaded");
+        } else {
+          app.log.warn({ event: body.event, status: result.status, err: result.error }, "google-ads conversion failed");
+        }
+      } catch (err) {
+        app.log.error({ err }, "google-ads conversion handler error");
+      }
+    })();
+    return reply.code(204).send();
   });
 
   app.post("/auth/magic-link", {
