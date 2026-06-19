@@ -120,12 +120,23 @@ export default function GuestHeader() {
         )}
 
         {!showWaCta && !isAuthPath && (
-          <Link
-            href="/auth"
-            className="flex items-center gap-2 whitespace-nowrap rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-secondary sm:px-4 sm:text-sm"
-          >
-            Войти
-          </Link>
+          <>
+            <button
+              type="button"
+              onClick={() => setHelpOpen(true)}
+              className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition hover:bg-secondary hover:text-foreground"
+              title="Помощь"
+              aria-label="Помощь"
+            >
+              <span className="text-sm font-semibold leading-none">?</span>
+            </button>
+            <Link
+              href="/auth"
+              className="flex items-center gap-2 whitespace-nowrap rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-secondary sm:px-4 sm:text-sm"
+            >
+              Войти
+            </Link>
+          </>
         )}
       </div>
 
