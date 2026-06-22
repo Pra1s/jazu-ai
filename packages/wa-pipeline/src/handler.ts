@@ -120,6 +120,66 @@ export type WaInboundResult =
       status: "pre_connection_message";
     };
 
+/**
+ * Результат фазы ingest (сохранение входящего без LLM).
+ *  - `ingested` — сообщение сохранено, нужно запланировать flush;
+ *  - `ok_immediate` — дан немедленный ответ без LLM (голосовой fallback, когда
+ *    распознать не удалось и это единственное неотвеченное сообщение чата);
+ *  - остальные статусы терминальны (как в WaInboundResult): обработку прекращаем.
+ */
+export type IngestResult =
+  | {
+      status: "ingested";
+      agentId: string;
+      conversationId: string;
+      /** createdAt(ms) самого раннего неотвеченного входящего — старт окна склейки. */
+      batchStartedAtMs: number;
+      usage: UsageView | undefined;
+    }
+  | {
+      status: "ok_immediate";
+      reply: string;
+      conversationId: string;
+      agentOwnerUserId: string | null;
+      isFirstBotReply: boolean;
+      usage: UsageView | undefined;
+    }
+  | { status: "deduplicated"; conversationId: string }
+  | { status: "agent_not_found" }
+  | { status: "worker_session_mismatch" }
+  | { status: "quota_exhausted"; usage: UsageView | undefined }
+  | { status: "bot_paused" }
+  | { status: "pre_connection_message" };
+
+/** Результат фазы flush (склейка неотвеченных входящих → один LLM-ответ). */
+export type FlushResult =
+  | {
+      status: "flushed";
+      reply: string;
+      summary: string;
+      conversationId: string;
+      leadId: string | null;
+      /** Лид СОЗДАН именно в этом flush (для разовой аналитики client_lead_created). */
+      leadCreated: boolean;
+      shouldHandoff: boolean;
+      actionButton?: ActionButton | undefined;
+      agentOwnerUserId: string | null;
+      isFirstBotReply: boolean;
+      /** createdAt(ms) первого сообщения пакета — для humanize-тайминга outbound. */
+      batchFirstMessageMs: number;
+      /** Есть ли входящие новее нового курсора (пришли во время flush) — для self-reschedule. */
+      hasMoreUnanswered: boolean;
+    }
+  | { status: "nothing_to_flush" }
+  | { status: "agent_not_found" }
+  | { status: "bot_paused"; hasMoreUnanswered: boolean }
+  | {
+      status: "bot_loop_protected";
+      conversationId: string;
+      outboundLastHour: number;
+      hasMoreUnanswered: boolean;
+    };
+
 export type WaInboundOptions = {
   prisma?: PrismaClient;
   telegramBotToken?: string | undefined;
@@ -162,9 +222,16 @@ function toAssistantParts(text: string, actionButton?: unknown) {
   return parts;
 }
 
-async function getOrCreateConversation(prisma: PrismaClient, agentId: string, chatId: string, customerName?: string) {
+async function getOrCreateConversation(
+  prisma: PrismaClient,
+  agentId: string,
+  chatId: string,
+  customerName?: string,
+  customerPhone?: string
+) {
   const updateData: {
     customerName?: string | null;
+    customerPhone?: string | null;
     lastMessageAt: Date;
     status: "open";
   } = {
@@ -174,6 +241,11 @@ async function getOrCreateConversation(prisma: PrismaClient, agentId: string, ch
   if (customerName !== undefined) {
     updateData.customerName = customerName;
   }
+  // Телефон пишем только при первом появлении (не затираем уже сохранённый при
+  // каждом сообщении — он стабилен на чат).
+  if (customerPhone !== undefined) {
+    updateData.customerPhone = customerPhone;
+  }
   return prisma.conversation.upsert({
     where: { agentId_waChatId: { agentId, waChatId: chatId } },
     update: updateData,
@@ -181,6 +253,7 @@ async function getOrCreateConversation(prisma: PrismaClient, agentId: string, ch
       agentId,
       waChatId: chatId,
       customerName: customerName ?? null,
+      customerPhone: customerPhone ?? null,
       status: "open",
       lastMessageAt: new Date()
     }
@@ -319,8 +392,8 @@ async function writeLeadIfNeeded(
   handoffType: HandoffType = null,
   whatsappPhone: string | null = null,
   contactPhone: string | null = null
-): Promise<string | null> {
-  if (!shouldCreate) return null;
+): Promise<{ leadId: string | null; created: boolean }> {
+  if (!shouldCreate) return { leadId: null, created: false };
   const existing = await prisma.lead.findFirst({
     where: { conversationId, status: "new" }
   });
@@ -355,7 +428,7 @@ async function writeLeadIfNeeded(
         await sendHandoffNotification(prisma, agentId, summary, handoffType, whatsappPhone, contactPhone, options);
       }
     }
-    return existing.id;
+    return { leadId: existing.id, created: false };
   }
 
   const lead = await prisma.lead.create({
@@ -394,7 +467,7 @@ async function writeLeadIfNeeded(
     await sendHandoffNotification(prisma, agentId, summary, handoffType, whatsappPhone, contactPhone, options);
   }
 
-  return lead.id;
+  return { leadId: lead.id, created: true };
 }
 
 // Номер для связи, названный ПОСЛЕ закрытия лида, дописываем в открытый лид МОЛЧА
@@ -452,10 +525,83 @@ export async function notifyLeadById(
   });
 }
 
-export async function processWaInbound(
+type BatchMessage = { id: string; createdAt: Date; body: string; direction: "in" | "out" };
+
+/**
+ * Неотвеченный «пакет» входящих для склейки: все `direction:in` строго ПОСЛЕ
+ * курсора `lastAnsweredWaMessageId` по детерминированному порядку (createdAt, id).
+ *
+ * Порядок (createdAt, id) устойчив к коллизиям мс: при равных createdAt тай-брейк
+ * по id (cuid уникален). Курсор храним как id; если строка-курсор удалена
+ * retention'ом — фолбэк на «входящие после последнего исходящего», что для
+ * сброшенного ретеншном диалога даёт корректный набор реально неотвеченных.
+ */
+async function selectUnansweredBatch(
+  prisma: PrismaClient,
+  conversationId: string,
+  cursorId: string | null
+): Promise<BatchMessage[]> {
+  const afterWhere = (anchor: { createdAt: Date; id: string }): Prisma.WaMessageWhereInput => ({
+    conversationId,
+    direction: "in",
+    OR: [
+      { createdAt: { gt: anchor.createdAt } },
+      { AND: [{ createdAt: anchor.createdAt }, { id: { gt: anchor.id } }] }
+    ]
+  });
+
+  const cursorMsg = cursorId
+    ? await prisma.waMessage.findUnique({ where: { id: cursorId }, select: { createdAt: true, id: true } })
+    : null;
+
+  let where: Prisma.WaMessageWhereInput;
+  if (cursorMsg) {
+    where = afterWhere(cursorMsg);
+  } else {
+    const lastOut = await prisma.waMessage.findFirst({
+      where: { conversationId, direction: "out" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { createdAt: true, id: true }
+    });
+    where = lastOut ? { ...afterWhere(lastOut), direction: "in" } : { conversationId, direction: "in" };
+  }
+
+  return prisma.waMessage.findMany({
+    where,
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: { id: true, createdAt: true, body: true, direction: true }
+  });
+}
+
+/** Есть ли входящие строго новее курсора (пришли во время flush). */
+async function countUnansweredAfter(
+  prisma: PrismaClient,
+  conversationId: string,
+  anchor: { createdAt: Date; id: string }
+): Promise<number> {
+  return prisma.waMessage.count({
+    where: {
+      conversationId,
+      direction: "in",
+      OR: [
+        { createdAt: { gt: anchor.createdAt } },
+        { AND: [{ createdAt: anchor.createdAt }, { id: { gt: anchor.id } }] }
+      ]
+    }
+  });
+}
+
+/**
+ * Фаза 1 — ingest. Всё, что ДО LLM: фильтры, дедуп, квота, распознавание голоса,
+ * сохранение входящего. НЕ зовёт LLM, НЕ пишет ответ/лид. Возвращает `ingested`
+ * (нужно запланировать flush) или терминальный статус. Голосовой fallback —
+ * единственное исключение: если распознать не удалось и это единственное
+ * неотвеченное сообщение, отвечаем сразу (`ok_immediate`) и двигаем курсор.
+ */
+export async function ingestWaInbound(
   input: WaInboundInput,
   options: WaInboundOptions = {}
-): Promise<WaInboundResult> {
+): Promise<IngestResult> {
   const prisma = options.prisma ?? defaultPrisma;
 
   if (input.workerSessionId) {
@@ -467,27 +613,18 @@ export async function processWaInbound(
 
   const agent = await prisma.agent.findUnique({
     where: { id: input.agentId },
-    include: { businessProfile: true, user: true }
+    include: { user: true }
   });
   if (!agent) return { status: "agent_not_found" };
 
-  // Глобальный «выключатель» бота: владелец агента может поставить бот на паузу
-  // на странице «Диалоги». В этом режиме мы НЕ сохраняем inbound, НЕ списываем
-  // квоту, НЕ дёргаем LLM — будто бота вообще нет. Сообщение клиента
-  // фактически потеряется (что и хотел владелец).
+  // Глобальный «выключатель» бота: владелец агента может поставить бот на паузу.
+  // НЕ сохраняем inbound, НЕ списываем квоту — будто бота вообще нет.
   if (!agent.botEnabled) {
     return { status: "bot_paused" };
   }
 
-  // Фильтр «бот отвечает только на сообщения после подключения».
-  // Защищает от:
-  //   1) history-sync flood: WhatsApp при connection шлёт пачку старых
-  //      непрочитанных сообщений за последний месяц. messageTimestamp у них
-  //      в прошлом — отсекаем по нему.
-  //   2) Вторжения бота в чаты, которые шли вне его. Если Conversation
-  //      существовал до подключения (например, юзер раньше уже был привязан),
-  //      бот не должен туда лезть.
-  // Если botRespondsSince=NULL — фильтр выключен (legacy / dev).
+  // Фильтр «бот отвечает только на сообщения после подключения» (history-sync
+  // flood + вторжение в чаты вне бота). Если botRespondsSince=NULL — выключен.
   const waConnection = await prisma.waConnection.findUnique({
     where: { agentId: agent.id },
     select: { botRespondsSince: true }
@@ -509,12 +646,7 @@ export async function processWaInbound(
     }
   }
 
-  // Главный фильтр старых диалогов: чат был в WhatsApp ДО подключения
-  // (снят из history-sync в WaPreConnectionChat). Ловит даже те старые
-  // чаты, которых ещё нет в нашей Conversation — клиент написал в них
-  // впервые после подключения свежим сообщением (messageTimestamp и
-  // Conversation.createdAt в этом случае фильтр выше не отсекают).
-  // Работает независимо от botRespondsSince — снимок и есть точка отсчёта.
+  // Чат существовал в WhatsApp ДО подключения (снимок WaPreConnectionChat) — не лезем.
   const preConnectionChat = await prisma.waPreConnectionChat.findUnique({
     where: { agentId_waChatId: { agentId: agent.id, waChatId: input.chatId } },
     select: { id: true }
@@ -522,10 +654,6 @@ export async function processWaInbound(
   if (preConnectionChat) {
     return { status: "pre_connection_message" };
   }
-
-  const profile = agent.businessProfile
-    ? businessProfileSchema.parse(agent.businessProfile.data)
-    : createInitialProfile();
 
   const trackResult = await trackConversationUsage(prisma, {
     agentOwnerUserId: agent.userId ?? null,
@@ -535,31 +663,26 @@ export async function processWaInbound(
   if (!trackResult.ok && trackResult.reason === "exhausted") {
     return { status: "quota_exhausted", usage: trackResult.usage };
   }
+  const usage = trackResult.ok ? trackResult.usage : undefined;
 
-  const activePromptVersion = await prisma.promptVersion.findFirst({
-    where: { agentId: agent.id },
-    orderBy: { createdAt: "desc" }
-  });
-  const systemOverride = activePromptVersion?.content || agent.currentPrompt || null;
-
-  const conversation = await getOrCreateConversation(prisma, agent.id, input.chatId, input.senderName);
+  const conversation = await getOrCreateConversation(
+    prisma,
+    agent.id,
+    input.chatId,
+    input.senderName,
+    input.senderPhone
+  );
 
   if (input.waMessageId) {
     const dup = await prisma.waMessage.findFirst({
-      where: {
-        conversationId: conversation.id,
-        waMsgId: input.waMessageId,
-        direction: "in"
-      }
+      where: { conversationId: conversation.id, waMsgId: input.waMessageId, direction: "in" }
     });
     if (dup) {
       return { status: "deduplicated", conversationId: conversation.id };
     }
   }
 
-  // Голосовое сообщение: текста нет, но есть аудио → распознаём. Делаем ПОСЛЕ
-  // dedupe, чтобы не платить за STT по дублям. Внутри transcribeAudio —
-  // Gemini → OpenAI fallback. Лимитов по длине нет: принимаем любое аудио.
+  // Голосовое: текста нет, но есть аудио → распознаём ПОСЛЕ dedupe (не платим за дубли).
   const audioBase64 = input.audioBase64;
   const isVoiceMessage = !input.message.trim() && Boolean(audioBase64);
   let messageText = input.message;
@@ -578,14 +701,12 @@ export async function processWaInbound(
     }
   }
 
-  // Распознать не удалось (битое/пустое аудио или оба STT-провайдера упали).
-  // Сохраняем входящее как голосовое и мягко просим текстом — вместо тишины
-  // бота. LLM не дёргаем (нечего обрабатывать).
+  // Распознать не удалось. Сохраняем как голосовое. Если в окне уже есть другие
+  // неотвеченные входящие — отвечать сразу не нужно: пусть flush обработает весь
+  // пакет (голосовое войдёт как контекст). Если это единственное неотвеченное —
+  // мягкий текстовый фолбэк сразу + двигаем курсор за него.
   if (isVoiceMessage && !messageText) {
-    const priorOutbound = await prisma.waMessage.count({
-      where: { conversationId: conversation.id, direction: "out" }
-    });
-    await prisma.waMessage.create({
+    const voiceMsg = await prisma.waMessage.create({
       data: {
         conversationId: conversation.id,
         direction: "in",
@@ -594,50 +715,42 @@ export async function processWaInbound(
         parts: jsonInput([{ type: "text", text: "[голосовое сообщение]" }])
       }
     });
+    const batch = await selectUnansweredBatch(prisma, conversation.id, conversation.lastAnsweredWaMessageId);
+    const onlyThisVoice = batch.length === 1 && batch[0]?.id === voiceMsg.id;
+    if (!onlyThisVoice) {
+      const batchStartedAtMs = (batch[0]?.createdAt ?? voiceMsg.createdAt).getTime();
+      return { status: "ingested", agentId: agent.id, conversationId: conversation.id, batchStartedAtMs, usage };
+    }
+    const priorOutbound = await prisma.waMessage.count({
+      where: { conversationId: conversation.id, direction: "out" }
+    });
     const fallbackReply =
       "Извините, не получилось распознать голосовое. Напишите, пожалуйста, текстом.";
-    await prisma.waMessage.create({
-      data: {
-        conversationId: conversation.id,
-        direction: "out",
-        body: fallbackReply,
-        parts: jsonInput(toAssistantParts(fallbackReply, undefined))
-      }
-    });
-    await prisma.conversation.update({
-      where: { id: conversation.id },
-      data: {
-        customerName: input.senderName ?? conversation.customerName,
-        lastMessageAt: new Date(),
-        status: "open"
-      }
-    });
+    await prisma.$transaction([
+      prisma.waMessage.create({
+        data: {
+          conversationId: conversation.id,
+          direction: "out",
+          body: fallbackReply,
+          parts: jsonInput(toAssistantParts(fallbackReply, undefined))
+        }
+      }),
+      prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { lastMessageAt: new Date(), status: "open", lastAnsweredWaMessageId: voiceMsg.id }
+      })
+    ]);
     return {
-      status: "ok",
+      status: "ok_immediate",
       reply: fallbackReply,
-      summary: "",
-      leadId: null,
       conversationId: conversation.id,
-      shouldHandoff: false,
       agentOwnerUserId: agent.userId ?? null,
-      isFirstBotReply: priorOutbound === 0
+      isFirstBotReply: priorOutbound === 0,
+      usage
     };
   }
 
-  // Bot-loop protection: считаем outbound за последний час по этому чату.
-  // Если бот уже отбомбил > лимита — молчим. Один inbound при этом всё равно
-  // сохраним в БД, чтобы было видно «вот тут начался цикл».
-  const botLoopLimit = options.botLoopMaxRepliesPerHour ?? DEFAULT_BOT_LOOP_LIMIT;
-  const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
-  const outboundLastHour = await prisma.waMessage.count({
-    where: {
-      conversationId: conversation.id,
-      direction: "out",
-      createdAt: { gte: hourAgo }
-    }
-  });
-
-  await prisma.waMessage.create({
+  const inboundMsg = await prisma.waMessage.create({
     data: {
       conversationId: conversation.id,
       direction: "in",
@@ -647,28 +760,112 @@ export async function processWaInbound(
     }
   });
 
+  // Старт окна склейки = createdAt самого раннего неотвеченного входящего (может
+  // быть раньше только что сохранённого — клиент уже писал в этом окне).
+  const batch = await selectUnansweredBatch(prisma, conversation.id, conversation.lastAnsweredWaMessageId);
+  const batchStartedAtMs = (batch[0]?.createdAt ?? inboundMsg.createdAt).getTime();
+
+  return { status: "ingested", agentId: agent.id, conversationId: conversation.id, batchStartedAtMs, usage };
+}
+
+/**
+ * Фаза 2 — flush. Собирает ВСЕ неотвеченные входящие чата в один ход клиента,
+ * зовёт LLM один раз, пишет ответ и (после коммита) лид. Курсор
+ * `lastAnsweredWaMessageId` двигаем ВСЕГДА, когда пакет обработан (ответ/молчание/
+ * loop-protection/пауза) — иначе хвост неотвеченных растёт бесконечно.
+ *
+ * Идемпотентность: запись исходящего + сдвиг курсора + апдейт conversation — в
+ * одной транзакции; enqueue в wa:outbound и аналитику делает уже consumer ПОСЛЕ
+ * коммита. Повторный flush после коммита увидит пустой пакет → nothing_to_flush.
+ */
+export async function flushWaConversation(
+  agentId: string,
+  chatId: string,
+  options: WaInboundOptions = {}
+): Promise<FlushResult> {
+  const prisma = options.prisma ?? defaultPrisma;
+
+  const agent = await prisma.agent.findUnique({
+    where: { id: agentId },
+    include: { businessProfile: true, user: true }
+  });
+  if (!agent) return { status: "agent_not_found" };
+
+  const conversation = await prisma.conversation.findUnique({
+    where: { agentId_waChatId: { agentId, waChatId: chatId } }
+  });
+  if (!conversation) return { status: "nothing_to_flush" };
+
+  const batch = await selectUnansweredBatch(prisma, conversation.id, conversation.lastAnsweredWaMessageId);
+  if (batch.length === 0) return { status: "nothing_to_flush" };
+
+  const firstBatch = batch[0]!;
+  const lastBatch = batch[batch.length - 1]!;
+
+  // Владелец мог поставить бота на паузу за время окна — не отвечаем, но двигаем
+  // курсор (пакет считаем обработанным: «как будто бота нет»).
+  if (!agent.botEnabled) {
+    await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { lastAnsweredWaMessageId: lastBatch.id }
+    });
+    return { status: "bot_paused", hasMoreUnanswered: (await countUnansweredAfter(prisma, conversation.id, lastBatch)) > 0 };
+  }
+
+  // Bot-loop protection: если бот за час уже отбомбил > лимита — молчим, но
+  // двигаем курсор (входящие уже сохранены на ingest).
+  const botLoopLimit = options.botLoopMaxRepliesPerHour ?? DEFAULT_BOT_LOOP_LIMIT;
+  const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
+  const outboundLastHour = await prisma.waMessage.count({
+    where: { conversationId: conversation.id, direction: "out", createdAt: { gte: hourAgo } }
+  });
   if (outboundLastHour >= botLoopLimit) {
+    await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { lastAnsweredWaMessageId: lastBatch.id }
+    });
     return {
       status: "bot_loop_protected",
       conversationId: conversation.id,
-      outboundLastHour
+      outboundLastHour,
+      hasMoreUnanswered: (await countUnansweredAfter(prisma, conversation.id, lastBatch)) > 0
     };
   }
 
+  const profile = agent.businessProfile
+    ? businessProfileSchema.parse(agent.businessProfile.data)
+    : createInitialProfile();
+
+  const activePromptVersion = await prisma.promptVersion.findFirst({
+    where: { agentId: agent.id },
+    orderBy: { createdAt: "desc" }
+  });
+  const systemOverride = activePromptVersion?.content || agent.currentPrompt || null;
+
   const priorOutboundCount = await prisma.waMessage.count({
-    where: {
-      conversationId: conversation.id,
-      direction: "out"
-    }
+    where: { conversationId: conversation.id, direction: "out" }
   });
   const isFirstBotReply = priorOutboundCount === 0;
 
-  const history = await prisma.waMessage.findMany({
-    where: { conversationId: conversation.id },
-    orderBy: { createdAt: "desc" },
+  // Склейка пакета в ОДИН ход клиента (несколько реплик через перевод строки).
+  const combinedMessage = batch
+    .map((m) => m.body)
+    .join("\n")
+    .trim();
+
+  // История строго ДО пакета (последние 20 сообщений по (createdAt, id)).
+  const priorHistory = await prisma.waMessage.findMany({
+    where: {
+      conversationId: conversation.id,
+      OR: [
+        { createdAt: { lt: firstBatch.createdAt } },
+        { AND: [{ createdAt: firstBatch.createdAt }, { id: { lt: firstBatch.id } }] }
+      ]
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: 20
   });
-  history.reverse();
+  priorHistory.reverse();
 
   const telemetry = buildLlmTelemetry({
     prisma,
@@ -677,8 +874,7 @@ export async function processWaInbound(
     agentId: agent.id
   });
 
-  // РОЛЬ/КАРКАС берём из authoritative-источника (Agent), а не из профиля:
-  // BusinessProfile.data может отставать, а envelope читает profile.carcass/botModel.
+  // РОЛЬ/КАРКАС из authoritative-источника (Agent), а не из профиля.
   const runtimeProfile = {
     ...profile,
     carcass: (agent.carcass ?? null) as Carcass | null,
@@ -688,13 +884,11 @@ export async function processWaInbound(
 
   const runtimeTurn = await buildRuntimeTurn(
     runtimeProfile,
-    messageText,
-    history
-      .slice(0, -1)
-      .map((item) => ({
-        role: item.direction === "out" ? "assistant" : "user",
-        content: item.body
-      })),
+    combinedMessage,
+    priorHistory.map((item) => ({
+      role: item.direction === "out" ? "assistant" : "user",
+      content: item.body
+    })),
     {
       systemOverride,
       detectedNeed: conversation.detectedNeed,
@@ -703,65 +897,55 @@ export async function processWaInbound(
     }
   );
 
-  // Буфер потребности: needChanged-перезапись проверяем ПЕРВОЙ, иначе при уже
-  // заполненном detectedNeed смена запроса клиентом не записалась бы.
-  {
-    let nextNeed: string | null = null;
-    if (runtimeTurn.needChanged && runtimeTurn.extractedNeed) {
-      nextNeed = runtimeTurn.extractedNeed;
-    } else if (!conversation.detectedNeed && runtimeTurn.extractedNeed) {
-      nextNeed = runtimeTurn.extractedNeed;
-    }
-    if (nextNeed && nextNeed !== conversation.detectedNeed) {
-      await prisma.conversation.update({
-        where: { id: conversation.id },
-        data: { detectedNeed: nextNeed }
-      });
-    }
+  // Буфер потребности: needChanged-перезапись проверяем ПЕРВОЙ.
+  let nextNeed: string | null = null;
+  if (runtimeTurn.needChanged && runtimeTurn.extractedNeed) {
+    nextNeed = runtimeTurn.extractedNeed;
+  } else if (!conversation.detectedNeed && runtimeTurn.extractedNeed) {
+    nextNeed = runtimeTurn.extractedNeed;
   }
+  const needToWrite = nextNeed && nextNeed !== conversation.detectedNeed ? nextNeed : null;
+  const nameToWrite =
+    runtimeTurn.extractedName && runtimeTurn.extractedName !== conversation.detectedName
+      ? runtimeTurn.extractedName
+      : null;
 
-  {
-    let nextName: string | null = null;
-    if (runtimeTurn.extractedName) {
-      nextName = runtimeTurn.extractedName;
-    }
-    if (nextName && nextName !== conversation.detectedName) {
-      await prisma.conversation.update({
-        where: { id: conversation.id },
-        data: { detectedName: nextName }
-      });
-    }
-  }
+  // Пустой reply — осознанное молчание (спам/офф-топик); пустой пузырь не пишем.
+  const hasReply = Boolean(runtimeTurn.reply && runtimeTurn.reply.trim().length > 0);
 
-  // Когда бот решает молчать (спам/офф-топик), reply пустой и в WhatsApp не
-  // уходит (guard в apps/jobs). Не персистим пустой out-пузырь: он засоряет
-  // ленту и ломает счётчик outboundLastHour/isFirstBotReply.
-  if (runtimeTurn.reply && runtimeTurn.reply.trim().length > 0) {
-    await prisma.waMessage.create({
+  // Транзакция: исходящее (если есть) + сдвиг курсора + апдейт conversation.
+  // Курсор и outbound коммитим атомарно → ретрай после коммита = nothing_to_flush.
+  await prisma.$transaction([
+    ...(hasReply
+      ? [
+          prisma.waMessage.create({
+            data: {
+              conversationId: conversation.id,
+              direction: "out",
+              body: runtimeTurn.reply,
+              parts: jsonInput(toAssistantParts(runtimeTurn.reply, runtimeTurn.actionButton))
+            }
+          })
+        ]
+      : []),
+    prisma.conversation.update({
+      where: { id: conversation.id },
       data: {
-        conversationId: conversation.id,
-        direction: "out",
-        body: runtimeTurn.reply,
-        parts: jsonInput(toAssistantParts(runtimeTurn.reply, runtimeTurn.actionButton))
+        lastMessageAt: new Date(),
+        status: "open",
+        lastAnsweredWaMessageId: lastBatch.id,
+        ...(needToWrite ? { detectedNeed: needToWrite } : {}),
+        ...(nameToWrite ? { detectedName: nameToWrite } : {})
       }
-    });
-  }
+    })
+  ]);
 
-  await prisma.conversation.update({
-    where: { id: conversation.id },
-    data: {
-      customerName: input.senderName ?? conversation.customerName,
-      lastMessageAt: new Date(),
-      status: "open"
-    }
-  });
-
-  const summary = runtimeTurn.summary || summarizeLead(profile, messageText);
+  const summary = runtimeTurn.summary || summarizeLead(profile, combinedMessage);
   // Два номера для карточки: базовый WA-номер чата (реальный, не lid) и отдельно
-  // «номер для связи», если клиент назвал другой. lid номером НЕ считаем.
+  // «номер для связи». senderPhone берём из conversation (сохранён на ingest).
   const { whatsappPhone, contactPhone } = resolveLeadPhones({
-    chatId: input.chatId,
-    senderPhone: input.senderPhone,
+    chatId,
+    senderPhone: conversation.customerPhone,
     extractedPhone: runtimeTurn.extractedPhone
   });
   const noName = !runtimeTurn.extractedName && !conversation.detectedName;
@@ -772,12 +956,12 @@ export async function processWaInbound(
   ) {
     runtimeTurn.summary = `[имя не указано] ${summary}`.trim();
   }
-  const leadId = await writeLeadIfNeeded(
+  const lead = await writeLeadIfNeeded(
     prisma,
     agent.id,
     conversation.id,
     runtimeTurn.summary || summary,
-    messageText,
+    combinedMessage,
     runtimeTurn.shouldHandoff,
     options,
     runtimeTurn.handoffType ?? null,
@@ -785,20 +969,94 @@ export async function processWaInbound(
     contactPhone
   );
 
-  // Номер для связи, названный после закрытия, дописываем в открытый лид МОЛЧА —
-  // отложенная карточка подхватит его (или останется в кабинете). Без второй карточки.
+  // Номер для связи, названный после закрытия, дописываем в открытый лид МОЛЧА.
   await updateOpenLeadContactPhone(prisma, conversation.id, whatsappPhone, contactPhone);
 
   return {
-    status: "ok",
+    status: "flushed",
     reply: runtimeTurn.reply,
     summary: runtimeTurn.summary || summary,
-    leadId,
     conversationId: conversation.id,
+    leadId: lead.leadId,
+    leadCreated: lead.created,
     shouldHandoff: runtimeTurn.shouldHandoff,
     ...(runtimeTurn.actionButton ? { actionButton: runtimeTurn.actionButton } : {}),
-    usage: trackResult.ok ? trackResult.usage : undefined,
     agentOwnerUserId: agent.userId ?? null,
-    isFirstBotReply
+    isFirstBotReply,
+    batchFirstMessageMs: firstBatch.createdAt.getTime(),
+    hasMoreUnanswered: (await countUnansweredAfter(prisma, conversation.id, lastBatch)) > 0
+  };
+}
+
+/**
+ * Legacy/dev обёртка (HTTP `/whatsapp/inbound`): ingest → немедленный flush, без
+ * окна склейки. Сохраняет прежний контракт WaInboundResult для роута и dev-пути
+ * без Redis. Production-путь (apps/jobs) зовёт ingest и flush раздельно.
+ */
+export async function processWaInbound(
+  input: WaInboundInput,
+  options: WaInboundOptions = {}
+): Promise<WaInboundResult> {
+  const ingest = await ingestWaInbound(input, options);
+
+  if (ingest.status === "ok_immediate") {
+    return {
+      status: "ok",
+      reply: ingest.reply,
+      summary: "",
+      leadId: null,
+      conversationId: ingest.conversationId,
+      shouldHandoff: false,
+      usage: ingest.usage,
+      agentOwnerUserId: ingest.agentOwnerUserId,
+      isFirstBotReply: ingest.isFirstBotReply
+    };
+  }
+  if (ingest.status !== "ingested") {
+    // deduplicated / quota_exhausted / agent_not_found / worker_session_mismatch /
+    // bot_paused / pre_connection_message — формы совпадают с WaInboundResult.
+    return ingest;
+  }
+
+  const flush = await flushWaConversation(ingest.agentId, input.chatId, options);
+  if (flush.status === "flushed") {
+    return {
+      status: "ok",
+      reply: flush.reply,
+      summary: flush.summary,
+      leadId: flush.leadId,
+      conversationId: flush.conversationId,
+      shouldHandoff: flush.shouldHandoff,
+      ...(flush.actionButton ? { actionButton: flush.actionButton } : {}),
+      usage: ingest.usage,
+      agentOwnerUserId: flush.agentOwnerUserId,
+      isFirstBotReply: flush.isFirstBotReply
+    };
+  }
+  if (flush.status === "bot_loop_protected") {
+    return {
+      status: "bot_loop_protected",
+      conversationId: flush.conversationId,
+      outboundLastHour: flush.outboundLastHour
+    };
+  }
+  if (flush.status === "bot_paused") {
+    return { status: "bot_paused" };
+  }
+  if (flush.status === "agent_not_found") {
+    return { status: "agent_not_found" };
+  }
+  // nothing_to_flush в legacy-пути недостижим (только что сохранили входящее),
+  // но на всякий случай отдаём пустой ok без побочных эффектов.
+  return {
+    status: "ok",
+    reply: "",
+    summary: "",
+    leadId: null,
+    conversationId: ingest.conversationId,
+    shouldHandoff: false,
+    usage: ingest.usage,
+    agentOwnerUserId: null,
+    isFirstBotReply: false
   };
 }

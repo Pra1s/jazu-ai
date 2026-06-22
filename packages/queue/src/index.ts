@@ -8,15 +8,18 @@ export {
   QUEUE_WA_INBOUND,
   QUEUE_WA_OUTBOUND,
   QUEUE_LEAD_NOTIFY,
+  QUEUE_WA_FLUSH,
   getQueue,
   getInboundQueue,
   getOutboundQueue,
   getLeadNotifyQueue,
+  getFlushQueue,
   startWorker,
   closeAllQueues,
   type WaInboundJob,
   type WaOutboundJob,
   type LeadNotifyJob,
+  type WaFlushJob,
   type StartedWorker
 } from "./queues.js";
 

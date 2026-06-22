@@ -1,41 +1,30 @@
-import { getOutboundQueue, type Job, type WaInboundJob, type WaOutboundJob } from "@jazu/queue";
-import { processWaInbound } from "@jazu/wa-pipeline";
-import { capturePostHog } from "@jazu/observability";
-import { prisma } from "@jazu/db";
+import { type Job, type WaInboundJob } from "@jazu/queue";
+import { ingestWaInbound } from "@jazu/wa-pipeline";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
-
-function randomInt(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function computeTargetReplyAtMs(inboundReceivedAtMs: number, isFirstBotReply: boolean): number {
-  const [minMs, maxMs] = isFirstBotReply
-    ? [env.WA_REPLY_DELAY_FIRST_MIN_MS, env.WA_REPLY_DELAY_FIRST_MAX_MS]
-    : [env.WA_REPLY_DELAY_MIN_MS, env.WA_REPLY_DELAY_MAX_MS];
-  return inboundReceivedAtMs + randomInt(minMs, maxMs);
-}
+import { enqueueReply } from "./outbound.js";
+import { scheduleFlush } from "./flush-scheduler.js";
+import { markBotActivatedOnce } from "./analytics.js";
 
 /**
- * Обработчик одной задачи из очереди wa:inbound.
+ * Обработчик одной задачи из очереди wa:inbound (фаза ingest).
  *
  * Алгоритм:
- *   1. Прогоняем сообщение через общий pipeline (dedupe → квота → LLM →
- *      persist) — это та же функция, что вызывается из legacy HTTP-эндпойнта.
- *   2. Если pipeline вернул reply — кладём задачу в wa:outbound, откуда
- *      её заберёт wa-worker и отправит через Baileys.
- *   3. Все нерекаверабельные состояния (agent_not_found, quota_exhausted,
- *      worker_session_mismatch) логируем и возвращаем — BullMQ не будет
- *      ретраить их, потому что мы их не бросаем.
- *   4. Любая исключительная ошибка (LLM 500, DB connection lost, etc.)
- *      бросается наверх — BullMQ ретрайнет с exponential backoff.
+ *   1. ingestWaInbound — фильтры, дедуп, квота, распознавание голоса, СОХРАНЕНИЕ
+ *      входящего. LLM НЕ зовём.
+ *   2. Если ingested — планируем/пересоздаём отложенный flush (склейка нескольких
+ *      входящих в один ответ; гибрид «тишина + потолок»). Сам ответ сформирует
+ *      handleWaFlush, когда окно закроется.
+ *   3. ok_immediate (голосовой fallback) — отвечаем сразу, минуя окно склейки.
+ *   4. Терминальные статусы (deduplicated/quota/bot_paused/…) логируем и выходим —
+ *      BullMQ не ретраит, т.к. мы не бросаем. Любое исключение бросается наверх.
  */
 export async function handleWaInbound(job: Job<WaInboundJob>): Promise<void> {
   const started = Date.now();
   const { agentId, chatId, waMessageId, requestId } = job.data;
   const log = logger.child({ reqId: requestId ?? null, agentId, jobId: job.id });
 
-  const result = await processWaInbound(job.data, {
+  const result = await ingestWaInbound(job.data, {
     telegramBotToken: env.TELEGRAM_BOT_TOKEN,
     workerUrl: env.WA_WORKER_URL,
     internalToken: env.API_INTERNAL_TOKEN,
@@ -44,69 +33,32 @@ export async function handleWaInbound(job: Job<WaInboundJob>): Promise<void> {
 
   const elapsedMs = Date.now() - started;
 
-  if (result.status === "ok") {
+  if (result.status === "ingested") {
+    await scheduleFlush(agentId, chatId, result.batchStartedAtMs);
+    log.info({ chatId, elapsedMs }, "wa:inbound ingested, flush scheduled");
+    return;
+  }
+
+  if (result.status === "ok_immediate") {
+    // Голосовой fallback: немедленный ответ без окна склейки.
     if (result.reply && result.reply.trim().length > 0) {
       const inboundReceivedAtMs =
-        job.data.messageTimestamp !== undefined
-          ? job.data.messageTimestamp * 1000
-          : Date.now();
-      const targetReplyAtMs = computeTargetReplyAtMs(inboundReceivedAtMs, result.isFirstBotReply);
-      const outbound: WaOutboundJob = {
+        job.data.messageTimestamp !== undefined ? job.data.messageTimestamp * 1000 : Date.now();
+      await enqueueReply({
         agentId,
         chatId,
-        text: result.reply,
-        humanize: true,
+        reply: result.reply,
         inboundReceivedAtMs,
-        targetReplyAtMs,
         isFirstBotReply: result.isFirstBotReply,
         ...(job.id ? { inboundJobId: String(job.id) } : {}),
         ...(requestId ? { requestId } : {}),
         ...(waMessageId ? { waMessageId } : {})
-      };
-      await getOutboundQueue().add("wa-outbound", outbound);
-    }
-
-    // Аналитика: активация владельца. bot_activated = «бот реально обработал
-    // первый живой диалог» (ответил живому клиенту). Шлём РОВНО раз на
-    // владельца: атомарный updateMany с guard botActivatedAt=null — если
-    // строка обновилась (была пустой), значит активация первая → отправляем
-    // событие; иначе молчим. Исключает повторы и гонки между параллельными
-    // воркерами. Ошибку БД глушим — аналитика не должна ронять обработку.
-    // Гард isFirstBotReply: активация возможна только на первом ответе в
-    // переписке, поэтому проверяем лишь там — не дёргаем БД на каждое сообщение.
-    if (result.reply && result.reply.trim().length > 0 && result.isFirstBotReply && result.agentOwnerUserId) {
-      try {
-        const activated = await prisma.user.updateMany({
-          where: { id: result.agentOwnerUserId, botActivatedAt: null },
-          data: { botActivatedAt: new Date() }
-        });
-        if (activated.count > 0) {
-          capturePostHog({
-            distinctId: result.agentOwnerUserId,
-            event: "bot_activated",
-            properties: { agentId }
-          });
-        }
-      } catch (err) {
-        log.warn({ err: err instanceof Error ? err.message : err }, "bot_activated mark failed");
+      });
+      if (result.isFirstBotReply && result.agentOwnerUserId) {
+        await markBotActivatedOnce(result.agentOwnerUserId, agentId, log);
       }
     }
-
-    // Аналитика: новый лид. shouldHandoff = AI решил передать менеджеру на
-    // этом ходу (момент «горячего» лида). distinctId — владелец агента.
-    // Имя client_lead_created — отдельный неймспейс воронки реальных клиентов
-    // (не путать с воронкой привлечения самого владельца).
-    if (result.shouldHandoff && result.leadId && result.agentOwnerUserId) {
-      capturePostHog({
-        distinctId: result.agentOwnerUserId,
-        event: "client_lead_created",
-        properties: { agentId, leadId: result.leadId }
-      });
-    }
-    log.info(
-      { chatId, elapsedMs, leadId: result.leadId, handoff: result.shouldHandoff },
-      "wa:inbound processed"
-    );
+    log.info({ chatId, elapsedMs }, "wa:inbound immediate reply (voice fallback)");
     return;
   }
 
@@ -127,14 +79,6 @@ export async function handleWaInbound(job: Job<WaInboundJob>): Promise<void> {
 
   if (result.status === "agent_not_found") {
     log.error({}, "wa:inbound agent not found — drop");
-    return;
-  }
-
-  if (result.status === "bot_loop_protected") {
-    log.warn(
-      { chatId, outboundLastHour: result.outboundLastHour },
-      "wa:inbound bot-loop protection triggered — bot silent"
-    );
     return;
   }
 

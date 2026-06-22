@@ -21,10 +21,14 @@ export { sendTelegramLead } from "./notifications.js";
 
 export {
   processWaInbound,
+  ingestWaInbound,
+  flushWaConversation,
   notifyLeadById,
   type WaInboundInput,
   type WaInboundResult,
-  type WaInboundOptions
+  type WaInboundOptions,
+  type IngestResult,
+  type FlushResult
 } from "./handler.js";
 
 export {

@@ -5,9 +5,11 @@ import {
   closeRedisWriter,
   getRedisWriter,
   QUEUE_WA_INBOUND,
+  QUEUE_WA_FLUSH,
   QUEUE_LEAD_NOTIFY,
   startWorker,
   type WaInboundJob,
+  type WaFlushJob,
   type LeadNotifyJob
 } from "@jazu/queue";
 import {
@@ -21,6 +23,7 @@ import {
 } from "@jazu/observability";
 import { env } from "./env.js";
 import { handleWaInbound } from "./handlers/wa-inbound.js";
+import { handleWaFlush } from "./handlers/wa-flush.js";
 import { handleLeadNotify } from "./handlers/lead-notify.js";
 import { logger } from "./logger.js";
 import { startRetentionCron } from "./retention.js";
@@ -47,6 +50,28 @@ const waInboundWorker = startWorker<WaInboundJob>(QUEUE_WA_INBOUND, handleWaInbo
 
 waInboundWorker.worker.on("ready", () => {
   logger.info({ queue: QUEUE_WA_INBOUND }, "worker ready");
+});
+
+// Фаза flush: склейка нескольких входящих клиента в ОДИН ответ. Здесь живёт
+// LLM-вызов (переехал из inbound), поэтому lockDuration держим как у inbound —
+// иначе при дефолтных 30с < времени LLM задача потеряет lock и BullMQ повторит
+// её → двойной ответ.
+const waFlushWorker = startWorker<WaFlushJob>(QUEUE_WA_FLUSH, handleWaFlush, {
+  concurrency: env.JOBS_CONCURRENCY,
+  lockDuration: env.JOBS_INBOUND_TIMEOUT_MS
+});
+
+waFlushWorker.worker.on("ready", () => {
+  logger.info({ queue: QUEUE_WA_FLUSH }, "worker ready");
+});
+
+waFlushWorker.worker.on("failed", (job, err) => {
+  captureError(err, {
+    route: "jobs:wa-flush",
+    requestId: (job?.data)?.requestId ?? null,
+    agentId: (job?.data)?.agentId ?? null,
+    extra: { jobId: job?.id, attemptsMade: job?.attemptsMade, maxAttempts: job?.opts.attempts }
+  });
 });
 
 // Отложенная отправка карточек лидов (придержка ~2 мин для «номера для связи»).
@@ -113,6 +138,9 @@ health.get("/readyz", async (_request, reply) => {
         if (!waInboundWorker.worker.isRunning()) {
           throw new Error("wa-inbound worker not running");
         }
+        if (!waFlushWorker.worker.isRunning()) {
+          throw new Error("wa-flush worker not running");
+        }
       }
     }
   ]);
@@ -156,6 +184,11 @@ async function shutdown(signal: string): Promise<void> {
     await waInboundWorker.close();
   } catch (err) {
     logger.error({ err }, "error closing wa:inbound worker");
+  }
+  try {
+    await waFlushWorker.close();
+  } catch (err) {
+    logger.error({ err }, "error closing wa:flush worker");
   }
   try {
     await leadNotifyWorker.close();

@@ -338,11 +338,19 @@ model Conversation {
   agentId         String
   waChatId        String
   customerName    String?
+  // Реальный телефон клиента (цифры), резолвнутый воркером из ключа сообщения.
+  // Стабилен на чат; нужен для карточки лида в пакетном flush, где ключа
+  // конкретного сообщения уже нет. Для @lid-чатов waChatId номером НЕ является.
+  customerPhone   String?
   status          ConversationStatus @default(open)
   // Буфер «потребности клиента» для боевого WhatsApp-диалога (v2.3). Пишется при
   // первом извлечении и при явной смене запроса (needChanged).
   detectedNeed    String?
   detectedName    String?
+  // Курсор «склейки» входящих: id последнего входящего WaMessage, на который
+  // бот уже ответил пакетным flush. Неотвеченный пакет = входящие после этого
+  // курсора (cursor-пагинация по (createdAt, id)). См. wa-pipeline: flushWaConversation.
+  lastAnsweredWaMessageId String?
   lastMessageAt   DateTime?    @default(now())
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt

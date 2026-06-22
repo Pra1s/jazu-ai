@@ -34,6 +34,12 @@ import { buildRedisForWorker, getRedisWriter } from "./redis.js";
 // разделитель в Redis-ключах), поэтому отделяем сегменты дефисом.
 export const QUEUE_WA_INBOUND = "wa-inbound";
 export const QUEUE_WA_OUTBOUND = "wa-outbound";
+// Отложенный «flush» диалога: склейка нескольких входящих клиента в ОДИН ответ.
+// Каждое входящее (после ingest) ставит/пересоздаёт одну отложенную задачу на чат
+// (jobId = `flush:<agentId>:<chatId>`), таймер сбрасывается на каждое сообщение
+// (гибрид «тишина + потолок»). Когда окно закрылось — handleWaFlush собирает все
+// неотвеченные входящие и зовёт LLM один раз. См. apps/jobs/handlers/wa-flush.ts.
+export const QUEUE_WA_FLUSH = "wa-flush";
 // Отложенная отправка карточки лида владельцу. Карточку придерживаем на пару
 // минут после закрытия лида, чтобы поймать «номер для связи» (его называют сразу
 // после закрытия) и отправить ОДНУ полную карточку, а не две. См.
@@ -98,6 +104,15 @@ export type LeadNotifyJob = {
   agentId: string;
 };
 
+export type WaFlushJob = {
+  /** Агент, в чьём диалоге склеиваем входящие. */
+  agentId: string;
+  /** WhatsApp-чат (remoteJid) клиента. */
+  chatId: string;
+  /** request-id для сквозной трассировки (наследуется от inbound, если был). */
+  requestId?: string;
+};
+
 const DEFAULT_QUEUE_OPTIONS: Omit<QueueOptions, "connection"> = {
   defaultJobOptions: {
     // Successful jobs — храним сутки + не больше 1000 штук, чтобы Redis не
@@ -134,6 +149,10 @@ export function getOutboundQueue(): Queue<WaOutboundJob> {
 
 export function getLeadNotifyQueue(): Queue<LeadNotifyJob> {
   return getQueue<LeadNotifyJob>(QUEUE_LEAD_NOTIFY);
+}
+
+export function getFlushQueue(): Queue<WaFlushJob> {
+  return getQueue<WaFlushJob>(QUEUE_WA_FLUSH);
 }
 
 export type StartedWorker<T> = {
