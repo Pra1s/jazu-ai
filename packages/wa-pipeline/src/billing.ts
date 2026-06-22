@@ -82,15 +82,6 @@ function buildPlan(p: {
 
 export const PLANS: Plan[] = [
   buildPlan({
-    id: "start",
-    label: "Старт",
-    description: "Бьюти-мастера, частные консультанты.",
-    audience: "Микробизнес",
-    conversations: 250,
-    monthlyPriceKzt: 14990,
-    kind: "subscription"
-  }),
-  buildPlan({
     id: "business",
     label: "Бизнес",
     description: "Активные Instagram-магазины, сфера услуг, СТО.",

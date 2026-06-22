@@ -1052,7 +1052,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
   // Оплата сейчас — заглушка (Purchase сразу paid). Реальный Kaspi Pay позже.
   const subscribeBodySchema = z.object({
     action: z.literal("subscribe"),
-    planId: z.enum(["start", "business", "scale"])
+    planId: z.enum(["business", "scale"])
   });
   const topupBodySchema = z.object({
     action: z.literal("topup"),
