@@ -25,7 +25,18 @@ export async function apiFetch(path: string, init?: RequestInit) {
 export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await apiFetch(path, init);
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    // Бэкенд кладёт человекочитаемую причину в поле message (напр. ошибки
+    // валидации 400) — показываем её юзеру вместо голого статуса.
+    let message = `Request failed: ${response.status}`;
+    try {
+      const data = (await response.json()) as { message?: unknown };
+      if (typeof data.message === "string" && data.message.trim()) {
+        message = data.message;
+      }
+    } catch {
+      // тело не JSON — оставляем статусное сообщение
+    }
+    throw new Error(message);
   }
   return (await response.json()) as T;
 }

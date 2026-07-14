@@ -106,13 +106,15 @@ function parseBranches(text: string): BranchRow[] {
   return rows.length > 0 ? rows : [{ ...EMPTY_BRANCH }];
 }
 
-const FIELD_META: { key: keyof Fields; label: string; placeholder: string; rows: number }[] = [
-  { key: "companyName", label: "Название компании", placeholder: "Например: Студия красоты «Алия»", rows: 1 },
-  { key: "services", label: "Список услуг / товаров", placeholder: "Стрижка\nОкрашивание\nМаникюр", rows: 3 },
-  { key: "links", label: "Ссылки (Instagram, 2ГИС, сайт)", placeholder: "https://instagram.com/...\nhttps://2gis.kz/...", rows: 2 },
-  { key: "pricing", label: "Прайс / цены", placeholder: "Стрижка - 5000 ₸\nОкрашивание - от 15000 ₸", rows: 3 },
-  { key: "script", label: "Скрипт / сценарий продаж", placeholder: "Как бот должен вести клиента к заявке", rows: 3 },
-  { key: "restrictions", label: "Ограничения / чего не делаем", placeholder: "Не работаем с детьми до 18\nБез выезда за город", rows: 2 }
+// maxLength должен совпадать с лимитами extraDataSchema на бэке
+// (apps/api/src/routes.ts), иначе сохранение упрётся в 400.
+const FIELD_META: { key: keyof Fields; label: string; placeholder: string; rows: number; maxLength: number }[] = [
+  { key: "companyName", label: "Название компании", placeholder: "Например: Студия красоты «Алия»", rows: 1, maxLength: 300 },
+  { key: "services", label: "Список услуг / товаров", placeholder: "Стрижка\nОкрашивание\nМаникюр", rows: 3, maxLength: 4000 },
+  { key: "links", label: "Ссылки (Instagram, 2ГИС, сайт)", placeholder: "https://instagram.com/...\nhttps://2gis.kz/...", rows: 2, maxLength: 2000 },
+  { key: "pricing", label: "Прайс / цены", placeholder: "Стрижка - 5000 ₸\nОкрашивание - от 15000 ₸", rows: 3, maxLength: 4000 },
+  { key: "script", label: "Скрипт / сценарий продаж", placeholder: "Как бот должен вести клиента к заявке", rows: 3, maxLength: 20000 },
+  { key: "restrictions", label: "Ограничения / чего не делаем", placeholder: "Не работаем с детьми до 18\nБез выезда за город", rows: 2, maxLength: 2000 }
 ];
 
 // Стилизованный селект: нативный select без системных стрелок + свой шеврон.
@@ -226,6 +228,7 @@ export default function ExtraDataDialog({ open, onClose, onSaved }: ExtraDataDia
               <textarea
                 rows={f.rows}
                 value={fields[f.key]}
+                maxLength={f.maxLength}
                 onChange={(e) => setFields((prev) => ({ ...prev, [f.key]: e.target.value }))}
                 placeholder={f.placeholder}
                 className={cn(
@@ -233,6 +236,11 @@ export default function ExtraDataDialog({ open, onClose, onSaved }: ExtraDataDia
                   "focus:border-foreground focus:ring-1 focus:ring-foreground/10"
                 )}
               />
+              {fields[f.key].length >= f.maxLength * 0.9 && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {fields[f.key].length.toLocaleString("ru-RU")} / {f.maxLength.toLocaleString("ru-RU")} символов
+                </p>
+              )}
             </div>
           ))}
 

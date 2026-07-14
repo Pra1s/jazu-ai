@@ -1628,7 +1628,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     services: z.string().max(4000).optional(),
     links: z.string().max(2000).optional(),
     pricing: z.string().max(4000).optional(),
-    script: z.string().max(4000).optional(),
+    script: z.string().max(20000, "Скрипт продаж слишком длинный — максимум 20 000 символов").optional(),
     // Объединённое поле «адреса/филиалы и время работы»: филиал — график,
     // по строке на филиал. Хранится целиком в profile.hours.
     branches: z.string().max(3000).optional(),

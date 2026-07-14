@@ -1,4 +1,5 @@
 import Fastify, { type FastifyRequest } from "fastify";
+import { ZodError } from "zod";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import formbody from "@fastify/formbody";
@@ -140,6 +141,37 @@ export async function buildServer() {
   });
 
   app.setErrorHandler((error, request, reply) => {
+    // Ошибки zod-валидации body — это некорректный ввод клиента, а не сбой
+    // сервера: отдаём 400 с человекочитаемым сообщением (первая issue), а не 500.
+    if (error instanceof ZodError) {
+      request.log.warn({ err: error, reqId: request.id }, "request validation failed");
+      if (!reply.sent) {
+        reply.code(400).send({
+          message: error.issues[0]?.message ?? "Некорректные данные запроса",
+          error: "Bad Request",
+          statusCode: 400,
+          requestId: request.id
+        });
+      }
+      return;
+    }
+    // Ошибки Fastify с клиентским статусом (413 body too large, 429 rate-limit,
+    // 400 битый JSON и т.п.) — не сбои сервера: отдаём их статус, в Sentry не шлём.
+    const rawStatus = (error as { statusCode?: unknown } | null)?.statusCode;
+    const statusCode = typeof rawStatus === "number" ? rawStatus : 500;
+    if (statusCode >= 400 && statusCode < 500) {
+      request.log.warn({ err: error, reqId: request.id }, "request rejected");
+      if (!reply.sent) {
+        reply.code(statusCode).send({
+          message: error instanceof Error ? error.message : "Request rejected",
+          error: "Client Error",
+          statusCode,
+          requestId: request.id
+        });
+      }
+      return;
+    }
+
     request.log.error({ err: error, reqId: request.id }, "request failed");
     captureError(error, {
       requestId: request.id,
