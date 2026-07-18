@@ -321,6 +321,65 @@ async function pushPreConnectionChats(agentId: string, chatIds: string[]): Promi
   }
 }
 
+/**
+ * Фича «бот в стиле владельца» (продуктовый источник). Собирает ТЕКСТ личных
+ * диалогов из history-sync для последующего анализа стиля владельца. Только личные
+ * чаты (не группы/броадкасты), только текст, с таймингами и признаком fromMe.
+ * Возвращает диалоги с >= 4 реплик — короткие для анализа бесполезны.
+ */
+type HistoryDialogueMsg = { fromMe: boolean; text: string; ts?: number };
+type HistoryDialogue = { waChatId: string; label: string; messages: HistoryDialogueMsg[] };
+
+function isPersonalJid(jid: string): boolean {
+  if (jid === "status@broadcast") return false;
+  if (jid.endsWith("@g.us") || jid.endsWith("@broadcast") || jid.endsWith("@newsletter")) return false;
+  return jid.endsWith("@s.whatsapp.net") || jid.endsWith("@lid") || jid.endsWith("@c.us");
+}
+
+function collectHistoryDialogues(payload: {
+  chats?: Array<{ id?: string | null; name?: string | null }> | null;
+  messages?: Array<WAMessageLike> | null;
+}): HistoryDialogue[] {
+  const names = new Map<string, string>();
+  for (const c of payload.chats ?? []) {
+    if (c?.id && c?.name) names.set(c.id, c.name);
+  }
+  const byChat = new Map<string, HistoryDialogue>();
+  for (const m of payload.messages ?? []) {
+    const jid = m?.key?.remoteJid;
+    if (!jid || !isPersonalJid(jid)) continue;
+    const text = getTextMessage(m);
+    if (!text) continue;
+    const entry = byChat.get(jid) ?? { waChatId: jid, label: names.get(jid) ?? "", messages: [] };
+    const ts = extractMessageTimestamp(m.messageTimestamp);
+    entry.messages.push({
+      fromMe: Boolean(m.key?.fromMe),
+      text,
+      ...(ts !== undefined ? { ts } : {})
+    });
+    byChat.set(jid, entry);
+  }
+  return Array.from(byChat.values()).filter((d) => d.messages.length >= 4);
+}
+
+/** Пушит буфер личных диалогов в API пачками (для анализа стиля). Best-effort. */
+async function pushHistoryDialogues(agentId: string, dialogues: HistoryDialogue[]): Promise<void> {
+  if (dialogues.length === 0) return;
+  const BATCH = 40;
+  for (let i = 0; i < dialogues.length; i += BATCH) {
+    const chunk = dialogues.slice(i, i + BATCH);
+    try {
+      await fetch(new URL("/api/internal/wa-history-dialogues", env.API_ORIGIN), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-internal-token": env.API_INTERNAL_TOKEN },
+        body: JSON.stringify({ agentId, dialogues: chunk })
+      });
+    } catch (err) {
+      console.error("[wa] push history dialogues failed:", err instanceof Error ? err.message : err);
+    }
+  }
+}
+
 /** Извлекает chatId (remoteJid) из history-sync payload. Берём и из chats,
  *  и из messages — чтобы максимально полно покрыть «до-коннектные» чаты.
  *  Игнорируем статусы/броадкасты — это не реальные диалоги. */
@@ -585,6 +644,12 @@ export class ConnectionManager {
       if (managed.stopRequested) return;
       const chatIds = collectHistoryChatIds(payload);
       void pushPreConnectionChats(agentId, chatIds);
+      // Фича «бот в стиле владельца»: буферизуем текст личных диалогов для анализа
+      // (только при явно включённом захвате — личную переписку без согласия не собираем).
+      if (env.WA_STYLE_HISTORY_CAPTURE) {
+        const dialogues = collectHistoryDialogues(payload);
+        void pushHistoryDialogues(agentId, dialogues);
+      }
     });
 
     socket.ev.on("connection.update", async (update) => {

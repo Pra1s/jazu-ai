@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronRight, Send, RotateCcw, Mic, Pencil, Play, Pause, FileText, Smartphone } from "lucide-react";
+import { ChevronDown, ChevronRight, Send, RotateCcw, Mic, Pencil, Play, Pause, FileText, Smartphone, Sparkles } from "lucide-react";
 import {
   type ActionButton,
   type BusinessProfile,
@@ -25,6 +25,7 @@ import { renderMarkdown } from "@/lib/render-markdown";
 import { toast } from "sonner";
 import { useAuthStatus } from "@/lib/use-auth-status";
 import ExtraDataDialog from "@/components/extra-data-dialog";
+import StyleImportDialog from "@/components/style-import-dialog";
 
 type AssistantPart = {
   type: string;
@@ -630,6 +631,7 @@ export default function ChatWorkspace() {
   const [correction, setCorrection] = useState<CorrectionState | null>(null);
   const [promptDrawerOpen, setPromptDrawerOpen] = useState(false);
   const [extraDataOpen, setExtraDataOpen] = useState(false);
+  const [styleImportOpen, setStyleImportOpen] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
   const [inputDisabled, setInputDisabled] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -1184,6 +1186,15 @@ export default function ChatWorkspace() {
               <FileText className="h-3.5 w-3.5" />
               Добавить данные о бизнесе
             </button>
+            <button
+              type="button"
+              onClick={() => setStyleImportOpen(true)}
+              className="flex items-center gap-1 rounded-full bg-secondary px-2.5 py-1 text-xs font-medium text-foreground transition hover:bg-secondary/70"
+              title="Обучить бота вашему стилю общения по переписке из WhatsApp"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              Бот в моём стиле
+            </button>
           </div>
         )}
       </div>
@@ -1409,6 +1420,13 @@ export default function ChatWorkspace() {
           notifyPromptProgress();
           void refreshPrompt();
         }}
+      />
+
+      {/* Бот в стиле владельца: импорт диалогов и прогресс анализа */}
+      <StyleImportDialog
+        open={styleImportOpen}
+        onClose={() => setStyleImportOpen(false)}
+        onApplied={() => void refreshPrompt()}
       />
 
       {/* Непропускаемая подсказка, указывающая на кнопку «Подключить WhatsApp»

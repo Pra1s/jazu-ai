@@ -45,7 +45,8 @@ export async function deleteUserAccount(userId: string): Promise<void> {
 
     // 2. Удаляем все агенты — Cascade снесёт:
     //    businessProfile, promptVersions, builderMessages, testMessages,
-    //    waConnections (с creds), conversations → waMessages + leads.
+    //    waConnections (с creds), conversations → waMessages + leads,
+    //    dialogueCards + styleAnalysis (фича «бот в стиле владельца»).
     await tx.agent.deleteMany({
       where: { userId }
     });

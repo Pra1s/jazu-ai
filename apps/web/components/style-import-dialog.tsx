@@ -1,0 +1,353 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Sparkles, Upload, MessageSquare, Trash2, Loader2 } from "lucide-react";
+import { apiJson } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription
+} from "@/components/ui/dialog";
+import { cn } from "@/lib/cn";
+import { toast } from "sonner";
+
+type StyleImportDialogProps = {
+  open: boolean;
+  onClose: () => void;
+  onApplied?: () => void;
+};
+
+type StyleStatus = {
+  status: "none" | "pending" | "queued" | "analyzing" | "aggregating" | "done" | "error";
+  stage?: string;
+  totalEpisodes?: number;
+  processedEpisodes?: number;
+  error?: string | null;
+  hasStyle?: boolean;
+  styleGuidePreview?: string | null;
+};
+
+type HistoryChat = { waChatId: string; label: string; messageCount: number; selected: boolean };
+
+type Tab = "files" | "whatsapp";
+
+const IN_PROGRESS = new Set(["queued", "analyzing", "aggregating"]);
+
+export default function StyleImportDialog({ open, onClose, onApplied }: StyleImportDialogProps) {
+  const [tab, setTab] = useState<Tab>("files");
+  const [ownerName, setOwnerName] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<StyleStatus | null>(null);
+  const [historyChats, setHistoryChats] = useState<HistoryChat[]>([]);
+  const [selectedChats, setSelectedChats] = useState<Set<string>>(new Set());
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const refreshStatus = useCallback(async () => {
+    try {
+      const s = await apiJson<StyleStatus>("/agent/style-status");
+      setStatus(s);
+      return s;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  // При открытии — тянем статус и (для вкладки WhatsApp) список чатов.
+  useEffect(() => {
+    if (!open) return;
+    void refreshStatus();
+    void (async () => {
+      try {
+        const data = await apiJson<{ chats: HistoryChat[] }>("/agent/style-history-chats");
+        setHistoryChats(data.chats);
+      } catch {
+        setHistoryChats([]);
+      }
+    })();
+  }, [open, refreshStatus]);
+
+  // Поллинг прогресса, пока анализ идёт.
+  useEffect(() => {
+    const running = status && IN_PROGRESS.has(status.status);
+    if (open && running && !pollRef.current) {
+      pollRef.current = setInterval(() => {
+        void refreshStatus().then((s) => {
+          if (s && !IN_PROGRESS.has(s.status) && pollRef.current) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+            if (s.status === "done" && s.hasStyle) {
+              toast.success("Стиль применён — бот теперь отвечает в вашей манере");
+              onApplied?.();
+            } else if (s.status === "error") {
+              toast.error(s.error || "Не удалось собрать стиль");
+            }
+          }
+        });
+      }, 3000);
+    }
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [open, status, refreshStatus, onApplied]);
+
+  async function uploadFiles() {
+    if (files.length === 0) {
+      toast.error("Выберите файлы экспорта");
+      return;
+    }
+    setBusy(true);
+    try {
+      const payloadFiles = await Promise.all(
+        files.map(async (f) => ({ filename: f.name, content: await f.text() }))
+      );
+      const res = await apiJson<{ ok: boolean; totalEpisodes: number }>("/agent/style-dialogues", {
+        method: "POST",
+        body: JSON.stringify({ ownerName: ownerName.trim() || undefined, files: payloadFiles })
+      });
+      toast.success(`Загружено, эпизодов: ${res.totalEpisodes}. Анализирую…`);
+      setFiles([]);
+      await refreshStatus();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Не удалось загрузить");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function analyzeSelected() {
+    if (selectedChats.size === 0) {
+      toast.error("Отметьте хотя бы один чат");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await apiJson<{ ok: boolean; totalEpisodes: number }>("/agent/style-history-analyze", {
+        method: "POST",
+        body: JSON.stringify({ waChatIds: Array.from(selectedChats) })
+      });
+      toast.success(`Отобрано эпизодов: ${res.totalEpisodes}. Анализирую…`);
+      setHistoryChats([]);
+      setSelectedChats(new Set());
+      await refreshStatus();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Не удалось запустить анализ");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resetStyle() {
+    setBusy(true);
+    try {
+      await apiJson("/agent/style", { method: "DELETE" });
+      toast.success("Стиль сброшен — бот вернулся к базовому поведению");
+      await refreshStatus();
+      onApplied?.();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Не удалось сбросить");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const running = status && IN_PROGRESS.has(status.status);
+  const hasStyle = status?.hasStyle;
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-brand" />
+            Бот в вашем стиле
+          </DialogTitle>
+          <DialogDescription>
+            Загрузите переписки — бот проанализирует, как вы общаетесь с клиентами, и будет отвечать в вашей манере.
+            Цены и факты бот всегда берёт из данных о бизнесе, а не из переписок.
+          </DialogDescription>
+        </DialogHeader>
+
+        {/* Прогресс анализа */}
+        {running && (
+          <div className="flex items-center gap-3 rounded-xl border border-border bg-secondary/30 p-4">
+            <Loader2 className="h-5 w-5 shrink-0 animate-spin text-brand" />
+            <div className="text-sm">
+              <div className="font-medium text-foreground">Анализирую диалоги…</div>
+              <div className="text-muted-foreground">
+                {status?.status === "aggregating"
+                  ? "Собираю паспорт стиля"
+                  : status?.processedEpisodes !== undefined && status?.totalEpisodes
+                    ? `Обработано ${status.processedEpisodes} из ${status.totalEpisodes}`
+                    : "Готовлю диалоги"}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Стиль применён */}
+        {!running && hasStyle && (
+          <div className="space-y-3 rounded-xl border border-brand/30 bg-brand/5 p-4">
+            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <Sparkles className="h-4 w-4 text-brand" />
+              Стиль применён
+            </div>
+            {status?.styleGuidePreview && (
+              <p className="whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
+                {status.styleGuidePreview}
+                {status.styleGuidePreview.length >= 590 ? "…" : ""}
+              </p>
+            )}
+            <Button variant="outline" size="sm" onClick={() => void resetStyle()} disabled={busy}>
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+              Сбросить стиль
+            </Button>
+          </div>
+        )}
+
+        {/* Ошибка */}
+        {!running && status?.status === "error" && (
+          <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+            {status.error || "Не удалось собрать стиль. Попробуйте загрузить больше диалогов."}
+          </div>
+        )}
+
+        {/* Источники (скрыты во время анализа) */}
+        {!running && (
+          <>
+            <div className="flex gap-1 rounded-lg bg-secondary/50 p-1">
+              <button
+                type="button"
+                onClick={() => setTab("files")}
+                className={cn(
+                  "flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition",
+                  tab === "files" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
+                )}
+              >
+                <Upload className="h-3.5 w-3.5" />
+                Загрузить файлы
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab("whatsapp")}
+                className={cn(
+                  "flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition",
+                  tab === "whatsapp" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
+                )}
+              >
+                <MessageSquare className="h-3.5 w-3.5" />
+                Из WhatsApp
+              </button>
+            </div>
+
+            {tab === "files" && (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-foreground">
+                    Как вы подписаны в чатах
+                  </label>
+                  <input
+                    type="text"
+                    value={ownerName}
+                    onChange={(e) => setOwnerName(e.target.value)}
+                    placeholder="Например: Ильяс (имя контакта на телефоне)"
+                    className={cn(
+                      "mt-1.5 w-full rounded-lg border border-border bg-background px-3.5 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted-foreground",
+                      "focus:border-foreground focus:ring-1 focus:ring-foreground/10"
+                    )}
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Нужно для .txt-экспорта, чтобы отличить ваши реплики от клиентских. Для JSON-выгрузки не обязательно.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-foreground">Файлы диалогов</label>
+                  <input
+                    type="file"
+                    multiple
+                    accept=".txt,.json"
+                    onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+                    className="mt-1.5 block w-full text-sm text-muted-foreground file:mr-3 file:rounded-lg file:border-0 file:bg-secondary file:px-3 file:py-2 file:text-sm file:font-medium file:text-foreground hover:file:bg-secondary/70"
+                  />
+                  {files.length > 0 && (
+                    <p className="mt-1 text-xs text-muted-foreground">Выбрано файлов: {files.length}</p>
+                  )}
+                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                    На телефоне откройте чат → «Ещё» → «Экспорт чата» → «Без медиа». Файлы .txt можно
+                    выбрать сразу несколько. Для массовой выгрузки подойдёт JSON от wtsexporter.
+                  </p>
+                </div>
+
+                <div className="flex justify-end">
+                  <Button onClick={() => void uploadFiles()} disabled={busy || files.length === 0}>
+                    {busy ? "Загружаю…" : "Проанализировать"}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {tab === "whatsapp" && (
+              <div className="space-y-3">
+                {historyChats.length === 0 ? (
+                  <p className="rounded-xl border border-border bg-secondary/30 p-4 text-xs leading-5 text-muted-foreground">
+                    Личные чаты из WhatsApp пока не подтянуты. Импорт истории приходит при подключении
+                    номера (уже подключённым может понадобиться переподключение). Основной пласт —
+                    свежие месяцы; старые годы WhatsApp может не прислать. Пока история не пришла,
+                    воспользуйтесь загрузкой файлов.
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      Отметьте клиентские чаты (исключите личные и семейные) — по ним соберём ваш стиль.
+                    </p>
+                    <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-border p-1.5">
+                      {historyChats.map((c) => {
+                        const checked = selectedChats.has(c.waChatId);
+                        return (
+                          <label
+                            key={c.waChatId}
+                            className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition hover:bg-secondary/50"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => {
+                                setSelectedChats((prev) => {
+                                  const next = new Set(prev);
+                                  if (e.target.checked) next.add(c.waChatId);
+                                  else next.delete(c.waChatId);
+                                  return next;
+                                });
+                              }}
+                              className="h-4 w-4 shrink-0"
+                            />
+                            <span className="min-w-0 flex-1 truncate text-foreground">
+                              {c.label || c.waChatId}
+                            </span>
+                            <span className="shrink-0 text-xs text-muted-foreground">{c.messageCount}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <div className="flex justify-end">
+                      <Button onClick={() => void analyzeSelected()} disabled={busy || selectedChats.size === 0}>
+                        {busy ? "Запускаю…" : `Проанализировать (${selectedChats.size})`}
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}

@@ -41,7 +41,14 @@ export const businessProfileSchema = z.object({
   // Механика воронки. Истина — Agent.carcass; в схеме нужна, т.к. v3-envelope
   // читает profile.carcass (значение подмешивается из Agent на вызове рантайма).
   carcass: z.enum(CARCASSES).optional(),
-  notes: z.string().optional()
+  notes: z.string().optional(),
+  // Фича «бот в стиле владельца» (результат анализа диалогов). Всё опционально:
+  // без стиля рантайм работает бит-в-бит как раньше (см. buildRuntimeEnvelope).
+  // styleGuide — паспорт стиля (как писать), stylePlaybook — паттерны отработки
+  // ситуаций, styleFewShot — отобранные примеры «Клиент/Владелец».
+  styleGuide: z.string().optional(),
+  stylePlaybook: z.string().optional(),
+  styleFewShot: z.array(z.string()).default([])
 });
 
 export type BusinessProfile = z.infer<typeof businessProfileSchema>;

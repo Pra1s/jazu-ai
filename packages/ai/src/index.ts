@@ -416,7 +416,14 @@ export async function buildRuntimeTurn(
   profile: BusinessProfile,
   userText: string,
   history: Array<{ role: "user" | "assistant"; content: string }> = [],
-  options: { systemOverride?: string | null; detectedNeed?: string | null; detectedName?: string | null; telemetry?: LlmTelemetryHooks } = {}
+  options: {
+    systemOverride?: string | null;
+    detectedNeed?: string | null;
+    detectedName?: string | null;
+    telemetry?: LlmTelemetryHooks;
+    // RAG: похожие обмены владельца под текущее входящее (пусто без RAG/стиля).
+    retrievedExamples?: string[];
+  } = {}
 ): Promise<RuntimeTurn> {
   const summary = summarizeLead(profile, userText);
   const handoff = identifyLeadNeed(userText);
@@ -435,7 +442,14 @@ export async function buildRuntimeTurn(
   // ПОРЯДОК ВАЖЕН: envelope v3 принимает бизнес-промпт первым аргументом и сам
   // склеивает его с блоками роли/потребности/механики/handoff и контрактом.
   // profile несёт botModel/carcass (подмешиваются вызывающим кодом из Agent).
-  const runtimeSystem = buildRuntimeEnvelope(systemPrompt, profile, options.detectedNeed ?? null, options.detectedName ?? null);
+  const runtimeSystem = buildRuntimeEnvelope(
+    systemPrompt,
+    profile,
+    options.detectedNeed ?? null,
+    options.detectedName ?? null,
+    new Date(),
+    options.retrievedExamples ?? []
+  );
 
   try {
     const wrapper = await runJsonCallWithTelemetry<{
@@ -742,9 +756,44 @@ export {
   completeJsonWithUsage,
   runJsonCallWithTelemetry,
   transcribeAudio,
+  embedTexts,
+  embedText,
+  EMBEDDING_DIM,
   setLlmKeyProvider,
   type LlmKeyProvider,
   type LlmUsage,
   type LlmCallTelemetry,
   type LlmTelemetryHooks
 } from "./openai.js";
+
+// Фича «бот в стиле владельца»: парсинг диалогов, ранжирование, двухпроходный анализ.
+export {
+  parseDialogueSource,
+  parseWhatsappTxt,
+  parseWtsexporterJson,
+  parseWtsexporterChat,
+  parseHistoryMessages,
+  maskPhones,
+  maskChatLabel,
+  rankEpisodes,
+  scoreEpisode,
+  analyzeDialogueCard,
+  analyzeEpisodes,
+  aggregateStyle,
+  cardToExchanges,
+  buildDialogueCardPrompt,
+  buildStyleAggregationPrompt,
+  formatEpisodeForPrompt,
+  DEFAULT_EPISODE_SPLIT_DAYS,
+  DEFAULT_RANK_OPTIONS,
+  type DialogueTurn,
+  type DialogueEpisode,
+  type DialogueExchange,
+  type DialogueKeyMoment,
+  type DialogueCard,
+  type StyleArtifacts,
+  type ParseOptions,
+  type RankOptions,
+  type RankedEpisode,
+  type HistoryMessage
+} from "./style/index.js";

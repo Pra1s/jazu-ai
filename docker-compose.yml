@@ -1,6 +1,9 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector/pgvector — официальный образ Postgres 16 с расширением vector
+    # (нужно для RAG «бот в стиле владельца», миграция CREATE EXTENSION vector).
+    # Data-каталог совместим с прежним postgres:16 — том pgdata переносить не нужно.
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: jazu

@@ -541,6 +541,46 @@ export async function transcribeAudio(
   return "";
 }
 
+/**
+ * Эмбеддинги для RAG по стилю (фича «бот в стиле владельца»).
+ * Модель фиксирована размерностью колонки vector(1536) в БД — по умолчанию
+ * text-embedding-3-small (1536). Меняешь модель → меняй и размерность миграции.
+ * Использует OpenAI-совместимый /embeddings (тот же baseUrl/ключ, что и chat).
+ * Возвращает [] без ключа/при ошибке — вызывающий деградирует на статичный стиль.
+ */
+export const EMBEDDING_DIM = 1536;
+
+export async function embedTexts(texts: string[]): Promise<number[][]> {
+  const inputs = texts.map((t) => t.trim()).filter(Boolean);
+  if (inputs.length === 0) return [];
+  const { baseUrl, apiKey } = llmConfig();
+  const embedBaseUrl = (process.env.EMBEDDING_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, "") || baseUrl;
+  const embedKey = process.env.EMBEDDING_API_KEY || process.env.OPENAI_API_KEY || apiKey;
+  const model = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
+  if (!embedKey) return [];
+
+  const response = await fetchWithRetry(`${embedBaseUrl}/embeddings`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${embedKey}`
+    },
+    body: JSON.stringify({ model, input: inputs })
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Embedding request failed: ${response.status} ${errorText}`);
+  }
+  const data = (await response.json()) as { data?: Array<{ embedding?: number[] }> };
+  return (data.data ?? []).map((d) => d.embedding ?? []);
+}
+
+/** Один эмбеддинг (обёртка над embedTexts). null, если не удалось. */
+export async function embedText(text: string): Promise<number[] | null> {
+  const [vec] = await embedTexts([text]);
+  return vec && vec.length > 0 ? vec : null;
+}
+
 async function safeOnCall(telemetry: LlmTelemetryHooks | undefined, record: LlmCallTelemetry): Promise<void> {
   if (!telemetry?.onCall) return;
   try {

@@ -202,6 +202,10 @@ model Agent {
   waConnections    WaConnection[]
   conversations    Conversation[]
   preConnectionChats WaPreConnectionChat[]
+  dialogueCards    DialogueCard[]
+  styleAnalysis    StyleAnalysis?
+  styleExchanges   StyleExchange[]
+  historyChats     WaHistoryChat[]
 
   @@index([userId])
 }
@@ -213,6 +217,83 @@ model BusinessProfile {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   agent           Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+}
+
+/// Карточка анализа ОДНОГО диалога (проход 1 фичи «бот в стиле владельца»).
+/// card — структурный разбор (тип клиента, исход, keyMoments, styleTraits, bestExchanges);
+/// excerpts — плоский список обменов (situation/clientText/ownerText) для few-shot и RAG.
+/// PII уже замаскирована на парсинге (телефоны) и в промпте прохода 1 (имена).
+/// Живёт только пока владелец не удалил стиль или аккаунт (Cascade + DELETE /agent/style).
+model DialogueCard {
+  id              String   @id @default(cuid())
+  agentId         String
+  sourceChatLabel String   @default("")
+  episodeIndex    Int      @default(0)
+  card            Json
+  excerpts        Json
+  createdAt       DateTime @default(now())
+  agent           Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+}
+
+/// Состояние прогона анализа стиля для агента (один на агента).
+/// episodes — временный буфер распарсенных эпизодов, ждущих обработки очередью
+/// style:analyze; после завершения обнуляется. status/stage/*Episodes — прогресс
+/// для GET /agent/style-status. Хранит ownerName, чтобы карточки соотносились с владельцем.
+model StyleAnalysis {
+  id                String   @id @default(cuid())
+  agentId           String   @unique
+  // pending | queued | analyzing | aggregating | done | error
+  status            String   @default("pending")
+  stage             String   @default("")
+  ownerName         String   @default("")
+  totalEpisodes     Int      @default(0)
+  processedEpisodes Int      @default(0)
+  episodes          Json?
+  error             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  agent             Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+}
+
+/// Буфер личных диалогов из WhatsApp history-sync (продуктовый источник фичи
+/// «бот в стиле владельца»). Заполняется воркером при захвате истории (только при
+/// WA_STYLE_HISTORY_CAPTURE). Владелец выбирает нужные чаты в UI (selected), затем
+/// выбранные конвертируются в эпизоды и уходят в анализ. Чистится после анализа.
+model WaHistoryChat {
+  id           String   @id @default(cuid())
+  agentId      String
+  waChatId     String
+  label        String   @default("")
+  messageCount Int      @default(0)
+  messages     Json
+  selected     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  agent        Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, waChatId])
+  @@index([agentId])
+}
+
+/// RAG-индекс обменов из карточек (фича «бот в стиле владельца»).
+/// Один ряд = один показательный обмен «клиент → владелец» с эмбеддингом ownerText.
+/// В рантайме по эмбеддингу входящего достаём top-K похожих и подмешиваем в промпт
+/// как динамические few-shot. embedding — pgvector, работаем через raw SQL (Prisma
+/// Client не читает Unsupported-типы). Требует расширение vector в Postgres.
+model StyleExchange {
+  id             String   @id @default(cuid())
+  agentId        String
+  dialogueCardId String?
+  situation      String   @default("")
+  clientText     String   @default("")
+  ownerText      String
+  embedding      Unsupported("vector(1536)")?
+  createdAt      DateTime @default(now())
+  agent          Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
 }
 
 model PromptVersion {

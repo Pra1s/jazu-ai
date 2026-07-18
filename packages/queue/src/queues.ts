@@ -45,6 +45,10 @@ export const QUEUE_WA_FLUSH = "wa-flush";
 // после закрытия) и отправить ОДНУ полную карточку, а не две. См.
 // wa-pipeline: writeLeadIfNeeded (enqueue) → notifyLeadById (consumer в jobs).
 export const QUEUE_LEAD_NOTIFY = "lead-notify";
+// Анализ стиля владельца (фича «бот в стиле владельца»): сотни LLM-вызовов, в HTTP
+// держать нельзя. Задача — прогнать оба прохода анализа над эпизодами, сохранёнными
+// в StyleAnalysis.episodes. Обрабатывает apps/jobs: handleStyleAnalyze.
+export const QUEUE_STYLE_ANALYZE = "style-analyze";
 
 export type WaInboundJob = {
   agentId: string;
@@ -113,6 +117,11 @@ export type WaFlushJob = {
   requestId?: string;
 };
 
+export type StyleAnalyzeJob = {
+  /** Агент, для которого гоним анализ стиля (эпизоды лежат в StyleAnalysis.episodes). */
+  agentId: string;
+};
+
 const DEFAULT_QUEUE_OPTIONS: Omit<QueueOptions, "connection"> = {
   defaultJobOptions: {
     // Successful jobs — храним сутки + не больше 1000 штук, чтобы Redis не
@@ -153,6 +162,10 @@ export function getLeadNotifyQueue(): Queue<LeadNotifyJob> {
 
 export function getFlushQueue(): Queue<WaFlushJob> {
   return getQueue<WaFlushJob>(QUEUE_WA_FLUSH);
+}
+
+export function getStyleAnalyzeQueue(): Queue<StyleAnalyzeJob> {
+  return getQueue<StyleAnalyzeJob>(QUEUE_STYLE_ANALYZE);
 }
 
 export type StartedWorker<T> = {

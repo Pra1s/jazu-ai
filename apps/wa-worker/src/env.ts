@@ -38,7 +38,18 @@ const envSchema = z.object({
   WA_TYPING_MIN_MS: z.coerce.number().int().positive().default(5_000),
   WA_TYPING_MAX_MS: z.coerce.number().int().positive().default(12_000),
   SENTRY_DSN: z.string().url().optional().or(z.literal("").transform(() => undefined)),
-  RELEASE_VERSION: z.string().optional()
+  RELEASE_VERSION: z.string().optional(),
+  /**
+   * Фича «бот в стиле владельца», продуктовый источник. Если включено — при
+   * history-sync воркер, помимо снимка «до-коннектных» чатов, буферизует ТЕКСТ
+   * личных диалогов и шлёт в API для последующего анализа (владелец выбирает чаты
+   * в UI). По умолчанию ВЫКЛЮЧЕНО: без явного согласия личную переписку не собираем.
+   */
+  WA_STYLE_HISTORY_CAPTURE: z
+    .enum(["true", "false", "1", "0"])
+    .optional()
+    .transform((v) => v === "true" || v === "1")
+    .default(false)
 });
 
 export const env = envSchema.parse(process.env);

@@ -36,3 +36,13 @@ export {
   getDailyTokenUsage,
   getTopSpenders
 } from "./llm-telemetry.js";
+
+export {
+  runStyleAnalysis,
+  clearStyle,
+  type StyleAnalysisResult,
+  type StyleAnalysisProgress,
+  type RunStyleAnalysisParams
+} from "./style-analysis.js";
+
+export { indexStyleExchanges, retrieveStyleExamples } from "./style-rag.js";

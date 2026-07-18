@@ -7,10 +7,12 @@ import {
   QUEUE_WA_INBOUND,
   QUEUE_WA_FLUSH,
   QUEUE_LEAD_NOTIFY,
+  QUEUE_STYLE_ANALYZE,
   startWorker,
   type WaInboundJob,
   type WaFlushJob,
-  type LeadNotifyJob
+  type LeadNotifyJob,
+  type StyleAnalyzeJob
 } from "@jazu/queue";
 import {
   captureError,
@@ -25,6 +27,7 @@ import { env } from "./env.js";
 import { handleWaInbound } from "./handlers/wa-inbound.js";
 import { handleWaFlush } from "./handlers/wa-flush.js";
 import { handleLeadNotify } from "./handlers/lead-notify.js";
+import { handleStyleAnalyze } from "./handlers/style-analyze.js";
 import { logger } from "./logger.js";
 import { startRetentionCron } from "./retention.js";
 import { startSubscriptionRemindersCron } from "./subscription-reminders.js";
@@ -88,6 +91,26 @@ leadNotifyWorker.worker.on("failed", (job, err) => {
     route: "jobs:lead-notify",
     agentId: (job?.data)?.agentId ?? null,
     extra: { jobId: job?.id, leadId: (job?.data)?.leadId ?? null }
+  });
+});
+
+// Анализ стиля владельца (фича «бот в стиле владельца»). Долгий (сотни LLM-вызовов):
+// concurrency=1, чтобы один тяжёлый прогон не выедал ключи/бюджет параллельно с
+// боевыми ответами. lockDuration большой — задача идёт минутами.
+const styleAnalyzeWorker = startWorker<StyleAnalyzeJob>(QUEUE_STYLE_ANALYZE, handleStyleAnalyze, {
+  concurrency: 1,
+  lockDuration: 10 * 60 * 1000
+});
+
+styleAnalyzeWorker.worker.on("ready", () => {
+  logger.info({ queue: QUEUE_STYLE_ANALYZE }, "worker ready");
+});
+
+styleAnalyzeWorker.worker.on("failed", (job, err) => {
+  captureError(err, {
+    route: "jobs:style-analyze",
+    agentId: (job?.data)?.agentId ?? null,
+    extra: { jobId: job?.id, attemptsMade: job?.attemptsMade }
   });
 });
 
@@ -194,6 +217,11 @@ async function shutdown(signal: string): Promise<void> {
     await leadNotifyWorker.close();
   } catch (err) {
     logger.error({ err }, "error closing lead-notify worker");
+  }
+  try {
+    await styleAnalyzeWorker.close();
+  } catch (err) {
+    logger.error({ err }, "error closing style-analyze worker");
   }
   try {
     await closeAllQueues();

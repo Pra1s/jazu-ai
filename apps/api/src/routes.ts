@@ -13,7 +13,11 @@ import {
   createInitialProfile,
   mergeProfile,
   summarizeLead,
-  transcribeAudio
+  transcribeAudio,
+  parseDialogueSource,
+  parseHistoryMessages,
+  type DialogueEpisode,
+  type HistoryMessage
 } from "@jazu/ai";
 import { env } from "./env.js";
 import {
@@ -55,9 +59,10 @@ import {
   buildLlmTelemetry,
   getDailyTokenUsage,
   getUsageView,
-  processWaInbound
+  processWaInbound,
+  clearStyle
 } from "@jazu/wa-pipeline";
-import { getInboundQueue } from "@jazu/queue";
+import { getInboundQueue, getStyleAnalyzeQueue } from "@jazu/queue";
 import { sendMagicCodeEmail, sendTelegramLead, sendEnterpriseLeadEmail } from "./lib/notifications.js";
 import { recordAudit } from "./lib/audit.js";
 import { conversionActionForEvent, uploadAdConversion } from "./lib/google-ads.js";
@@ -1713,6 +1718,167 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true, businessProfile: merged, ...(assistantText ? { assistantText } : {}) };
   });
 
+  // ── Фича «бот в стиле владельца»: загрузка диалогов, статус анализа, сброс ──
+  //
+  // Файлы шлём как массив {filename, content} в JSON (текст экспортов), чтобы не
+  // тянуть multipart-плагин (как /transcribe с base64). Парсинг — синхронно здесь
+  // (дёшево), а долгий LLM-анализ уходит в очередь style:analyze (apps/jobs).
+  const styleDialoguesSchema = z.object({
+    // Как владелец подписан в .txt-чатах (для JSON-дампа wtsexporter не нужно).
+    ownerName: z.string().max(200).optional(),
+    files: z
+      .array(
+        z.object({
+          filename: z.string().max(300),
+          content: z.string().max(5_000_000) // ~5 МБ на файл
+        })
+      )
+      .min(1)
+      .max(600)
+  });
+  app.post("/agent/style-dialogues", {
+    // Экспорты диалогов бывают крупными (много чатов) — поднимаем лимит тела
+    // с дефолтных 1 МБ. Верхняя граница совпадает с суммой лимитов схемы.
+    bodyLimit: 30 * 1024 * 1024
+  }, async (request, reply) => {
+    const { agent } = await buildWriteSessionView(request, reply);
+    const body = styleDialoguesSchema.parse(request.body);
+
+    // Парсим все файлы в единый пул эпизодов (формат определяется по имени/содержимому).
+    const episodes: DialogueEpisode[] = [];
+    for (const file of body.files) {
+      const parsed = parseDialogueSource(file.content, {
+        filename: file.filename,
+        chatLabel: file.filename,
+        ...(body.ownerName ? { ownerName: body.ownerName } : {})
+      });
+      episodes.push(...parsed);
+    }
+    if (episodes.length === 0) {
+      return reply.code(422).send({ error: "no_episodes", message: "Не удалось разобрать диалоги из файлов." });
+    }
+
+    // Сохраняем эпизоды в буфер + ставим задачу. Идемпотентно перезаписываем прошлый прогон.
+    await prisma.styleAnalysis.upsert({
+      where: { agentId: agent.id },
+      update: {
+        status: "queued",
+        stage: "queued",
+        ownerName: body.ownerName ?? "",
+        totalEpisodes: episodes.length,
+        processedEpisodes: 0,
+        error: null,
+        episodes
+      },
+      create: {
+        agentId: agent.id,
+        status: "queued",
+        stage: "queued",
+        ownerName: body.ownerName ?? "",
+        totalEpisodes: episodes.length,
+        episodes
+      }
+    });
+
+    await getStyleAnalyzeQueue().add(
+      "style-analyze",
+      { agentId: agent.id },
+      { jobId: `style:${agent.id}`, attempts: 1, removeOnComplete: true }
+    );
+
+    return { ok: true, totalEpisodes: episodes.length };
+  });
+
+  app.get("/agent/style-status", async (request, reply) => {
+    const agent = await getCurrentAgent(request, reply);
+    if (!agent) return { status: "none", hasStyle: false };
+    const [row, profile] = await Promise.all([
+      prisma.styleAnalysis.findUnique({ where: { agentId: agent.id } }),
+      prisma.businessProfile.findUnique({ where: { agentId: agent.id } })
+    ]);
+    const parsed = profile ? businessProfileSchema.parse(profile.data) : null;
+    const hasStyle = Boolean(parsed?.styleGuide && parsed.styleGuide.trim());
+    return {
+      status: row?.status ?? "none",
+      stage: row?.stage ?? "",
+      totalEpisodes: row?.totalEpisodes ?? 0,
+      processedEpisodes: row?.processedEpisodes ?? 0,
+      error: row?.error ?? null,
+      hasStyle,
+      styleGuidePreview: hasStyle ? (parsed?.styleGuide ?? "").slice(0, 600) : null
+    };
+  });
+
+  app.delete("/agent/style", async (request, reply) => {
+    const { agent } = await buildWriteSessionView(request, reply);
+    await clearStyle(prisma, agent.id);
+    return { ok: true };
+  });
+
+  // Продуктовый источник: список личных чатов, захваченных из WhatsApp history-sync,
+  // для выбора владельцем перед анализом (см. WA_STYLE_HISTORY_CAPTURE в воркере).
+  app.get("/agent/style-history-chats", async (request, reply) => {
+    const agent = await getCurrentAgent(request, reply);
+    if (!agent) return { chats: [] };
+    const chats = await prisma.waHistoryChat.findMany({
+      where: { agentId: agent.id },
+      orderBy: { messageCount: "desc" },
+      select: { waChatId: true, label: true, messageCount: true, selected: true }
+    });
+    return { chats };
+  });
+
+  // Запуск анализа по выбранным из истории чатам: конвертируем в эпизоды, кладём в
+  // буфер StyleAnalysis и ставим задачу. Буфер истории после этого чистим (не храним
+  // личную переписку дольше необходимого).
+  app.post("/agent/style-history-analyze", async (request, reply) => {
+    const { agent } = await buildWriteSessionView(request, reply);
+    const body = z.object({ waChatIds: z.array(z.string().min(1)).min(1).max(2000) }).parse(request.body);
+
+    const rows = await prisma.waHistoryChat.findMany({
+      where: { agentId: agent.id, waChatId: { in: body.waChatIds } }
+    });
+    const episodes: DialogueEpisode[] = [];
+    for (const row of rows) {
+      const messages = (row.messages as HistoryMessage[] | null) ?? [];
+      episodes.push(
+        ...parseHistoryMessages(messages, { chatLabel: row.label || row.waChatId })
+      );
+    }
+    if (episodes.length === 0) {
+      return reply.code(422).send({ error: "no_episodes", message: "В выбранных чатах нет пригодных диалогов." });
+    }
+
+    await prisma.styleAnalysis.upsert({
+      where: { agentId: agent.id },
+      update: {
+        status: "queued",
+        stage: "queued",
+        totalEpisodes: episodes.length,
+        processedEpisodes: 0,
+        error: null,
+        episodes
+      },
+      create: {
+        agentId: agent.id,
+        status: "queued",
+        stage: "queued",
+        totalEpisodes: episodes.length,
+        episodes
+      }
+    });
+    await getStyleAnalyzeQueue().add(
+      "style-analyze",
+      { agentId: agent.id },
+      { jobId: `style:${agent.id}`, attempts: 1, removeOnComplete: true }
+    );
+
+    // Личную переписку из буфера удаляем — она уже сконвертирована в замаскированные эпизоды.
+    await prisma.waHistoryChat.deleteMany({ where: { agentId: agent.id } });
+
+    return { ok: true, totalEpisodes: episodes.length };
+  });
+
   // Голосовой ввод: распознавание речи (STT). Аудио приходит как base64 в JSON,
   // чтобы не тянуть multipart-плагин. Лимит размера защищает от больших файлов.
   const transcribeSchema = z.object({
@@ -2959,6 +3125,50 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     });
 
     return { ok: true, added: result.count };
+  });
+
+  // Фича «бот в стиле владельца», продуктовый источник: воркер шлёт сюда текст
+  // личных диалогов из history-sync (только при WA_STYLE_HISTORY_CAPTURE). Буферим
+  // в WaHistoryChat пачками — владелец потом выберет чаты в UI (/agent/style-history-*).
+  app.post("/internal/wa-history-dialogues", {
+    bodyLimit: 16 * 1024 * 1024
+  }, async (request, reply) => {
+    if (!verifyInternalToken(request.headers["x-internal-token"], env.API_INTERNAL_TOKEN, env.API_INTERNAL_TOKEN_OLD)) {
+      reply.code(401);
+      return { ok: false, error: "Unauthorized" };
+    }
+    const body = z.object({
+      agentId: z.string().min(1),
+      dialogues: z
+        .array(
+          z.object({
+            waChatId: z.string().min(1),
+            label: z.string().max(300).optional(),
+            messages: z
+              .array(z.object({ fromMe: z.boolean(), text: z.string(), ts: z.number().optional() }))
+              .max(5000)
+          })
+        )
+        .max(200)
+    }).parse(request.body);
+
+    let saved = 0;
+    for (const d of body.dialogues) {
+      if (d.messages.length === 0) continue;
+      await prisma.waHistoryChat.upsert({
+        where: { agentId_waChatId: { agentId: body.agentId, waChatId: d.waChatId } },
+        update: { label: d.label ?? "", messageCount: d.messages.length, messages: d.messages },
+        create: {
+          agentId: body.agentId,
+          waChatId: d.waChatId,
+          label: d.label ?? "",
+          messageCount: d.messages.length,
+          messages: d.messages
+        }
+      });
+      saved += 1;
+    }
+    return { ok: true, saved };
   });
 
   app.put("/internal/wa-auth/:agentId", {

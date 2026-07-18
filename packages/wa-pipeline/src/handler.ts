@@ -16,6 +16,7 @@ import { sendTelegramLead, sendWhatsappOwnerNotification } from "./notifications
 import { trackConversationUsage, type UsageView } from "./billing.js";
 import { buildLlmTelemetry } from "./llm-telemetry.js";
 import { resolveLeadPhones } from "./phone.js";
+import { retrieveStyleExamples } from "./style-rag.js";
 
 type PrismaClient = typeof defaultPrisma;
 
@@ -882,6 +883,13 @@ export async function flushWaConversation(
       | "admin" | "consultant" | "support" | "qualifier" | "salesman" | null
   } as typeof profile;
 
+  // RAG «бот в стиле владельца»: если стиль собран — подтягиваем похожие обмены
+  // владельца под текущий вопрос клиента (top-5). Латентность ~100 мс незаметна на
+  // фоне humanize-задержки. Любая ошибка внутри → пустой массив (деградация на статику).
+  const retrievedExamples = runtimeProfile.styleGuide
+    ? await retrieveStyleExamples(prisma, agent.id, combinedMessage, 5)
+    : [];
+
   const runtimeTurn = await buildRuntimeTurn(
     runtimeProfile,
     combinedMessage,
@@ -893,7 +901,8 @@ export async function flushWaConversation(
       systemOverride,
       detectedNeed: conversation.detectedNeed,
       detectedName: conversation.detectedName,
-      telemetry
+      telemetry,
+      retrievedExamples
     }
   );
 
