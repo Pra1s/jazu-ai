@@ -16,7 +16,7 @@ import { logger } from "../logger.js";
  * ошибке помечаем статус error, владелец перезапускает загрузкой заново.
  */
 export async function handleStyleAnalyze(job: Job<StyleAnalyzeJob>): Promise<void> {
-  const { agentId } = job.data;
+  const { agentId, clearHistoryOnSuccess } = job.data;
 
   const row = await prisma.styleAnalysis.findUnique({ where: { agentId } });
   if (!row) {
@@ -77,6 +77,11 @@ export async function handleStyleAnalyze(job: Job<StyleAnalyzeJob>): Promise<voi
         episodes: Prisma.DbNull
       }
     });
+    // Буфер личной переписки (history-источник) чистим ТОЛЬКО после успешного
+    // прогона — до этого он единственная копия ввода (переприслать её нельзя).
+    if (clearHistoryOnSuccess && result.artifacts) {
+      await prisma.waHistoryChat.deleteMany({ where: { agentId } });
+    }
     logger.info(
       { agentId, jobId: job.id, cards: result.cardsCreated, ranked: result.rankedEpisodes },
       "style-analyze completed"

@@ -554,8 +554,11 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
   const inputs = texts.map((t) => t.trim()).filter(Boolean);
   if (inputs.length === 0) return [];
   const { baseUrl, apiKey } = llmConfig();
-  const embedBaseUrl = (process.env.EMBEDDING_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, "") || baseUrl;
-  const embedKey = process.env.EMBEDDING_API_KEY || process.env.OPENAI_API_KEY || apiKey;
+  // По умолчанию эмбеддинги идут на тот же endpoint/ключ, что и chat (LLM_BASE_URL /
+  // выбранный ключ) — иначе при работе через прокси с прокси-ключом запрос ушёл бы
+  // на api.openai.com с чужим ключом и получил 401. EMBEDDING_* переопределяют оба.
+  const embedBaseUrl = (process.env.EMBEDDING_BASE_URL || baseUrl).replace(/\/+$/, "");
+  const embedKey = process.env.EMBEDDING_API_KEY || apiKey || process.env.OPENAI_API_KEY;
   const model = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
   if (!embedKey) return [];
 

@@ -28,8 +28,10 @@ const MEDIA_PLACEHOLDER_RE =
   /^(?:‎)?(?:<Media omitted>|<Медиафайл пропущен>|image omitted|video omitted|audio omitted|sticker omitted|GIF omitted|document omitted|Contact card omitted|изображение отсутствует|видео отсутствует|аудио отсутствует|наклейка отсутствует|GIF отсутствует|документ отсутствует|это сообщение удалено|this message was deleted|you deleted this message|null)$/i;
 
 // Системные уведомления без отправителя (шифрование, смена номера, звонки).
+// Формулировки узкие, чтобы не задеть живые реплики (клиент может написать
+// «я сменил номер, запишите новый» — это НЕ системное уведомление).
 const SYSTEM_NOTICE_RE =
-  /(?:end-to-end encrypted|end-to-end зашифрован|messages and calls are|сообщения и звонки|защищены сквозным шифрованием|changed to a new phone number|сменил номер|created group|создал[а]? группу|added you|добавил[а]? вас|left$|вышел$|missed voice call|missed video call|пропущенный (?:голосовой|видео))/i;
+  /(?:end-to-end encrypted|end-to-end зашифрован|messages and calls are|сообщения и звонки защищены|защищены сквозным шифрованием|changed to a new phone number|сменил[а]? номер телефона|created group|создал[а]? группу|added you|добавил[а]? вас в группу|left$|вышел$|missed voice call|missed video call|пропущенный (?:голосовой|видео))/i;
 
 /**
  * Заголовок сообщения: [дата, время] или дата, время -  с последующим "Отправитель: тело".
@@ -100,12 +102,28 @@ function parseHeader(line: string): Header | null {
   return null;
 }
 
-/** Маскирует телефонные номера в тексте на «[номер]». Имена маскирует LLM позже. */
+/**
+ * Маскирует телефонные номера в тексте на «[номер]». Имена маскирует LLM позже.
+ * Осторожно с ложными срабатываниями: цены с разрядами («5 000 000 тенге») и
+ * перечисления коротких чисел («42 44 46 48») телефонами НЕ считаются.
+ */
 export function maskPhones(text: string): string {
-  // +7 999 123-45-67, 87001234567, +1 (415) 555-2671 и т.п.: 7+ цифр с разделителями.
+  // Кандидаты: 8+ символов из цифр/скобок/дефисов/пробелов, 7-15 цифр внутри.
   return text.replace(/\+?\d[\d()\-\s]{6,}\d/g, (m) => {
     const digits = m.replace(/\D/g, "");
-    return digits.length >= 7 ? "[номер]" : m;
+    if (digits.length < 7 || digits.length > 15) return m;
+    // Явные признаки телефона: «+», скобки или дефисы (+7 999 123-45-67, +1 (415) 555-2671).
+    if (m.includes("+") || /[()-]/.test(m)) return "[номер]";
+    // Число с разрядами по три — цена/сумма («5 000 000»), не телефон.
+    if (/^\d{1,3}(?:\s\d{3})+$/.test(m)) return m;
+    // Слитные цифры: телефон от 10 знаков (87001234567); короче — цена/артикул.
+    if (/^\d+$/.test(m)) return digits.length >= 10 ? "[номер]" : m;
+    // Пробельные группы: телефоноподобно при 10-12 цифрах и немногих группах
+    // (8 700 123 45 67); перечисления коротких чисел («42 44 46 48 50 52») — нет.
+    const groups = m.split(/\s+/);
+    const phoneLike =
+      digits.length >= 10 && digits.length <= 12 && groups.length <= 5 && groups.some((g) => g.length >= 3);
+    return phoneLike ? "[номер]" : m;
   });
 }
 
@@ -118,18 +136,49 @@ function normalizeDigits(value: string): string {
   return value.replace(/\D/g, "");
 }
 
-/** Матч отправителя с «владельцем»: по имени (регистронезависимо) или по цифрам номера. */
+/** Разбивает имя на слова-токены (для сравнения по целым словам, а не подстрокам). */
+function nameTokens(value: string): string[] {
+  return value.trim().toLowerCase().split(/[\s,.;:()\-–—]+/).filter(Boolean);
+}
+
+/**
+ * Матч отправителя с «владельцем»: по имени (целыми словами, регистронезависимо)
+ * или по цифрам номера. Подстрочный матч запрещён: «Али» не должен матчить «Галия».
+ */
 function isOwnerSender(sender: string, ownerName?: string): boolean {
   if (!ownerName) return false;
   const s = sender.trim().toLowerCase();
   const o = ownerName.trim().toLowerCase();
-  if (s === o || s.includes(o) || o.includes(s)) return true;
+  if (s === o) return true;
+  // Все слова более короткого имени должны присутствовать как ЦЕЛЫЕ слова в другом
+  // («Ильяс» ↔ «Ильяс Барбер», но не «Али» ↔ «Галия»).
+  const sTokens = nameTokens(sender);
+  const oTokens = nameTokens(ownerName);
+  if (sTokens.length > 0 && oTokens.length > 0) {
+    const [shorter, longer] =
+      sTokens.length <= oTokens.length ? [sTokens, oTokens] : [oTokens, sTokens];
+    if (shorter.every((t) => longer.includes(t))) return true;
+  }
   const sDigits = normalizeDigits(sender);
   const oDigits = normalizeDigits(ownerName);
   return oDigits.length >= 7 && sDigits.length >= 7 && (sDigits.endsWith(oDigits) || oDigits.endsWith(sDigits));
 }
 
 type RawMessage = { sender: string; body: string; date: Date | undefined };
+
+/**
+ * Хронологическая сортировка: сообщениям без даты присваиваем время предыдущего
+ * датированного (carry-forward), чтобы они не улетали в начало потока, а stable sort
+ * сохранял их рядом с соседями по исходному порядку.
+ */
+function sortChronologically(messages: RawMessage[]): RawMessage[] {
+  let lastTs = 0;
+  const keyed = messages.map((m) => {
+    if (m.date) lastTs = m.date.getTime();
+    return { m, ts: lastTs };
+  });
+  return keyed.sort((a, b) => a.ts - b.ts).map((k) => k.m);
+}
 
 function collectRawMessages(content: string): RawMessage[] {
   const lines = content.split(/\r?\n/);
@@ -265,17 +314,12 @@ export function parseWtsexporterChat(
       body: (m.data as string).trim(),
       date: wtsTimestamp(m.timestamp)
     }))
-    .filter((m) => !SYSTEM_NOTICE_RE.test(m.body) && !MEDIA_PLACEHOLDER_RE.test(stripMarks(m.body)))
-    .sort((a, b) => (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0));
+    .filter((m) => !SYSTEM_NOTICE_RE.test(m.body) && !MEDIA_PLACEHOLDER_RE.test(stripMarks(m.body)));
+  const sorted = sortChronologically(raw);
 
-  if (raw.length === 0) return [];
-  // Владелец в JSON помечен sender="__owner__"; ownerName не нужен, но поддержим fallback.
-  const ownerName = "__owner__";
-  const withOwner = raw.map((m) => ({
-    ...m,
-    sender: m.sender === "__owner__" ? ownerName : m.sender
-  }));
-  return splitEpisodes(withOwner, ownerName, chatLabel, splitDays);
+  if (sorted.length === 0) return [];
+  // Владелец в JSON помечен sender="__owner__" (по from_me), ownerName не нужен.
+  return splitEpisodes(sorted, "__owner__", chatLabel, splitDays);
 }
 
 /** Парсит весь дамп wtsexporter (объект {chatKey → chat}) во все эпизоды. */
@@ -312,10 +356,41 @@ export function parseHistoryMessages(
       body: m.text.trim(),
       date: m.ts ? new Date(m.ts > 1e12 ? m.ts : m.ts * 1000) : undefined
     }))
-    .filter((m) => !SYSTEM_NOTICE_RE.test(m.body) && !MEDIA_PLACEHOLDER_RE.test(stripMarks(m.body)))
-    .sort((a, b) => (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0));
-  if (raw.length === 0) return [];
-  return splitEpisodes(raw, "__owner__", chatLabel, splitDays);
+    .filter((m) => !SYSTEM_NOTICE_RE.test(m.body) && !MEDIA_PLACEHOLDER_RE.test(stripMarks(m.body)));
+  const sorted = sortChronologically(raw);
+  if (sorted.length === 0) return [];
+  return splitEpisodes(sorted, "__owner__", chatLabel, splitDays);
+}
+
+/**
+ * «Оживляет» Date-поля эпизодов после round-trip через JSON/JSONB.
+ * При сохранении в БД (Prisma JSON) Date сериализуется в ISO-строку; при чтении
+ * обратно это строка, а formatEpisodeForPrompt зовёт .getTime() — без ревайва
+ * упадёт с TypeError. Мутирует не входные объекты, а возвращает новые.
+ */
+export function reviveEpisodeDates(episodes: DialogueEpisode[]): DialogueEpisode[] {
+  const toDate = (v: unknown): Date | undefined => {
+    if (v instanceof Date) return Number.isNaN(v.getTime()) ? undefined : v;
+    if (typeof v === "string" || typeof v === "number") {
+      const d = new Date(v);
+      return Number.isNaN(d.getTime()) ? undefined : d;
+    }
+    return undefined;
+  };
+  return episodes.map((ep) => {
+    const startedAt = toDate(ep.startedAt);
+    const endedAt = toDate(ep.endedAt);
+    return {
+      chatLabel: ep.chatLabel,
+      episodeIndex: ep.episodeIndex,
+      ...(startedAt ? { startedAt } : {}),
+      ...(endedAt ? { endedAt } : {}),
+      turns: ep.turns.map((t) => {
+        const timestamp = toDate(t.timestamp);
+        return { role: t.role, text: t.text, ...(timestamp ? { timestamp } : {}) };
+      })
+    };
+  });
 }
 
 /**

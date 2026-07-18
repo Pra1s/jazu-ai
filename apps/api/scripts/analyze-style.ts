@@ -26,8 +26,10 @@ function parseArgs() {
   let dry = false;
   for (const arg of process.argv.slice(2)) {
     if (arg === "--dry") dry = true;
-    else if (arg.startsWith("--limit=")) limit = Number(arg.slice("--limit=".length)) || 300;
-    else positional.push(arg);
+    else if (arg.startsWith("--limit=")) {
+      const n = Number(arg.slice("--limit=".length));
+      if (Number.isFinite(n) && n > 0) limit = n;
+    } else positional.push(arg);
   }
   return { email: positional[0], dir: positional[1], ownerName: positional[2], limit, dry };
 }
@@ -43,7 +45,7 @@ async function main() {
 
   const user = await prisma.user.findFirst({
     where: { email: email.toLowerCase(), deletedAt: null },
-    select: { id: true, agents: { select: { id: true, name: true }, take: 1 } }
+    select: { id: true, agents: { select: { id: true, name: true }, orderBy: { createdAt: "asc" }, take: 1 } }
   });
   if (!user || user.agents.length === 0) {
     console.error(`Пользователь ${email} или его агент не найдены.`);

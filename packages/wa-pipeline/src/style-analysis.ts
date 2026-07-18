@@ -9,6 +9,7 @@ import {
   analyzeEpisodes,
   cardToExchanges,
   rankEpisodes,
+  reviveEpisodeDates,
   type DialogueCard,
   type DialogueEpisode,
   type LlmTelemetryHooks,
@@ -57,7 +58,10 @@ export type RunStyleAnalysisParams = {
  */
 export async function runStyleAnalysis(params: RunStyleAnalysisParams): Promise<StyleAnalysisResult> {
   const prisma = params.prisma ?? defaultPrisma;
-  const { agentId, episodes, telemetry } = params;
+  const { agentId, telemetry } = params;
+  // Оживляем Date-поля: эпизоды могли прийти после round-trip через JSONB
+  // (роут → StyleAnalysis.episodes → хендлер), где Date стал ISO-строкой.
+  const episodes = reviveEpisodeDates(params.episodes);
 
   await params.onProgress?.({ stage: "ranking", total: episodes.length });
   const ranked = rankEpisodes(episodes, { limit: params.rankLimit ?? 300 }).map((r) => r.episode);

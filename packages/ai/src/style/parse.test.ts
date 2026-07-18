@@ -3,6 +3,8 @@ import {
   parseWhatsappTxt,
   parseWtsexporterJson,
   parseDialogueSource,
+  parseHistoryMessages,
+  reviveEpisodeDates,
   maskPhones,
   maskChatLabel
 } from "./parse.js";
@@ -12,10 +14,69 @@ describe("maskPhones", () => {
     expect(maskPhones("звоните +7 999 123-45-67 сегодня")).toBe("звоните [номер] сегодня");
     expect(maskPhones("номер 87001234567")).toBe("номер [номер]");
     expect(maskPhones("+1 (415) 555-2671")).toBe("[номер]");
+    expect(maskPhones("8 700 123 45 67")).toBe("[номер]");
   });
   it("не трогает короткие числа (цены, время)", () => {
     expect(maskPhones("цена 8000 тенге")).toBe("цена 8000 тенге");
     expect(maskPhones("в 14:30")).toBe("в 14:30");
+  });
+  it("НЕ маскирует цены с разрядами и перечисления чисел", () => {
+    expect(maskPhones("стоимость 5 000 000 тенге")).toBe("стоимость 5 000 000 тенге");
+    expect(maskPhones("цена 1 200 000, скидка")).toBe("цена 1 200 000, скидка");
+    expect(maskPhones("размеры 42 44 46 48 50 52")).toBe("размеры 42 44 46 48 50 52");
+  });
+});
+
+describe("определение владельца по имени (без подстроки)", () => {
+  it("«Али» НЕ считается владельцем в чате с «Галия»", () => {
+    const sample = [
+      "[01.01.2026, 10:00:00] Галия: здравствуйте",
+      "[01.01.2026, 10:01:00] Али: привет, чем помочь"
+    ].join("\n");
+    const eps = parseWhatsappTxt(sample, { ownerName: "Али" });
+    const turns = eps[0]!.turns;
+    expect(turns[0]).toMatchObject({ role: "client", text: "здравствуйте" });
+    expect(turns[1]).toMatchObject({ role: "owner", text: "привет, чем помочь" });
+  });
+  it("совпадение по целым словам (Ильяс ↔ Ильяс Барбер)", () => {
+    const sample = [
+      "[01.01.2026, 10:00:00] Ильяс Барбер: здравствуйте",
+      "[01.01.2026, 10:01:00] Мария: хочу записаться"
+    ].join("\n");
+    const eps = parseWhatsappTxt(sample, { ownerName: "Ильяс" });
+    expect(eps[0]!.turns[0]).toMatchObject({ role: "owner" });
+    expect(eps[0]!.turns[1]).toMatchObject({ role: "client" });
+  });
+});
+
+describe("reviveEpisodeDates (round-trip через JSONB)", () => {
+  it("оживляет Date из ISO-строк после JSON.parse(JSON.stringify)", () => {
+    const eps = parseHistoryMessages(
+      [
+        { fromMe: true, text: "здравствуйте", ts: 1767258000 },
+        { fromMe: false, text: "сколько стоит", ts: 1767258600 }
+      ],
+      { chatLabel: "клиент" }
+    );
+    const roundTripped = JSON.parse(JSON.stringify(eps)) as typeof eps;
+    // После round-trip timestamp — строка, .getTime упал бы.
+    expect(typeof (roundTripped[0]!.turns[0]!.timestamp as unknown)).toBe("string");
+    const revived = reviveEpisodeDates(roundTripped);
+    expect(revived[0]!.turns[0]!.timestamp).toBeInstanceOf(Date);
+    expect(revived[0]!.turns[1]!.timestamp).toBeInstanceOf(Date);
+    expect(() => revived[0]!.turns[0]!.timestamp!.getTime()).not.toThrow();
+  });
+});
+
+describe("сменил номер: живая реплика не считается системной", () => {
+  it("клиент «я сменил номер...» остаётся в диалоге", () => {
+    const sample = [
+      "[01.01.2026, 10:00:00] Мария: я сменил номер, запишите новый",
+      "[01.01.2026, 10:01:00] Ильяс: хорошо, записала"
+    ].join("\n");
+    const eps = parseWhatsappTxt(sample, { ownerName: "Ильяс" });
+    expect(eps[0]!.turns).toHaveLength(2);
+    expect(eps[0]!.turns[0]!.text).toContain("сменил номер");
   });
 });
 

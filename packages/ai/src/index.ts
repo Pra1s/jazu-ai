@@ -773,6 +773,7 @@ export {
   parseWtsexporterJson,
   parseWtsexporterChat,
   parseHistoryMessages,
+  reviveEpisodeDates,
   maskPhones,
   maskChatLabel,
   rankEpisodes,

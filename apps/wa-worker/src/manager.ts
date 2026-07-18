@@ -359,7 +359,16 @@ function collectHistoryDialogues(payload: {
     });
     byChat.set(jid, entry);
   }
-  return Array.from(byChat.values()).filter((d) => d.messages.length >= 4);
+  // Кап на диалог = лимит zod на API (иначе весь пакет из 40 диалогов отвергнется
+  // с ZodError). Держим последние сообщения — свежая переписка репрезентативнее.
+  const MAX_MSGS_PER_DIALOGUE = 5000;
+  return Array.from(byChat.values())
+    .filter((d) => d.messages.length >= 4)
+    .map((d) =>
+      d.messages.length > MAX_MSGS_PER_DIALOGUE
+        ? { ...d, messages: d.messages.slice(-MAX_MSGS_PER_DIALOGUE) }
+        : d
+    );
 }
 
 /** Пушит буфер личных диалогов в API пачками (для анализа стиля). Best-effort. */
@@ -369,11 +378,16 @@ async function pushHistoryDialogues(agentId: string, dialogues: HistoryDialogue[
   for (let i = 0; i < dialogues.length; i += BATCH) {
     const chunk = dialogues.slice(i, i + BATCH);
     try {
-      await fetch(new URL("/api/internal/wa-history-dialogues", env.API_ORIGIN), {
+      const res = await fetch(new URL("/api/internal/wa-history-dialogues", env.API_ORIGIN), {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-internal-token": env.API_INTERNAL_TOKEN },
         body: JSON.stringify({ agentId, dialogues: chunk })
       });
+      if (!res.ok) {
+        console.error(
+          `[wa] push history dialogues rejected: ${res.status} (chunk ${i}-${i + chunk.length})`
+        );
+      }
     } catch (err) {
       console.error("[wa] push history dialogues failed:", err instanceof Error ? err.message : err);
     }

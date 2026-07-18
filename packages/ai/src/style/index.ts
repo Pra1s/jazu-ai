@@ -6,6 +6,7 @@ export {
   parseWtsexporterJson,
   parseWtsexporterChat,
   parseHistoryMessages,
+  reviveEpisodeDates,
   maskPhones,
   maskChatLabel,
   DEFAULT_EPISODE_SPLIT_DAYS,

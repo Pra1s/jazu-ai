@@ -120,6 +120,12 @@ export type WaFlushJob = {
 export type StyleAnalyzeJob = {
   /** Агент, для которого гоним анализ стиля (эпизоды лежат в StyleAnalysis.episodes). */
   agentId: string;
+  /**
+   * Прогон запущен из истории WhatsApp: буфер WaHistoryChat нужно очистить ТОЛЬКО
+   * после успешного анализа (не при постановке в очередь), иначе при ошибке ввод
+   * теряется безвозвратно — история приходит лишь при переподключении номера.
+   */
+  clearHistoryOnSuccess?: boolean;
 };
 
 const DEFAULT_QUEUE_OPTIONS: Omit<QueueOptions, "connection"> = {

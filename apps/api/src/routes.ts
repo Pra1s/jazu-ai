@@ -1723,6 +1723,30 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
   // Файлы шлём как массив {filename, content} в JSON (текст экспортов), чтобы не
   // тянуть multipart-плагин (как /transcribe с base64). Парсинг — синхронно здесь
   // (дёшево), а долгий LLM-анализ уходит в очередь style:analyze (apps/jobs).
+
+  // Идёт ли прогон анализа прямо сейчас (queued/analyzing/aggregating) — новый
+  // запуск в это окно затёр бы буфер эпизодов активной задачи, а add с тем же
+  // jobId был бы no-op. Роуты загрузки в таком случае отвечают 409.
+  const STYLE_RUNNING_STATUSES = ["queued", "analyzing", "aggregating"];
+  async function isStyleAnalysisRunning(client: typeof prisma, agentId: string): Promise<boolean> {
+    const row = await client.styleAnalysis.findUnique({
+      where: { agentId },
+      select: { status: true }
+    });
+    return Boolean(row && STYLE_RUNNING_STATUSES.includes(row.status));
+  }
+
+  // Ставит задачу анализа. removeOnFail: true критично: без него упавшая задача
+  // остаётся в failed-set (дефолт очереди — до 7 дней), и повторный add с тем же
+  // jobId `style:<agentId>` молча игнорируется — перезапуск был бы невозможен.
+  async function enqueueStyleAnalysis(agentId: string, clearHistoryOnSuccess = false): Promise<void> {
+    await getStyleAnalyzeQueue().add(
+      "style-analyze",
+      { agentId, ...(clearHistoryOnSuccess ? { clearHistoryOnSuccess } : {}) },
+      { jobId: `style:${agentId}`, attempts: 1, removeOnComplete: true, removeOnFail: true }
+    );
+  }
+
   const styleDialoguesSchema = z.object({
     // Как владелец подписан в .txt-чатах (для JSON-дампа wtsexporter не нужно).
     ownerName: z.string().max(200).optional(),
@@ -1738,11 +1762,18 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
   });
   app.post("/agent/style-dialogues", {
     // Экспорты диалогов бывают крупными (много чатов) — поднимаем лимит тела
-    // с дефолтных 1 МБ. Верхняя граница совпадает с суммой лимитов схемы.
+    // с дефолтных 1 МБ. Реальный предохранитель размера — этот bodyLimit;
+    // лимиты схемы (600×5 МБ) допускают заведомо больше и до тела не доходят.
     bodyLimit: 30 * 1024 * 1024
   }, async (request, reply) => {
     const { agent } = await buildWriteSessionView(request, reply);
     const body = styleDialoguesSchema.parse(request.body);
+
+    // Не запускаем новый прогон поверх идущего: перезапись episodes отняла бы у него
+    // ввод, а jobId занят активной задачей (add был бы no-op). Просим дождаться.
+    if (await isStyleAnalysisRunning(prisma, agent.id)) {
+      return reply.code(409).send({ error: "analysis_running", message: "Анализ уже идёт — дождитесь завершения." });
+    }
 
     // Парсим все файлы в единый пул эпизодов (формат определяется по имени/содержимому).
     const episodes: DialogueEpisode[] = [];
@@ -1780,11 +1811,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       }
     });
 
-    await getStyleAnalyzeQueue().add(
-      "style-analyze",
-      { agentId: agent.id },
-      { jobId: `style:${agent.id}`, attempts: 1, removeOnComplete: true }
-    );
+    await enqueueStyleAnalysis(agent.id);
 
     return { ok: true, totalEpisodes: episodes.length };
   });
@@ -1811,6 +1838,11 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete("/agent/style", async (request, reply) => {
     const { agent } = await buildWriteSessionView(request, reply);
+    // Во время прогона удалять StyleAnalysis нельзя: идущая задача обновляет эту
+    // строку в onProgress и упадёт с P2025 (а джоба уйдёт в failed).
+    if (await isStyleAnalysisRunning(prisma, agent.id)) {
+      return reply.code(409).send({ error: "analysis_running", message: "Анализ идёт — сбросить можно после завершения." });
+    }
     await clearStyle(prisma, agent.id);
     return { ok: true };
   });
@@ -1829,11 +1861,16 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
   });
 
   // Запуск анализа по выбранным из истории чатам: конвертируем в эпизоды, кладём в
-  // буфер StyleAnalysis и ставим задачу. Буфер истории после этого чистим (не храним
-  // личную переписку дольше необходимого).
+  // буфер StyleAnalysis и ставим задачу. Буфер истории НЕ удаляем здесь — только
+  // после успешного анализа (clearHistoryOnSuccess), иначе при ошибке прогона ввод
+  // теряется безвозвратно (история приходит лишь при переподключении номера).
   app.post("/agent/style-history-analyze", async (request, reply) => {
     const { agent } = await buildWriteSessionView(request, reply);
     const body = z.object({ waChatIds: z.array(z.string().min(1)).min(1).max(2000) }).parse(request.body);
+
+    if (await isStyleAnalysisRunning(prisma, agent.id)) {
+      return reply.code(409).send({ error: "analysis_running", message: "Анализ уже идёт — дождитесь завершения." });
+    }
 
     const rows = await prisma.waHistoryChat.findMany({
       where: { agentId: agent.id, waChatId: { in: body.waChatIds } }
@@ -1867,14 +1904,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         episodes
       }
     });
-    await getStyleAnalyzeQueue().add(
-      "style-analyze",
-      { agentId: agent.id },
-      { jobId: `style:${agent.id}`, attempts: 1, removeOnComplete: true }
-    );
-
-    // Личную переписку из буфера удаляем — она уже сконвертирована в замаскированные эпизоды.
-    await prisma.waHistoryChat.deleteMany({ where: { agentId: agent.id } });
+    await enqueueStyleAnalysis(agent.id, true);
 
     return { ok: true, totalEpisodes: episodes.length };
   });
@@ -3152,18 +3182,39 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         .max(200)
     }).parse(request.body);
 
+    // history-sync приходит чанками: множества сообщений в разных событиях не
+    // пересекаются, поэтому НЕ перезаписываем, а МЕРДЖИМ с уже сохранёнными
+    // (append + dedupe по text+ts). Иначе последний чанк затирал бы предыдущие.
+    const MAX_MESSAGES = 5000;
     let saved = 0;
     for (const d of body.dialogues) {
       if (d.messages.length === 0) continue;
+      const existing = await prisma.waHistoryChat.findUnique({
+        where: { agentId_waChatId: { agentId: body.agentId, waChatId: d.waChatId } },
+        select: { messages: true }
+      });
+      const prev = (existing?.messages as HistoryMessage[] | null) ?? [];
+      const seen = new Set(prev.map((m) => `${m.ts ?? ""}|${m.fromMe ? 1 : 0}|${m.text}`));
+      const merged: HistoryMessage[] = [...prev];
+      for (const m of d.messages) {
+        const key = `${m.ts ?? ""}|${m.fromMe ? 1 : 0}|${m.text}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push({ fromMe: m.fromMe, text: m.text, ...(m.ts !== undefined ? { ts: m.ts } : {}) });
+      }
+      // Сортируем по времени и держим последние MAX_MESSAGES (свежее полезнее).
+      merged.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+      const capped = merged.length > MAX_MESSAGES ? merged.slice(-MAX_MESSAGES) : merged;
       await prisma.waHistoryChat.upsert({
         where: { agentId_waChatId: { agentId: body.agentId, waChatId: d.waChatId } },
-        update: { label: d.label ?? "", messageCount: d.messages.length, messages: d.messages },
+        // label обновляем только если чанк его прислал — иначе сохраняем прежний.
+        update: { messageCount: capped.length, messages: capped, ...(d.label ? { label: d.label } : {}) },
         create: {
           agentId: body.agentId,
           waChatId: d.waChatId,
           label: d.label ?? "",
-          messageCount: d.messages.length,
-          messages: d.messages
+          messageCount: capped.length,
+          messages: capped
         }
       });
       saved += 1;
