@@ -60,6 +60,11 @@ type ManagedConnection = {
  * чтобы успеть сгенерить новый если юзер тормозит. */
 const PAIRING_CODE_TTL_MS = 50_000;
 
+/** Сколько ждать новых чанков history-sync, прежде чем считать синк завершённым.
+ * WhatsApp шлёт историю порциями с паузами; сообщения (RECENT/FULL) нередко
+ * приходят через десятки секунд после статусных чанков. */
+const HISTORY_QUIET_MS = 60_000;
+
 type WAMessageLike = {
   key: {
     fromMe?: boolean | null;
@@ -693,18 +698,18 @@ export class ConnectionManager {
       if (capture) {
         const dialogues = collectHistoryDialogues(payload);
         void pushHistoryDialogues(agentId, dialogues);
-        // Прогресс синка для статус-бара в UI. Baileys отдаёт progress (0..100)
-        // и isLatest на последнем чанке. isLatest приходит не всегда — держим
-        // fallback-таймер, который закрывает синк после паузы без новых чанков.
+        // Прогресс синка для статус-бара. ВАЖНО: НЕ завершаем по isLatest — его
+        // несут и статусные/именные чанки (INITIAL_STATUS_V3, PUSH_NAME), которые
+        // приходят раньше реальных сообщений (RECENT/FULL). Если закрыть синк на
+        // них, бар покажет «готово, 0 чатов», хотя переписка ещё в пути. Поэтому
+        // завершаем по «тишине»: если новых чанков нет HISTORY_QUIET_MS — done.
+        // Сам захват при этом продолжает работать и для поздних чанков (флаг живёт).
         const progress = typeof payload.progress === "number" ? payload.progress : null;
-        const isLatest = payload.isLatest === true;
-        void pushHistoryProgress(agentId, { progress, status: isLatest ? "done" : "syncing" });
+        void pushHistoryProgress(agentId, { progress, status: "syncing" });
         if (managed.historySyncTimer) clearTimeout(managed.historySyncTimer);
-        if (!isLatest) {
-          managed.historySyncTimer = setTimeout(() => {
-            void pushHistoryProgress(agentId, { progress: 100, status: "done" });
-          }, 30_000);
-        }
+        managed.historySyncTimer = setTimeout(() => {
+          void pushHistoryProgress(agentId, { progress: 100, status: "done" });
+        }, HISTORY_QUIET_MS);
       }
     });
 
