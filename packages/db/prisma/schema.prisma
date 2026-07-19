@@ -269,6 +269,8 @@ model WaHistoryChat {
   messageCount Int      @default(0)
   messages     Json
   selected     Boolean  @default(false)
+  /// Время самого свежего сообщения в чате — для сортировки «последние диалоги».
+  lastMessageAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   agent        Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)

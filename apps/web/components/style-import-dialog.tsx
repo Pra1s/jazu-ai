@@ -30,7 +30,13 @@ type StyleStatus = {
   styleGuidePreview?: string | null;
 };
 
-type HistoryChat = { waChatId: string; label: string; messageCount: number; selected: boolean };
+type HistoryChat = {
+  waChatId: string;
+  label: string;
+  messageCount: number;
+  selected: boolean;
+  lastMessageAt?: string | null;
+};
 
 type HistorySyncStatus = "idle" | "syncing" | "done";
 
@@ -46,6 +52,18 @@ type HistoryInfo = {
 type Tab = "files" | "whatsapp";
 
 const IN_PROGRESS = new Set(["queued", "analyzing", "aggregating"]);
+
+/** Читаемое имя чата: сохранённое имя/номер → номер из PN-JID → «Чат …1234».
+ * Никогда не показываем сырой @lid (это не номер, а внутренний id WhatsApp). */
+function chatDisplayName(c: HistoryChat): string {
+  if (c.label && c.label.trim()) return c.label.trim();
+  const at = c.waChatId.indexOf("@");
+  const user = at > 0 ? c.waChatId.slice(0, at) : c.waChatId;
+  const domain = at > 0 ? c.waChatId.slice(at + 1) : "";
+  if (domain === "s.whatsapp.net" && /^\d{7,15}$/.test(user)) return `+${user}`;
+  const digits = user.replace(/\D/g, "");
+  return digits.length >= 4 ? `Чат …${digits.slice(-4)}` : "Без имени";
+}
 
 export default function StyleImportDialog({ open, onClose, onApplied }: StyleImportDialogProps) {
   const [tab, setTab] = useState<Tab>("files");
@@ -181,6 +199,16 @@ export default function StyleImportDialog({ open, onClose, onApplied }: StyleImp
     } finally {
       setBusy(false);
     }
+  }
+
+  // Быстрый выбор N самых свежих чатов (список приходит уже отсортированным по
+  // lastMessageAt desc), исключая пустые. Заменяет текущее выделение.
+  function selectRecent(n: number) {
+    const ids = historyChats
+      .filter((c) => c.messageCount >= 4)
+      .slice(0, Math.max(0, n))
+      .map((c) => c.waChatId);
+    setSelectedChats(new Set(ids));
   }
 
   async function analyzeSelected() {
@@ -459,6 +487,37 @@ export default function StyleImportDialog({ open, onClose, onApplied }: StyleImp
                             Выключить сбор
                           </button>
                         </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-xs text-muted-foreground">Быстрый выбор:</span>
+                          <button
+                            type="button"
+                            onClick={() => selectRecent(historyChats.length)}
+                            className="rounded-full border border-border px-2.5 py-1 text-xs text-foreground transition hover:bg-secondary/50"
+                          >
+                            Все
+                          </button>
+                          {[20, 50, 100].map((n) =>
+                            historyChats.length > n ? (
+                              <button
+                                key={n}
+                                type="button"
+                                onClick={() => selectRecent(n)}
+                                className="rounded-full border border-border px-2.5 py-1 text-xs text-foreground transition hover:bg-secondary/50"
+                              >
+                                Последние {n}
+                              </button>
+                            ) : null
+                          )}
+                          {selectedChats.size > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedChats(new Set())}
+                              className="rounded-full px-2.5 py-1 text-xs text-muted-foreground underline-offset-2 hover:underline"
+                            >
+                              Снять все
+                            </button>
+                          ) : null}
+                        </div>
                         <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-border p-1.5">
                           {historyChats.map((c) => {
                             const checked = selectedChats.has(c.waChatId);
@@ -481,7 +540,7 @@ export default function StyleImportDialog({ open, onClose, onApplied }: StyleImp
                                   className="h-4 w-4 shrink-0"
                                 />
                                 <span className="min-w-0 flex-1 truncate text-foreground">
-                                  {c.label || c.waChatId}
+                                  {chatDisplayName(c)}
                                 </span>
                                 <span className="shrink-0 text-xs text-muted-foreground">{c.messageCount}</span>
                               </label>

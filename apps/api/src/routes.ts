@@ -1857,8 +1857,9 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     const [chats, conn] = await Promise.all([
       prisma.waHistoryChat.findMany({
         where: { agentId: agent.id },
-        orderBy: { messageCount: "desc" },
-        select: { waChatId: true, label: true, messageCount: true, selected: true }
+        // Сначала свежие диалоги (для выбора «последние N»), затем — где нет времени.
+        orderBy: [{ lastMessageAt: { sort: "desc", nulls: "last" } }, { messageCount: "desc" }],
+        select: { waChatId: true, label: true, messageCount: true, selected: true, lastMessageAt: true }
       }),
       prisma.waConnection.findUnique({
         where: { agentId: agent.id },
@@ -3304,16 +3305,25 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       // Сортируем по времени и держим последние MAX_MESSAGES (свежее полезнее).
       merged.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
       const capped = merged.length > MAX_MESSAGES ? merged.slice(-MAX_MESSAGES) : merged;
+      // Время самого свежего сообщения (unix-сек → Date) для сортировки «последние».
+      const maxTs = capped.reduce((mx, m) => (m.ts && m.ts > mx ? m.ts : mx), 0);
+      const lastMessageAt = maxTs > 0 ? new Date(maxTs * 1000) : null;
       await prisma.waHistoryChat.upsert({
         where: { agentId_waChatId: { agentId: body.agentId, waChatId: d.waChatId } },
         // label обновляем только если чанк его прислал — иначе сохраняем прежний.
-        update: { messageCount: capped.length, messages: capped, ...(d.label ? { label: d.label } : {}) },
+        update: {
+          messageCount: capped.length,
+          messages: capped,
+          ...(d.label ? { label: d.label } : {}),
+          ...(lastMessageAt ? { lastMessageAt } : {})
+        },
         create: {
           agentId: body.agentId,
           waChatId: d.waChatId,
           label: d.label ?? "",
           messageCount: capped.length,
-          messages: capped
+          messages: capped,
+          ...(lastMessageAt ? { lastMessageAt } : {})
         }
       });
       saved += 1;

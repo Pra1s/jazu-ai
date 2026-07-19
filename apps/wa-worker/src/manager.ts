@@ -69,6 +69,8 @@ type WAMessageLike = {
   key: {
     fromMe?: boolean | null;
     remoteJid?: string | null;
+    /** Для @lid-чатов реальный PN (`<номер>@s.whatsapp.net`) лежит здесь. */
+    remoteJidAlt?: string | null;
     id?: string | null;
     participant?: string | null;
   };
@@ -338,7 +340,13 @@ async function pushPreConnectionChats(agentId: string, chatIds: string[]): Promi
  * Возвращает диалоги с >= 4 реплик — короткие для анализа бесполезны.
  */
 type HistoryDialogueMsg = { fromMe: boolean; text: string; ts?: number };
-type HistoryDialogue = { waChatId: string; label: string; messages: HistoryDialogueMsg[] };
+type HistoryDialogue = {
+  waChatId: string;
+  label: string;
+  messages: HistoryDialogueMsg[];
+  /** Unix-секунды самого свежего сообщения — для сортировки «последние диалоги». */
+  lastTs?: number;
+};
 
 function isPersonalJid(jid: string): boolean {
   if (jid === "status@broadcast") return false;
@@ -355,19 +363,40 @@ function collectHistoryDialogues(payload: {
     if (c?.id && c?.name) names.set(c.id, c.name);
   }
   const byChat = new Map<string, HistoryDialogue>();
+  // Лучшее имя/номер клиента для лейбла (чтобы не показывать @lid).
+  const pushNames = new Map<string, string>();
+  const phones = new Map<string, string>();
   for (const m of payload.messages ?? []) {
     const jid = m?.key?.remoteJid;
     if (!jid || !isPersonalJid(jid)) continue;
+    // pushName у входящих (не fromMe) — это имя контакта в его настройках.
+    if (!m.key?.fromMe && m.pushName && !pushNames.has(jid)) pushNames.set(jid, m.pushName.trim());
+    // Реальный номер для @lid берём из remoteJidAlt.
+    if (!phones.has(jid)) {
+      const phone = realPhoneFromKey(m.key ?? {});
+      if (phone) phones.set(jid, phone);
+    }
     const text = getTextMessage(m);
     if (!text) continue;
-    const entry = byChat.get(jid) ?? { waChatId: jid, label: names.get(jid) ?? "", messages: [] };
+    const entry = byChat.get(jid) ?? { waChatId: jid, label: "", messages: [] };
     const ts = extractMessageTimestamp(m.messageTimestamp);
+    if (ts !== undefined && (entry.lastTs === undefined || ts > entry.lastTs)) entry.lastTs = ts;
     entry.messages.push({
       fromMe: Boolean(m.key?.fromMe),
       text,
       ...(ts !== undefined ? { ts } : {})
     });
     byChat.set(jid, entry);
+  }
+  // Лейбл: сохранённое имя чата → имя контакта (pushName) → «+номер» → пусто (API
+  // покажет waChatId). Так пользователь узнаёт свои чаты, а не видит @lid.
+  for (const [jid, entry] of byChat) {
+    const phone = phones.get(jid);
+    entry.label =
+      names.get(jid) ||
+      pushNames.get(jid) ||
+      (phone ? `+${phone}` : "") ||
+      "";
   }
   // Кап на диалог = лимит zod на API (иначе весь пакет из 40 диалогов отвергнется
   // с ZodError). Держим последние сообщения — свежая переписка репрезентативнее.
@@ -450,7 +479,7 @@ function collectHistoryChatIds(payload: {
  * чатов remoteJid это `<lid>@lid` (НЕ номер), а PN лежит в remoteJidAlt. Берём
  * ту из {remoteJid, remoteJidAlt}, что оканчивается на @s.whatsapp.net.
  */
-function realPhoneFromKey(key: { remoteJid?: string | null; remoteJidAlt?: string }): string | undefined {
+function realPhoneFromKey(key: { remoteJid?: string | null; remoteJidAlt?: string | null }): string | undefined {
   for (const jid of [key.remoteJid, key.remoteJidAlt]) {
     if (jid && jid.endsWith("@s.whatsapp.net")) {
       // Отбрасываем суффикс устройства "<номер>:<device>"; строгая проверка цифр.
