@@ -40,6 +40,7 @@ type HistoryInfo = {
   syncStatus: HistorySyncStatus;
   progress: number;
   connected: boolean;
+  syncStalled?: boolean;
 };
 
 type Tab = "files" | "whatsapp";
@@ -369,23 +370,51 @@ export default function StyleImportDialog({ open, onClose, onApplied }: StyleImp
                 {historyInfo && historyInfo.connected && !historyInfo.capture && (
                   <div className="space-y-3">
                     <div className="rounded-xl border border-border bg-secondary/30 p-4 text-xs leading-5 text-muted-foreground">
-                      Мы можем автоматически подтянуть ваши переписки из WhatsApp и по ним собрать ваш
-                      стиль общения. Переписки обрабатываются только для анализа стиля, телефоны
-                      маскируются, а цены и факты бот всегда берёт из данных о бизнесе. Основной пласт —
-                      свежие месяцы; старые годы WhatsApp может не прислать. После нажатия номер
-                      кратко переподключится, чтобы получить историю.
+                      Мы можем подтянуть ваши переписки из WhatsApp и по ним собрать ваш стиль общения.
+                      Переписки обрабатываются только для анализа стиля, телефоны маскируются, а цены и
+                      факты бот всегда берёт из данных о бизнесе.
+                      <br />
+                      <br />
+                      Важно: WhatsApp отдаёт историю только при <b>первичной привязке</b> номера. Если
+                      номер уже подключён, для загрузки истории его нужно <b>переподключить заново</b>
+                      (отвязать в WhatsApp → «Связанные устройства» и отсканировать QR снова). Если
+                      переподключать не хочется — просто загрузите файлы экспорта на соседней вкладке.
                     </div>
                     <div className="flex justify-end">
                       <Button onClick={() => void enableCapture()} disabled={busy}>
                         <MessageSquare className="mr-1.5 h-3.5 w-3.5" />
-                        {busy ? "Включаю…" : "Включить и подтянуть историю"}
+                        {busy ? "Включаю…" : "Включить сбор истории"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Синк завис — WhatsApp не прислал историю (скорее всего номер уже был привязан) */}
+                {historyInfo && historyInfo.capture && historyInfo.syncStatus === "syncing" && historyInfo.syncStalled && (
+                  <div className="space-y-3 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+                    <div className="text-sm font-medium text-foreground">
+                      WhatsApp не прислал историю
+                    </div>
+                    <p className="text-xs leading-5 text-muted-foreground">
+                      Так бывает, когда номер уже был привязан раньше — WhatsApp отдаёт переписку только
+                      при новой привязке. Варианты: переподключите номер заново (отвяжите устройство в
+                      WhatsApp и отсканируйте QR) — тогда история подтянется сюда автоматически, либо
+                      загрузите файлы экспорта.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button size="sm" variant="outline" onClick={() => setTab("files")} disabled={busy}>
+                        <Upload className="mr-1.5 h-3.5 w-3.5" />
+                        Загрузить файлы
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => void disableCapture()} disabled={busy}>
+                        Остановить
                       </Button>
                     </div>
                   </div>
                 )}
 
                 {/* Идёт подтягивание — статус-бар прогресса */}
-                {historyInfo && historyInfo.capture && historyInfo.syncStatus === "syncing" && (
+                {historyInfo && historyInfo.capture && historyInfo.syncStatus === "syncing" && !historyInfo.syncStalled && (
                   <div className="space-y-2 rounded-xl border border-border bg-secondary/30 p-4">
                     <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                       <Loader2 className="h-4 w-4 animate-spin text-brand" />

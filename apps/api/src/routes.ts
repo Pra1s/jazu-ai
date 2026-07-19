@@ -1867,17 +1867,29 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
           styleHistoryCapture: true,
           styleHistoryStatus: true,
           styleHistoryProgress: true,
-          styleHistorySyncedAt: true
+          styleHistorySyncedAt: true,
+          updatedAt: true
         }
       })
     ]);
+    // «Завис»: статус syncing, но за STALL_MS не пришло ни прогресса, ни чатов.
+    // Частый случай — номер уже был привязан, и WhatsApp пропускает history-sync
+    // на реконнекте (нужна свежая привязка). updatedAt двигают только апдейты этой
+    // строки (коннект/прогресс), так что его давность = «тишина» от воркера.
+    const STALL_MS = 90_000;
+    const syncStalled =
+      conn?.styleHistoryStatus === "syncing" &&
+      chats.length === 0 &&
+      (conn?.styleHistoryProgress ?? 0) === 0 &&
+      Date.now() - conn.updatedAt.getTime() > STALL_MS;
     return {
       chats,
       capture: conn?.styleHistoryCapture ?? false,
       syncStatus: conn?.styleHistoryStatus ?? "idle",
       progress: conn?.styleHistoryProgress ?? 0,
       syncedAt: conn?.styleHistorySyncedAt ?? null,
-      connected: conn?.status === "connected"
+      connected: conn?.status === "connected",
+      syncStalled
     };
   });
 
