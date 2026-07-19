@@ -358,6 +358,16 @@ model WaConnection {
   // Выставляется автоматически при каждом успешном connection.open.
   // NULL = «фильтр выключен» (legacy / dev).
   botRespondsSince    DateTime?
+  // Фича «бот в стиле владельца», продуктовый источник. Захват личной истории из
+  // WhatsApp (history-sync) ТОЛЬКО с явного согласия владельца (кнопка в UI).
+  // styleHistoryCapture — согласие дано (воркер буферизует личные диалоги при синке).
+  // styleHistoryStatus/Progress — прогресс подтягивания для статус-бара:
+  //   idle (не запускали) | syncing (идёт синк, progress 0..100) | done (готово).
+  // styleHistorySyncedAt — время завершения последнего синка.
+  styleHistoryCapture   Boolean   @default(false)
+  styleHistoryStatus    String    @default("idle")
+  styleHistoryProgress  Int       @default(0)
+  styleHistorySyncedAt  DateTime?
   createdAt           DateTime      @default(now())
   updatedAt           DateTime      @updatedAt
   agent               Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)

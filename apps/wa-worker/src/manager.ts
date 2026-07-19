@@ -41,6 +41,11 @@ type ManagedConnection = {
   lastSentAt: Map<string, number>;
   reconnectTimer?: NodeJS.Timeout;
   reconnectAttempts: number;
+  /** Фича «бот в стиле владельца»: захватывать ли личную историю при синке
+   *  (по согласию владельца, per-agent). Живёт между внутренними рестартами. */
+  styleHistoryCapture: boolean;
+  /** Fallback-таймер завершения history-sync, если Baileys не пришлёт isLatest. */
+  historySyncTimer?: NodeJS.Timeout;
   /** Активен ли pairing-code flow. Если да — игнорируем QR-эвенты от Baileys
    * и держим status="pairing", чтобы UI не прыгал. */
   pairingMode: boolean;
@@ -394,6 +399,25 @@ async function pushHistoryDialogues(agentId: string, dialogues: HistoryDialogue[
   }
 }
 
+/** Сообщает API прогресс history-sync (для статус-бара в UI). Best-effort. */
+async function pushHistoryProgress(
+  agentId: string,
+  payload: { progress: number | null; status: "syncing" | "done" }
+): Promise<void> {
+  try {
+    const res = await fetch(new URL("/api/internal/wa-history-progress", env.API_ORIGIN), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-internal-token": env.API_INTERNAL_TOKEN },
+      body: JSON.stringify({ agentId, ...payload })
+    });
+    if (!res.ok) {
+      console.error(`[wa] push history progress rejected: ${res.status}`);
+    }
+  } catch (err) {
+    console.error("[wa] push history progress failed:", err instanceof Error ? err.message : err);
+  }
+}
+
 /** Извлекает chatId (remoteJid) из history-sync payload. Берём и из chats,
  *  и из messages — чтобы максимально полно покрыть «до-коннектные» чаты.
  *  Игнорируем статусы/броадкасты — это не реальные диалоги. */
@@ -577,9 +601,12 @@ export class ConnectionManager {
 
   async start(
     agentId: string,
-    options: { fresh?: boolean; restart?: boolean } = {}
+    options: { fresh?: boolean; restart?: boolean; styleHistoryCapture?: boolean } = {}
   ): Promise<PublicConnectionState> {
     const existing = this.getConnection(agentId);
+    // Согласие на захват истории «липкое»: явно переданный флаг обновляет его,
+    // иначе сохраняем прежнее (внутренние рестарты зовут start без флага).
+    const styleHistoryCapture = options.styleHistoryCapture ?? existing?.styleHistoryCapture ?? false;
     // restart=true ОБХОДИТ этот guard: после code 515 managed ещё «живой»
     // (status="pairing"/"connecting"), но сокет мёртв — нужно пересоздать
     // его с теми же creds, а не вернуть осиротевшее соединение.
@@ -642,6 +669,7 @@ export class ConnectionManager {
       stopRequested: false,
       lastSentAt: existing?.lastSentAt ?? new Map<string, number>(),
       reconnectAttempts: existingAttempts,
+      styleHistoryCapture,
       pairingMode: existing?.pairingMode ?? false,
       pairingCode: existing?.pairingCode ?? null,
       pairingCodeIssuedAt: existing?.pairingCodeIssuedAt ?? 0,
@@ -659,10 +687,24 @@ export class ConnectionManager {
       const chatIds = collectHistoryChatIds(payload);
       void pushPreConnectionChats(agentId, chatIds);
       // Фича «бот в стиле владельца»: буферизуем текст личных диалогов для анализа
-      // (только при явно включённом захвате — личную переписку без согласия не собираем).
-      if (env.WA_STYLE_HISTORY_CAPTURE) {
+      // (только при согласии — глобальный ENV ИЛИ per-agent флаг из UI). Личную
+      // переписку без явного согласия не собираем.
+      const capture = env.WA_STYLE_HISTORY_CAPTURE || managed.styleHistoryCapture;
+      if (capture) {
         const dialogues = collectHistoryDialogues(payload);
         void pushHistoryDialogues(agentId, dialogues);
+        // Прогресс синка для статус-бара в UI. Baileys отдаёт progress (0..100)
+        // и isLatest на последнем чанке. isLatest приходит не всегда — держим
+        // fallback-таймер, который закрывает синк после паузы без новых чанков.
+        const progress = typeof payload.progress === "number" ? payload.progress : null;
+        const isLatest = payload.isLatest === true;
+        void pushHistoryProgress(agentId, { progress, status: isLatest ? "done" : "syncing" });
+        if (managed.historySyncTimer) clearTimeout(managed.historySyncTimer);
+        if (!isLatest) {
+          managed.historySyncTimer = setTimeout(() => {
+            void pushHistoryProgress(agentId, { progress: 100, status: "done" });
+          }, 30_000);
+        }
       }
     });
 
@@ -965,6 +1007,9 @@ export class ConnectionManager {
     connection.stopRequested = true;
     if (connection.reconnectTimer) {
       clearTimeout(connection.reconnectTimer);
+    }
+    if (connection.historySyncTimer) {
+      clearTimeout(connection.historySyncTimer);
     }
 
     // ВАЖНО: НЕ зовём socket.logout() — он пытается talk-to-WA-server и

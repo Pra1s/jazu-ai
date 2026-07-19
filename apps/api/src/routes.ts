@@ -1848,16 +1848,85 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
   });
 
   // Продуктовый источник: список личных чатов, захваченных из WhatsApp history-sync,
-  // для выбора владельцем перед анализом (см. WA_STYLE_HISTORY_CAPTURE в воркере).
+  // + состояние захвата (согласие/прогресс синка) для статус-бара в UI.
   app.get("/agent/style-history-chats", async (request, reply) => {
     const agent = await getCurrentAgent(request, reply);
-    if (!agent) return { chats: [] };
-    const chats = await prisma.waHistoryChat.findMany({
+    if (!agent) {
+      return { chats: [], capture: false, syncStatus: "idle", progress: 0, connected: false };
+    }
+    const [chats, conn] = await Promise.all([
+      prisma.waHistoryChat.findMany({
+        where: { agentId: agent.id },
+        orderBy: { messageCount: "desc" },
+        select: { waChatId: true, label: true, messageCount: true, selected: true }
+      }),
+      prisma.waConnection.findUnique({
+        where: { agentId: agent.id },
+        select: {
+          status: true,
+          styleHistoryCapture: true,
+          styleHistoryStatus: true,
+          styleHistoryProgress: true,
+          styleHistorySyncedAt: true
+        }
+      })
+    ]);
+    return {
+      chats,
+      capture: conn?.styleHistoryCapture ?? false,
+      syncStatus: conn?.styleHistoryStatus ?? "idle",
+      progress: conn?.styleHistoryProgress ?? 0,
+      syncedAt: conn?.styleHistorySyncedAt ?? null,
+      connected: conn?.status === "connected"
+    };
+  });
+
+  // Включить захват личной истории из WhatsApp (явное согласие владельца). Ставит
+  // флаг и переподключает сессию, чтобы WhatsApp заново прислал history-sync —
+  // только так можно подтянуть переписку после уже выполненного подключения.
+  app.post("/agent/style-history-enable", async (request, reply) => {
+    const { agent } = await buildWriteSessionView(request, reply);
+    const conn = await prisma.waConnection.findUnique({
       where: { agentId: agent.id },
-      orderBy: { messageCount: "desc" },
-      select: { waChatId: true, label: true, messageCount: true, selected: true }
+      select: { status: true }
     });
-    return { chats };
+    if (!conn || conn.status !== "connected") {
+      return reply.code(409).send({
+        error: "not_connected",
+        message: "Сначала подключите WhatsApp, затем включите сбор истории."
+      });
+    }
+    await prisma.waConnection.update({
+      where: { agentId: agent.id },
+      data: {
+        styleHistoryCapture: true,
+        styleHistoryStatus: "syncing",
+        styleHistoryProgress: 0,
+        styleHistorySyncedAt: null
+      }
+    });
+    // Переподключаем: stop → start с флагом захвата. Best-effort — если воркер
+    // недоступен, флаг всё равно применится при следующем коннекте.
+    try {
+      await stopWorkerConnection(agent.id);
+      await startWorkerConnection(agent.id, { styleHistoryCapture: true });
+    } catch (err) {
+      request.log.warn({ err, agentId: agent.id }, "style-history-enable: worker reconnect failed");
+    }
+    return { ok: true };
+  });
+
+  // Отозвать согласие: выключить захват. Уже собранный буфер чистим (личную
+  // переписку без активного согласия не храним).
+  app.post("/agent/style-history-disable", async (request, reply) => {
+    const { agent } = await buildWriteSessionView(request, reply);
+    await prisma.waConnection.updateMany({
+      where: { agentId: agent.id },
+      data: { styleHistoryCapture: false, styleHistoryStatus: "idle", styleHistoryProgress: 0 }
+    });
+    await prisma.waHistoryChat.deleteMany({ where: { agentId: agent.id } });
+    // Флаг у воркера обновится при следующем (пере)подключении; принудительно не рвём.
+    return { ok: true };
   });
 
   // Запуск анализа по выбранным из истории чатам: конвертируем в эпизоды, кладём в
@@ -2679,7 +2748,10 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    const workerStatus = await startWorkerConnection(agent.id);
+    // Сохраняем согласие на захват истории через рестарты подключения.
+    const workerStatus = await startWorkerConnection(agent.id, {
+      styleHistoryCapture: connection.styleHistoryCapture
+    });
 
     await prisma.waConnection.upsert({
       where: { agentId: agent.id },
@@ -2991,9 +3063,17 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         // не сможет залогиниться.
         NOT: { authState: { equals: {} } }
       },
-      select: { agentId: true }
+      select: { agentId: true, styleHistoryCapture: true }
     });
-    return { agentIds: connections.map((c) => c.agentId) };
+    // agents[] — новый формат (с флагом захвата истории), agentIds[] оставлен
+    // для обратной совместимости со старой версией воркера при выкате.
+    return {
+      agents: connections.map((c) => ({
+        agentId: c.agentId,
+        styleHistoryCapture: c.styleHistoryCapture
+      })),
+      agentIds: connections.map((c) => c.agentId)
+    };
   });
 
   // ─── Internal: WA phone claim (анти-абуз) ───────────────────────────────
@@ -3220,6 +3300,36 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       saved += 1;
     }
     return { ok: true, saved };
+  });
+
+  // Прогресс history-sync от воркера (для статус-бара «подтягиваю историю»).
+  // status: syncing (идёт, progress 0..100) | done (закончили → syncedAt=now).
+  app.post("/internal/wa-history-progress", async (request, reply) => {
+    if (!verifyInternalToken(request.headers["x-internal-token"], env.API_INTERNAL_TOKEN, env.API_INTERNAL_TOKEN_OLD)) {
+      reply.code(401);
+      return { ok: false, error: "Unauthorized" };
+    }
+    const body = z
+      .object({
+        agentId: z.string().min(1),
+        progress: z.number().nullable().optional(),
+        status: z.enum(["syncing", "done"])
+      })
+      .parse(request.body);
+    const done = body.status === "done";
+    const clamped =
+      typeof body.progress === "number"
+        ? Math.max(0, Math.min(100, Math.round(body.progress)))
+        : undefined;
+    await prisma.waConnection.updateMany({
+      where: { agentId: body.agentId },
+      data: {
+        styleHistoryStatus: done ? "done" : "syncing",
+        ...(done ? { styleHistoryProgress: 100, styleHistorySyncedAt: new Date() } : {}),
+        ...(!done && clamped !== undefined ? { styleHistoryProgress: clamped } : {})
+      }
+    });
+    return { ok: true };
   });
 
   app.put("/internal/wa-auth/:agentId", {

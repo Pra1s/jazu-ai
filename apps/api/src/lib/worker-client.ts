@@ -54,7 +54,12 @@ async function workerFetch(url: URL, init?: RequestInit): Promise<Response> {
   }
 }
 
-export async function startWorkerConnection(agentId: string): Promise<WorkerStatusResponse> {
+export async function startWorkerConnection(
+  agentId: string,
+  // Фича «бот в стиле владельца»: согласие на захват личной истории (per-agent).
+  // Прокидываем воркеру, чтобы он собирал диалоги и слал прогресс синка.
+  options: { styleHistoryCapture?: boolean } = {}
+): Promise<WorkerStatusResponse> {
   if (!env.WA_WORKER_URL) {
     return {
       status: "error",
@@ -69,7 +74,12 @@ export async function startWorkerConnection(agentId: string): Promise<WorkerStat
   const response = await workerFetch(new URL(`/connections/${agentId}/start`, env.WA_WORKER_URL), {
     method: "POST",
     headers: buildHeaders(),
-    body: JSON.stringify({ agentId })
+    body: JSON.stringify({
+      agentId,
+      ...(options.styleHistoryCapture !== undefined
+        ? { styleHistoryCapture: options.styleHistoryCapture }
+        : {})
+    })
   });
 
   if (!response.ok) {

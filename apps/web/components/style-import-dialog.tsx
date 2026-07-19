@@ -32,6 +32,16 @@ type StyleStatus = {
 
 type HistoryChat = { waChatId: string; label: string; messageCount: number; selected: boolean };
 
+type HistorySyncStatus = "idle" | "syncing" | "done";
+
+type HistoryInfo = {
+  chats: HistoryChat[];
+  capture: boolean;
+  syncStatus: HistorySyncStatus;
+  progress: number;
+  connected: boolean;
+};
+
 type Tab = "files" | "whatsapp";
 
 const IN_PROGRESS = new Set(["queued", "analyzing", "aggregating"]);
@@ -43,8 +53,10 @@ export default function StyleImportDialog({ open, onClose, onApplied }: StyleImp
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<StyleStatus | null>(null);
   const [historyChats, setHistoryChats] = useState<HistoryChat[]>([]);
+  const [historyInfo, setHistoryInfo] = useState<HistoryInfo | null>(null);
   const [selectedChats, setSelectedChats] = useState<Set<string>>(new Set());
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const historyPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -56,19 +68,41 @@ export default function StyleImportDialog({ open, onClose, onApplied }: StyleImp
     }
   }, []);
 
-  // При открытии — тянем статус и (для вкладки WhatsApp) список чатов.
+  const refreshHistory = useCallback(async () => {
+    try {
+      const data = await apiJson<HistoryInfo>("/agent/style-history-chats");
+      setHistoryChats(data.chats);
+      setHistoryInfo(data);
+      return data;
+    } catch {
+      setHistoryChats([]);
+      setHistoryInfo(null);
+      return null;
+    }
+  }, []);
+
+  // При открытии — тянем статус анализа и состояние захвата истории.
   useEffect(() => {
     if (!open) return;
     void refreshStatus();
-    void (async () => {
-      try {
-        const data = await apiJson<{ chats: HistoryChat[] }>("/agent/style-history-chats");
-        setHistoryChats(data.chats);
-      } catch {
-        setHistoryChats([]);
+    void refreshHistory();
+  }, [open, refreshStatus, refreshHistory]);
+
+  // Поллинг подтягивания истории из WhatsApp, пока синк идёт.
+  useEffect(() => {
+    const syncing = historyInfo?.syncStatus === "syncing";
+    if (open && tab === "whatsapp" && syncing && !historyPollRef.current) {
+      historyPollRef.current = setInterval(() => {
+        void refreshHistory();
+      }, 3000);
+    }
+    return () => {
+      if (historyPollRef.current) {
+        clearInterval(historyPollRef.current);
+        historyPollRef.current = null;
       }
-    })();
-  }, [open, refreshStatus]);
+    };
+  }, [open, tab, historyInfo?.syncStatus, refreshHistory]);
 
   // Поллинг прогресса, пока анализ идёт.
   useEffect(() => {
@@ -116,6 +150,33 @@ export default function StyleImportDialog({ open, onClose, onApplied }: StyleImp
       await refreshStatus();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Не удалось загрузить");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function enableCapture() {
+    setBusy(true);
+    try {
+      await apiJson("/agent/style-history-enable", { method: "POST" });
+      toast.success("Подтягиваю историю из WhatsApp…");
+      await refreshHistory();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Не удалось включить сбор");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disableCapture() {
+    setBusy(true);
+    try {
+      await apiJson("/agent/style-history-disable", { method: "POST" });
+      setSelectedChats(new Set());
+      toast.success("Сбор истории выключен");
+      await refreshHistory();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Не удалось выключить сбор");
     } finally {
       setBusy(false);
     }
@@ -295,52 +356,116 @@ export default function StyleImportDialog({ open, onClose, onApplied }: StyleImp
 
             {tab === "whatsapp" && (
               <div className="space-y-3">
-                {historyChats.length === 0 ? (
+                {/* Нет подключённого WhatsApp — включать нечего */}
+                {historyInfo && !historyInfo.connected && !historyInfo.capture && (
                   <p className="rounded-xl border border-border bg-secondary/30 p-4 text-xs leading-5 text-muted-foreground">
-                    Личные чаты из WhatsApp пока не подтянуты. Импорт истории приходит при подключении
-                    номера (уже подключённым может понадобиться переподключение). Основной пласт —
-                    свежие месяцы; старые годы WhatsApp может не прислать. Пока история не пришла,
-                    воспользуйтесь загрузкой файлов.
+                    Сначала подключите WhatsApp на вкладке подключения номера. После этого здесь можно
+                    будет одним нажатием подтянуть историю переписок для анализа стиля. Пока номер не
+                    подключён — воспользуйтесь загрузкой файлов.
                   </p>
-                ) : (
-                  <>
-                    <p className="text-xs text-muted-foreground">
-                      Отметьте клиентские чаты (исключите личные и семейные) — по ним соберём ваш стиль.
-                    </p>
-                    <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-border p-1.5">
-                      {historyChats.map((c) => {
-                        const checked = selectedChats.has(c.waChatId);
-                        return (
-                          <label
-                            key={c.waChatId}
-                            className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition hover:bg-secondary/50"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={(e) => {
-                                setSelectedChats((prev) => {
-                                  const next = new Set(prev);
-                                  if (e.target.checked) next.add(c.waChatId);
-                                  else next.delete(c.waChatId);
-                                  return next;
-                                });
-                              }}
-                              className="h-4 w-4 shrink-0"
-                            />
-                            <span className="min-w-0 flex-1 truncate text-foreground">
-                              {c.label || c.waChatId}
-                            </span>
-                            <span className="shrink-0 text-xs text-muted-foreground">{c.messageCount}</span>
-                          </label>
-                        );
-                      })}
+                )}
+
+                {/* Согласие ещё не дано — показываем объяснение и кнопку */}
+                {historyInfo && historyInfo.connected && !historyInfo.capture && (
+                  <div className="space-y-3">
+                    <div className="rounded-xl border border-border bg-secondary/30 p-4 text-xs leading-5 text-muted-foreground">
+                      Мы можем автоматически подтянуть ваши переписки из WhatsApp и по ним собрать ваш
+                      стиль общения. Переписки обрабатываются только для анализа стиля, телефоны
+                      маскируются, а цены и факты бот всегда берёт из данных о бизнесе. Основной пласт —
+                      свежие месяцы; старые годы WhatsApp может не прислать. После нажатия номер
+                      кратко переподключится, чтобы получить историю.
                     </div>
                     <div className="flex justify-end">
-                      <Button onClick={() => void analyzeSelected()} disabled={busy || selectedChats.size === 0}>
-                        {busy ? "Запускаю…" : `Проанализировать (${selectedChats.size})`}
+                      <Button onClick={() => void enableCapture()} disabled={busy}>
+                        <MessageSquare className="mr-1.5 h-3.5 w-3.5" />
+                        {busy ? "Включаю…" : "Включить и подтянуть историю"}
                       </Button>
                     </div>
+                  </div>
+                )}
+
+                {/* Идёт подтягивание — статус-бар прогресса */}
+                {historyInfo && historyInfo.capture && historyInfo.syncStatus === "syncing" && (
+                  <div className="space-y-2 rounded-xl border border-border bg-secondary/30 p-4">
+                    <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin text-brand" />
+                      Подтягиваю историю из WhatsApp…
+                    </div>
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+                      <div
+                        className="h-full rounded-full bg-brand transition-all duration-500"
+                        style={{ width: `${Math.max(5, Math.min(100, historyInfo.progress))}%` }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span>
+                        {historyInfo.progress > 0 ? `${historyInfo.progress}%` : "Ожидаю данные от WhatsApp"}
+                      </span>
+                      <span>Найдено чатов: {historyChats.length}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Захват включён и есть чаты — выбор для анализа */}
+                {historyInfo && historyInfo.capture && historyInfo.syncStatus !== "syncing" && (
+                  <>
+                    {historyChats.length === 0 ? (
+                      <p className="rounded-xl border border-border bg-secondary/30 p-4 text-xs leading-5 text-muted-foreground">
+                        Сбор включён, но подходящих личных чатов пока не пришло. WhatsApp присылает
+                        историю не сразу и не всегда полностью. Можно подождать, переподключить номер
+                        или воспользоваться загрузкой файлов.
+                      </p>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs text-muted-foreground">
+                            Отметьте клиентские чаты (исключите личные и семейные) — по ним соберём ваш стиль.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => void disableCapture()}
+                            disabled={busy}
+                            className="shrink-0 text-xs text-muted-foreground underline-offset-2 hover:underline"
+                          >
+                            Выключить сбор
+                          </button>
+                        </div>
+                        <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-border p-1.5">
+                          {historyChats.map((c) => {
+                            const checked = selectedChats.has(c.waChatId);
+                            return (
+                              <label
+                                key={c.waChatId}
+                                className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition hover:bg-secondary/50"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) => {
+                                    setSelectedChats((prev) => {
+                                      const next = new Set(prev);
+                                      if (e.target.checked) next.add(c.waChatId);
+                                      else next.delete(c.waChatId);
+                                      return next;
+                                    });
+                                  }}
+                                  className="h-4 w-4 shrink-0"
+                                />
+                                <span className="min-w-0 flex-1 truncate text-foreground">
+                                  {c.label || c.waChatId}
+                                </span>
+                                <span className="shrink-0 text-xs text-muted-foreground">{c.messageCount}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        <div className="flex justify-end">
+                          <Button onClick={() => void analyzeSelected()} disabled={busy || selectedChats.size === 0}>
+                            {busy ? "Запускаю…" : `Проанализировать (${selectedChats.size})`}
+                          </Button>
+                        </div>
+                      </>
+                    )}
                   </>
                 )}
               </div>

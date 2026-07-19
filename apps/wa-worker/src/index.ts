@@ -124,7 +124,15 @@ app.get("/readyz", async (_request, reply) => {
 
 app.post("/connections/:agentId/start", async (request) => {
   const { agentId } = z.object({ agentId: z.string().min(1) }).parse(request.params);
-  return manager.start(agentId);
+  // styleHistoryCapture (опц.) — согласие владельца на захват личной истории для
+  // фичи «бот в стиле владельца». Прокидываем в менеджер (он держит флаг per-agent).
+  const body = z
+    .object({ styleHistoryCapture: z.boolean().optional() })
+    .parse(request.body ?? {});
+  return manager.start(
+    agentId,
+    body.styleHistoryCapture !== undefined ? { styleHistoryCapture: body.styleHistoryCapture } : {}
+  );
 });
 
 app.post("/connections/:agentId/pair", async (request, reply) => {
@@ -165,14 +173,19 @@ app.post("/connections/:agentId/send", async (request) => {
  * (status = "connected" в БД). Без этого после деплоя или OOM-kill все
  * боты молчат, пока юзер вручную не зайдёт на /whatsapp и не пересоединит.
  */
-async function fetchActiveAgents(): Promise<string[] | null> {
+type ActiveAgent = { agentId: string; styleHistoryCapture?: boolean };
+
+async function fetchActiveAgents(): Promise<ActiveAgent[] | null> {
   try {
     const response = await fetch(new URL("/api/internal/wa-connections/active", env.API_ORIGIN), {
       headers: { "x-internal-token": env.API_INTERNAL_TOKEN }
     });
     if (!response.ok) return null;
-    const { agentIds } = (await response.json()) as { agentIds: string[] };
-    return agentIds;
+    const data = (await response.json()) as { agents?: ActiveAgent[]; agentIds?: string[] };
+    // Новый формат — agents[] с флагом захвата; agentIds[] оставлен для совместимости.
+    if (Array.isArray(data.agents)) return data.agents;
+    if (Array.isArray(data.agentIds)) return data.agentIds.map((agentId) => ({ agentId }));
+    return [];
   } catch {
     return null;
   }
@@ -184,25 +197,28 @@ async function resumeActiveConnections() {
   // API может ещё не быть готов (порядок старта контейнеров). Делаем
   // retry с backoff: 1s, 2s, 4s, 8s, 15s, 30s, 60s — суммарно ~2 мин.
   const backoffMs = [1_000, 2_000, 4_000, 8_000, 15_000, 30_000, 60_000];
-  let agentIds: string[] | null = null;
+  let agents: ActiveAgent[] | null = null;
   for (let i = 0; i < backoffMs.length; i++) {
-    agentIds = await fetchActiveAgents();
-    if (agentIds !== null) break;
+    agents = await fetchActiveAgents();
+    if (agents !== null) break;
     const wait = backoffMs[i] ?? 60_000;
     app.log.info({ attempt: i + 1, retryInMs: wait }, "API not ready yet, will retry resume");
     await new Promise((r) => setTimeout(r, wait));
   }
-  if (agentIds === null) {
+  if (agents === null) {
     app.log.error("Could not reach API to resume WhatsApp connections after multiple retries");
     return;
   }
 
-  app.log.info({ count: agentIds.length }, "Resuming WhatsApp connections after worker boot");
+  app.log.info({ count: agents.length }, "Resuming WhatsApp connections after worker boot");
   // Стартуем последовательно с задержкой, чтобы не залить API и не словить
-  // rate-limit от WA.
-  for (const agentId of agentIds) {
+  // rate-limit от WA. Флаг захвата истории восстанавливаем из БД.
+  for (const { agentId, styleHistoryCapture } of agents) {
     try {
-      await manager.start(agentId);
+      await manager.start(
+        agentId,
+        styleHistoryCapture !== undefined ? { styleHistoryCapture } : {}
+      );
       app.log.info({ agentId }, "Resumed WhatsApp session");
     } catch (err) {
       app.log.error({ agentId, err: err instanceof Error ? err.message : err }, "Failed to resume");
