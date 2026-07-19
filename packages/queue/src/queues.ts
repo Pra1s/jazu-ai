@@ -49,6 +49,10 @@ export const QUEUE_LEAD_NOTIFY = "lead-notify";
 // держать нельзя. Задача — прогнать оба прохода анализа над эпизодами, сохранёнными
 // в StyleAnalysis.episodes. Обрабатывает apps/jobs: handleStyleAnalyze.
 export const QUEUE_STYLE_ANALYZE = "style-analyze";
+// Дожим клиента (follow-up): отложенная задача на чат (jobId = `followup:<agentId>:<chatId>`),
+// ставится при ответе бота, отменяется при входящем клиента. Хендлер шлёт напоминание
+// (пресет или авто LLM+RAG) и планирует следующий шаг серии. См. apps/jobs/handlers/followup.ts.
+export const QUEUE_WA_FOLLOWUP = "wa-followup";
 
 export type WaInboundJob = {
   agentId: string;
@@ -82,7 +86,11 @@ export type WaInboundJob = {
 export type WaOutboundJob = {
   agentId: string;
   chatId: string;
+  /** Полный текст ответа (склейка пузырей) — для обратной совместимости/логов. */
   text: string;
+  /** Мультисообщения: список пузырей для последовательной отправки с паузами.
+   *  Если пусто/один — шлём как одно сообщение (text). */
+  texts?: string[];
   /** id оригинального inbound (для трассировки и dedupe outgoing). */
   inboundJobId?: string;
   /** Прокидываем request-id дальше — чтобы wa-worker логировал тот же reqId. */
@@ -126,6 +134,15 @@ export type StyleAnalyzeJob = {
    * теряется безвозвратно — история приходит лишь при переподключении номера.
    */
   clearHistoryOnSuccess?: boolean;
+};
+
+export type FollowupJob = {
+  /** Агент, чей бот дожимает клиента. */
+  agentId: string;
+  /** WhatsApp-чат (remoteJid) клиента. */
+  chatId: string;
+  /** Номер шага серии (0-based): индекс в followupSteps, дальше — repeat-хвост. */
+  attempt: number;
 };
 
 const DEFAULT_QUEUE_OPTIONS: Omit<QueueOptions, "connection"> = {
@@ -172,6 +189,10 @@ export function getFlushQueue(): Queue<WaFlushJob> {
 
 export function getStyleAnalyzeQueue(): Queue<StyleAnalyzeJob> {
   return getQueue<StyleAnalyzeJob>(QUEUE_STYLE_ANALYZE);
+}
+
+export function getFollowupQueue(): Queue<FollowupJob> {
+  return getQueue<FollowupJob>(QUEUE_WA_FOLLOWUP);
 }
 
 export type StartedWorker<T> = {

@@ -46,3 +46,11 @@ export {
 } from "./style-analysis.js";
 
 export { indexStyleExchanges, retrieveStyleExamples } from "./style-rag.js";
+
+export {
+  scheduleFollowup,
+  cancelFollowup,
+  runFollowup,
+  followupJobId,
+  type FollowupRunResult
+} from "./followup.js";

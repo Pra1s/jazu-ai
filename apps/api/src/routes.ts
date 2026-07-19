@@ -1718,6 +1718,65 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true, businessProfile: merged, ...(assistantText ? { assistantText } : {}) };
   });
 
+  // Настройки мультисообщений и дожима клиента. Структурированный payload мерджим
+  // в businessProfile (живёт в data JSON, без миграции). UI: секция «Дожим клиента».
+  const followupSettingsSchema = z.object({
+    replySplitEnabled: z.boolean().optional(),
+    replyMaxMessages: z.number().int().min(1).max(6).optional(),
+    followupEnabled: z.boolean().optional(),
+    followupAnchor: z.enum(["last_bot", "last_client"]).optional(),
+    followupSteps: z
+      .array(
+        z.object({
+          delayMinutes: z.number().int().min(1).max(60 * 24 * 30),
+          text: z.string().max(2000).optional()
+        })
+      )
+      .max(10)
+      .optional(),
+    followupRepeatEveryMinutes: z.number().int().min(5).max(60 * 24 * 30).nullable().optional(),
+    followupRepeatMax: z.number().int().min(0).max(20).nullable().optional(),
+    followupTextMode: z.enum(["auto", "preset"]).optional(),
+    followupQuietStart: z.number().int().min(0).max(23).optional(),
+    followupQuietEnd: z.number().int().min(0).max(23).optional(),
+    followupTimezone: z.string().max(64).optional()
+  });
+  app.post("/agent/followup-settings", async (request, reply) => {
+    const { agent } = await buildWriteSessionView(request, reply);
+    const body = followupSettingsSchema.parse(request.body);
+    const profile = await ensureAgentProfile(agent.id);
+
+    const patch: Partial<typeof profile> = {};
+    if (body.replySplitEnabled !== undefined) patch.replySplitEnabled = body.replySplitEnabled;
+    if (body.replyMaxMessages !== undefined) patch.replyMaxMessages = body.replyMaxMessages;
+    if (body.followupEnabled !== undefined) patch.followupEnabled = body.followupEnabled;
+    if (body.followupAnchor !== undefined) patch.followupAnchor = body.followupAnchor;
+    if (body.followupSteps !== undefined) {
+      patch.followupSteps = body.followupSteps.map((s) => ({
+        delayMinutes: s.delayMinutes,
+        ...(s.text && s.text.trim() ? { text: s.text.trim() } : {})
+      }));
+    }
+    // null → очистить (undefined в patch перетрёт base при merge).
+    if (body.followupRepeatEveryMinutes !== undefined)
+      patch.followupRepeatEveryMinutes = body.followupRepeatEveryMinutes ?? undefined;
+    if (body.followupRepeatMax !== undefined)
+      patch.followupRepeatMax = body.followupRepeatMax ?? undefined;
+    if (body.followupTextMode !== undefined) patch.followupTextMode = body.followupTextMode;
+    if (body.followupQuietStart !== undefined) patch.followupQuietStart = body.followupQuietStart;
+    if (body.followupQuietEnd !== undefined) patch.followupQuietEnd = body.followupQuietEnd;
+    if (body.followupTimezone !== undefined && body.followupTimezone.trim())
+      patch.followupTimezone = body.followupTimezone.trim();
+
+    const merged = mergeProfile(profile, patch);
+    await prisma.businessProfile.upsert({
+      where: { agentId: agent.id },
+      update: { data: merged },
+      create: { agentId: agent.id, data: merged }
+    });
+    return { ok: true, businessProfile: merged };
+  });
+
   // ── Фича «бот в стиле владельца»: загрузка диалогов, статус анализа, сброс ──
   //
   // Файлы шлём как массив {filename, content} в JSON (текст экспортов), чтобы не

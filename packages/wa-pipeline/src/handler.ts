@@ -1,6 +1,7 @@
 import {
   buildRuntimeTurn,
   createInitialProfile,
+  splitBotReply,
   summarizeLead,
   transcribeAudio
 } from "@jazu/ai";
@@ -157,6 +158,8 @@ export type FlushResult =
   | {
       status: "flushed";
       reply: string;
+      /** reply, разбитый на отдельные сообщения (мультисообщения); [] если пусто. */
+      replyParts: string[];
       summary: string;
       conversationId: string;
       leadId: string | null;
@@ -213,10 +216,14 @@ function jsonInput(value: unknown): Prisma.InputJsonValue {
   return value as Prisma.InputJsonValue;
 }
 
-function toAssistantParts(text: string, actionButton?: unknown) {
+function toAssistantParts(text: string, actionButton?: unknown, extraTexts?: string[]) {
   const parts: Array<{ type: string; text?: string; action_button?: ActionButton }> = [
     { type: "text", text }
   ];
+  // Доп. пузыри (мультисообщения): каждый как отдельный текстовый блок в parts.
+  for (const t of extraTexts ?? []) {
+    if (t && t.trim().length > 0) parts.push({ type: "text", text: t });
+  }
   if (actionButton) {
     parts.push({ type: "action_button", action_button: actionButtonSchema.parse(actionButton) });
   }
@@ -919,8 +926,14 @@ export async function flushWaConversation(
       ? runtimeTurn.extractedName
       : null;
 
+  // Мультисообщения: режем reply по «---» на отдельные пузыри (кап из профиля).
   // Пустой reply — осознанное молчание (спам/офф-топик); пустой пузырь не пишем.
-  const hasReply = Boolean(runtimeTurn.reply && runtimeTurn.reply.trim().length > 0);
+  const replyParts = splitBotReply(
+    runtimeTurn.reply ?? "",
+    runtimeProfile.replySplitEnabled === false ? 1 : runtimeProfile.replyMaxMessages ?? 4
+  );
+  const combinedReply = replyParts.join("\n");
+  const hasReply = replyParts.length > 0;
 
   // Транзакция: исходящее (если есть) + сдвиг курсора + апдейт conversation.
   // Курсор и outbound коммитим атомарно → ретрай после коммита = nothing_to_flush.
@@ -931,8 +944,10 @@ export async function flushWaConversation(
             data: {
               conversationId: conversation.id,
               direction: "out",
-              body: runtimeTurn.reply,
-              parts: jsonInput(toAssistantParts(runtimeTurn.reply, runtimeTurn.actionButton))
+              body: combinedReply,
+              parts: jsonInput(
+                toAssistantParts(replyParts[0] ?? "", runtimeTurn.actionButton, replyParts.slice(1))
+              )
             }
           })
         ]
@@ -983,7 +998,8 @@ export async function flushWaConversation(
 
   return {
     status: "flushed",
-    reply: runtimeTurn.reply,
+    reply: combinedReply,
+    replyParts,
     summary: runtimeTurn.summary || summary,
     conversationId: conversation.id,
     leadId: lead.leadId,

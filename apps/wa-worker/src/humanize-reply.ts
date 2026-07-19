@@ -39,6 +39,38 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Пауза «печатает…» между пузырями мультисообщения. Длительность ~пропорциональна
+ * длине следующего сообщения (эмуляция набора): база + мс/символ, с клампом и
+ * лёгким разбросом. Держит бота живым, но не заставляет клиента долго ждать.
+ */
+export function computeBubblePauseMs(text: string): number {
+  const len = (text ?? "").trim().length;
+  const base = 700 + len * 35;
+  const clamped = Math.max(1200, Math.min(5000, base));
+  return randomInt(Math.round(clamped * 0.8), clamped);
+}
+
+/**
+ * Показывает «печатает…» указанное время (с рефрешем presence), затем возвращает
+ * управление — вызывающий отправляет следующий пузырь. Между сообщениями бота.
+ */
+export async function typeBubblePause(
+  socket: Pick<WASocket, "sendPresenceUpdate">,
+  chatId: string,
+  durationMs: number
+): Promise<void> {
+  if (durationMs <= 0) return;
+  await socket.sendPresenceUpdate("available", chatId).catch(() => undefined);
+  const until = Date.now() + durationMs;
+  while (Date.now() < until) {
+    await socket.sendPresenceUpdate("composing", chatId).catch(() => undefined);
+    const left = until - Date.now();
+    if (left <= 0) break;
+    await sleep(Math.min(TYPING_REFRESH_MS, left));
+  }
+}
+
 export type ReadBeforeReply = {
   /** За сколько мс до начала «печатает…» поставить «прочитано». */
   readLeadMs: number;

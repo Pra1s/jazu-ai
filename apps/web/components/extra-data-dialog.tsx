@@ -117,6 +117,29 @@ const FIELD_META: { key: keyof Fields; label: string; placeholder: string; rows:
   { key: "restrictions", label: "Ограничения / чего не делаем", placeholder: "Не работаем с детьми до 18\nБез выезда за город", rows: 2, maxLength: 2000 }
 ];
 
+// ── Дожим клиента (follow-up) ────────────────────────────────────────────────
+type FollowupStep = { minutes: number; text: string };
+
+const UNIT_OPTIONS = ["мин", "ч", "дн"] as const;
+type Unit = (typeof UNIT_OPTIONS)[number];
+
+function minutesToParts(min: number): { value: number; unit: Unit } {
+  if (min > 0 && min % 1440 === 0) return { value: min / 1440, unit: "дн" };
+  if (min > 0 && min % 60 === 0) return { value: min / 60, unit: "ч" };
+  return { value: min, unit: "мин" };
+}
+
+function partsToMinutes(value: number, unit: Unit): number {
+  const v = Math.max(1, Math.round(value));
+  return unit === "дн" ? v * 1440 : unit === "ч" ? v * 60 : v;
+}
+
+const DEFAULT_STEPS: FollowupStep[] = [
+  { minutes: 120, text: "" },
+  { minutes: 1440, text: "" },
+  { minutes: 2880, text: "" }
+];
+
 // Стилизованный селект: нативный select без системных стрелок + свой шеврон.
 function StyledSelect({
   value,
@@ -161,6 +184,19 @@ export default function ExtraDataDialog({ open, onClose, onSaved }: ExtraDataDia
   const [branches, setBranches] = useState<BranchRow[]>([{ ...EMPTY_BRANCH }]);
   const [busy, setBusy] = useState(false);
 
+  // Мультисообщения + дожим.
+  const [replySplitEnabled, setReplySplitEnabled] = useState(true);
+  const [replyMaxMessages, setReplyMaxMessages] = useState(4);
+  const [followupEnabled, setFollowupEnabled] = useState(false);
+  const [followupAnchor, setFollowupAnchor] = useState<"last_bot" | "last_client">("last_bot");
+  const [steps, setSteps] = useState<FollowupStep[]>(DEFAULT_STEPS);
+  const [repeatEnabled, setRepeatEnabled] = useState(false);
+  const [repeatEveryHours, setRepeatEveryHours] = useState(3);
+  const [repeatMax, setRepeatMax] = useState(3);
+  const [textMode, setTextMode] = useState<"auto" | "preset">("auto");
+  const [quietStart, setQuietStart] = useState(22);
+  const [quietEnd, setQuietEnd] = useState(9);
+
   // Подтягиваем уже сохранённые значения из профиля при открытии.
   useEffect(() => {
     if (!open) return;
@@ -183,6 +219,24 @@ export default function ExtraDataDialog({ open, onClose, onSaved }: ExtraDataDia
           script: "",
           restrictions: Array.isArray(p.notAllowed) ? (p.notAllowed as string[]).join("\n") : ""
         });
+        // Мультисообщения + дожим.
+        setReplySplitEnabled(p.replySplitEnabled !== false);
+        setReplyMaxMessages(typeof p.replyMaxMessages === "number" ? p.replyMaxMessages : 4);
+        setFollowupEnabled(p.followupEnabled === true);
+        setFollowupAnchor(p.followupAnchor === "last_client" ? "last_client" : "last_bot");
+        const rawSteps = Array.isArray(p.followupSteps) ? (p.followupSteps as Array<{ delayMinutes?: number; text?: string }>) : [];
+        setSteps(
+          rawSteps.length > 0
+            ? rawSteps.map((s) => ({ minutes: typeof s.delayMinutes === "number" ? s.delayMinutes : 120, text: typeof s.text === "string" ? s.text : "" }))
+            : DEFAULT_STEPS
+        );
+        const repEvery = typeof p.followupRepeatEveryMinutes === "number" ? p.followupRepeatEveryMinutes : null;
+        setRepeatEnabled(repEvery !== null);
+        setRepeatEveryHours(repEvery !== null ? Math.max(1, Math.round(repEvery / 60)) : 3);
+        setRepeatMax(typeof p.followupRepeatMax === "number" ? p.followupRepeatMax : 3);
+        setTextMode(p.followupTextMode === "preset" ? "preset" : "auto");
+        setQuietStart(typeof p.followupQuietStart === "number" ? p.followupQuietStart : 22);
+        setQuietEnd(typeof p.followupQuietEnd === "number" ? p.followupQuietEnd : 9);
       } catch {
         setFields(EMPTY);
         setBranches([{ ...EMPTY_BRANCH }]);
@@ -200,6 +254,23 @@ export default function ExtraDataDialog({ open, onClose, onSaved }: ExtraDataDia
       await apiJson("/agent/extra-data", {
         method: "POST",
         body: JSON.stringify({ ...fields, branches: serializeBranches(branches) })
+      });
+      await apiJson("/agent/followup-settings", {
+        method: "POST",
+        body: JSON.stringify({
+          replySplitEnabled,
+          replyMaxMessages,
+          followupEnabled,
+          followupAnchor,
+          followupSteps: steps
+            .filter((s) => s.minutes > 0)
+            .map((s) => ({ delayMinutes: s.minutes, ...(s.text.trim() ? { text: s.text.trim() } : {}) })),
+          followupRepeatEveryMinutes: repeatEnabled ? partsToMinutes(repeatEveryHours, "ч") : null,
+          followupRepeatMax: repeatEnabled ? repeatMax : null,
+          followupTextMode: textMode,
+          followupQuietStart: quietStart,
+          followupQuietEnd: quietEnd
+        })
       });
       toast.success("Данные сохранены, бот будет их использовать");
       onSaved?.();
@@ -330,6 +401,248 @@ export default function ExtraDataDialog({ open, onClose, onSaved }: ExtraDataDia
               «Онлайн, вся РК», «Доставка по Алматы», «Выезд: Алматы и область» — и
               время, когда вы принимаете заявки.
             </p>
+          </div>
+
+          {/* ── Ответы и дожим ─────────────────────────────────────────── */}
+          <div className="space-y-3 border-t border-border pt-4">
+            <div>
+              <h3 className="text-sm font-semibold text-foreground">Ответы и дожим клиента</h3>
+              <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                Как бот пишет и как возвращает клиентов, которые перестали отвечать.
+              </p>
+            </div>
+
+            {/* Мультисообщения */}
+            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-border bg-secondary/20 px-3 py-2.5">
+              <span className="text-sm text-foreground">
+                Отвечать несколькими сообщениями подряд
+                <span className="mt-0.5 block text-xs text-muted-foreground">Как живой человек в мессенджере.</span>
+              </span>
+              <input
+                type="checkbox"
+                checked={replySplitEnabled}
+                onChange={(e) => setReplySplitEnabled(e.target.checked)}
+                className="h-4 w-4 shrink-0"
+              />
+            </label>
+            {replySplitEnabled && (
+              <div className="flex items-center justify-between gap-3 pl-1">
+                <span className="text-sm text-muted-foreground">Максимум сообщений за ответ</span>
+                <StyledSelect
+                  value={String(replyMaxMessages)}
+                  onChange={(v) => setReplyMaxMessages(Number(v))}
+                  options={["1", "2", "3", "4", "5", "6"]}
+                  ariaLabel="Максимум сообщений"
+                  className="w-20"
+                />
+              </div>
+            )}
+
+            {/* Дожим */}
+            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-border bg-secondary/20 px-3 py-2.5">
+              <span className="text-sm text-foreground">
+                Дожимать клиента, если он замолчал
+                <span className="mt-0.5 block text-xs text-muted-foreground">Бот сам напомнит о себе через заданное время.</span>
+              </span>
+              <input
+                type="checkbox"
+                checked={followupEnabled}
+                onChange={(e) => setFollowupEnabled(e.target.checked)}
+                className="h-4 w-4 shrink-0"
+              />
+            </label>
+
+            {followupEnabled && (
+              <div className="space-y-3 rounded-xl border border-border p-3">
+                {/* Отсчёт */}
+                <div>
+                  <span className="text-xs font-medium text-muted-foreground">Отсчитывать время от</span>
+                  <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                    {([
+                      ["last_bot", "Моего сообщения"],
+                      ["last_client", "Сообщения клиента"]
+                    ] as const).map(([val, label]) => (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => setFollowupAnchor(val)}
+                        className={cn(
+                          "rounded-lg border px-3 py-2 text-xs transition",
+                          followupAnchor === val
+                            ? "border-foreground bg-foreground text-background"
+                            : "border-border text-foreground hover:border-foreground/30"
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Текст дожима */}
+                <div>
+                  <span className="text-xs font-medium text-muted-foreground">Текст напоминаний</span>
+                  <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                    {([
+                      ["auto", "Авто (бот сам, по стилю)"],
+                      ["preset", "Мои заготовки"]
+                    ] as const).map(([val, label]) => (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => setTextMode(val)}
+                        className={cn(
+                          "rounded-lg border px-3 py-2 text-xs transition",
+                          textMode === val
+                            ? "border-foreground bg-foreground text-background"
+                            : "border-border text-foreground hover:border-foreground/30"
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Шаги */}
+                <div>
+                  <span className="text-xs font-medium text-muted-foreground">
+                    Шаги дожима (через сколько после предыдущего)
+                  </span>
+                  <div className="mt-1.5 space-y-2">
+                    {steps.map((step, i) => {
+                      const parts = minutesToParts(step.minutes);
+                      return (
+                        <div key={i} className="rounded-lg border border-border bg-secondary/20 p-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-5 shrink-0 text-xs text-muted-foreground">{i + 1}.</span>
+                            <span className="text-xs text-muted-foreground">через</span>
+                            <input
+                              type="number"
+                              min={1}
+                              value={parts.value}
+                              onChange={(e) => {
+                                const v = Number(e.target.value);
+                                setSteps((prev) =>
+                                  prev.map((s, j) =>
+                                    j === i ? { ...s, minutes: partsToMinutes(v || 1, parts.unit) } : s
+                                  )
+                                );
+                              }}
+                              aria-label="Значение интервала"
+                              className="w-16 rounded-lg border border-border bg-background px-2 py-2 text-sm text-foreground outline-none focus:border-foreground focus:ring-1 focus:ring-foreground/10"
+                            />
+                            <StyledSelect
+                              value={parts.unit}
+                              onChange={(u) =>
+                                setSteps((prev) =>
+                                  prev.map((s, j) =>
+                                    j === i ? { ...s, minutes: partsToMinutes(parts.value, u as Unit) } : s
+                                  )
+                                )
+                              }
+                              options={[...UNIT_OPTIONS]}
+                              ariaLabel="Единица интервала"
+                              className="w-20"
+                            />
+                            {steps.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => setSteps((prev) => prev.filter((_, j) => j !== i))}
+                                className="ml-auto flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition hover:text-foreground"
+                                aria-label="Удалить шаг"
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </div>
+                          {textMode === "preset" && (
+                            <input
+                              type="text"
+                              value={step.text}
+                              maxLength={2000}
+                              onChange={(e) =>
+                                setSteps((prev) => prev.map((s, j) => (j === i ? { ...s, text: e.target.value } : s)))
+                              }
+                              placeholder="Текст напоминания (пусто = бот придумает сам)"
+                              className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-foreground focus:ring-1 focus:ring-foreground/10"
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {steps.length < 10 && (
+                    <button
+                      type="button"
+                      onClick={() => setSteps((prev) => [...prev, { minutes: 1440, text: "" }])}
+                      className="mt-2 flex items-center gap-1.5 text-sm font-medium text-brand transition hover:opacity-80"
+                    >
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-brand/15">
+                        <Plus className="h-3.5 w-3.5" />
+                      </span>
+                      Добавить шаг
+                    </button>
+                  )}
+                </div>
+
+                {/* Повтор хвостом */}
+                <label className="flex cursor-pointer items-center justify-between gap-3">
+                  <span className="text-sm text-foreground">Потом повторять с интервалом</span>
+                  <input
+                    type="checkbox"
+                    checked={repeatEnabled}
+                    onChange={(e) => setRepeatEnabled(e.target.checked)}
+                    className="h-4 w-4 shrink-0"
+                  />
+                </label>
+                {repeatEnabled && (
+                  <div className="flex flex-wrap items-center gap-1.5 pl-1 text-sm text-muted-foreground">
+                    <span>каждые</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={repeatEveryHours}
+                      onChange={(e) => setRepeatEveryHours(Number(e.target.value) || 1)}
+                      aria-label="Интервал повтора, часов"
+                      className="w-16 rounded-lg border border-border bg-background px-2 py-2 text-sm text-foreground outline-none focus:border-foreground focus:ring-1 focus:ring-foreground/10"
+                    />
+                    <span>ч, ещё</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={repeatMax}
+                      onChange={(e) => setRepeatMax(Number(e.target.value) || 1)}
+                      aria-label="Сколько раз повторять"
+                      className="w-16 rounded-lg border border-border bg-background px-2 py-2 text-sm text-foreground outline-none focus:border-foreground focus:ring-1 focus:ring-foreground/10"
+                    />
+                    <span>раз</span>
+                  </div>
+                )}
+
+                {/* Тихие часы */}
+                <div className="flex flex-wrap items-center gap-1.5 border-t border-border pt-3 text-sm text-muted-foreground">
+                  <span>Не писать с</span>
+                  <StyledSelect
+                    value={String(quietStart)}
+                    onChange={(v) => setQuietStart(Number(v))}
+                    options={Array.from({ length: 24 }, (_, h) => String(h))}
+                    ariaLabel="Начало тихих часов"
+                    className="w-16"
+                  />
+                  <span>до</span>
+                  <StyledSelect
+                    value={String(quietEnd)}
+                    onChange={(v) => setQuietEnd(Number(v))}
+                    options={Array.from({ length: 24 }, (_, h) => String(h))}
+                    ariaLabel="Конец тихих часов"
+                    className="w-16"
+                  />
+                  <span>ч</span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

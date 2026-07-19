@@ -48,7 +48,31 @@ export const businessProfileSchema = z.object({
   // ситуаций, styleFewShot — отобранные примеры «Клиент/Владелец».
   styleGuide: z.string().optional(),
   stylePlaybook: z.string().optional(),
-  styleFewShot: z.array(z.string()).default([])
+  styleFewShot: z.array(z.string()).default([]),
+  // Ответ несколькими сообщениями (как живой человек). replySplitEnabled —
+  // разрешить дробление; replyMaxMessages — потолок пузырей на один ответ.
+  replySplitEnabled: z.boolean().default(true),
+  replyMaxMessages: z.number().int().min(1).max(6).default(4),
+  // Дожим клиента (follow-up), если он замолчал. Всё опционально: без включения
+  // рантайм работает как раньше. followupSteps — серия шагов (задержка от якоря +
+  // опц. текст пресета); followupRepeat* — «повторять хвостом» каждые N минут.
+  followupEnabled: z.boolean().default(false),
+  followupAnchor: z.enum(["last_bot", "last_client"]).default("last_bot"),
+  followupSteps: z
+    .array(
+      z.object({
+        delayMinutes: z.number().int().min(1).max(60 * 24 * 30),
+        text: z.string().max(2000).optional()
+      })
+    )
+    .max(10)
+    .default([{ delayMinutes: 120 }, { delayMinutes: 1440 }, { delayMinutes: 2880 }]),
+  followupRepeatEveryMinutes: z.number().int().min(5).max(60 * 24 * 30).optional(),
+  followupRepeatMax: z.number().int().min(0).max(20).optional(),
+  followupTextMode: z.enum(["auto", "preset"]).default("auto"),
+  followupQuietStart: z.number().int().min(0).max(23).default(22),
+  followupQuietEnd: z.number().int().min(0).max(23).default(9),
+  followupTimezone: z.string().default("Asia/Almaty")
 });
 
 export type BusinessProfile = z.infer<typeof businessProfileSchema>;

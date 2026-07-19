@@ -155,6 +155,27 @@ function isFilled(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
+/**
+ * Режет ответ бота на отдельные сообщения по строке-разделителю «---» (её ставит
+ * LLM, см. splitLine в buildRuntimeEnvelope). Триммит и выкидывает пустые части,
+ * при переполнении склеивает хвост в последнее сообщение. maxMessages<=1 → всё
+ * склеивается в одну строку (разделители убираются). Пустой ответ → [].
+ */
+export function splitBotReply(reply: string, maxMessages = 1): string[] {
+  const raw = (reply ?? "").trim();
+  if (!raw) return [];
+  const parts = raw
+    .split(/^\s*-{3,}\s*$/m)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+  if (parts.length === 0) return [];
+  const max = Math.max(1, Math.floor(maxMessages));
+  if (parts.length <= max) return parts;
+  const head = parts.slice(0, max - 1);
+  const tail = parts.slice(max - 1).join("\n");
+  return [...head, tail];
+}
+
 export function mergeProfile(base: BusinessProfile, patch: Partial<BusinessProfile>): BusinessProfile {
   const merged: BusinessProfile = {
     ...base,
@@ -166,7 +187,8 @@ export function mergeProfile(base: BusinessProfile, patch: Partial<BusinessProfi
     notAllowed: patch.notAllowed ?? base.notAllowed,
     channels: patch.channels ?? base.channels,
     integrations: patch.integrations ?? base.integrations,
-    emergencyCases: patch.emergencyCases ?? base.emergencyCases
+    emergencyCases: patch.emergencyCases ?? base.emergencyCases,
+    followupSteps: patch.followupSteps ?? base.followupSteps
   };
 
   return businessProfileSchema.parse(merged);
@@ -307,7 +329,9 @@ export function buildBuilderSystemPrompt(profile: BusinessProfile): string {
     .map((section) => {
       const value = profile[section.key];
       if (!isFilled(value)) return null;
-      const rendered = Array.isArray(value) ? value.join("; ") : String(value);
+      const rendered = Array.isArray(value)
+        ? value.filter((v): v is string => typeof v === "string").join("; ")
+        : String(value);
       return `- ${section.label}: ${rendered}`;
     })
     .filter(Boolean)
@@ -932,6 +956,14 @@ export function buildRuntimeEnvelope(
     ? "WhatsApp-стиль: живо и по-человечески. Длину, дробление и ритм сообщений держи как в блоке СТИЛЬ ОБЩЕНИЯ ВЛАДЕЛЬЦА выше (это приоритетнее дефолта). Один смысловой шаг за раз."
     : "WhatsApp-стиль: коротко и живо. Обычно 1, максимум 2 коротких предложения в сообщении. Один смысловой шаг за раз.";
 
+  // Разбивка ответа на несколько сообщений подряд (как живой человек в мессенджере).
+  // Модель ставит строку-разделитель «---»; бэк режет reply по ней и шлёт по одному.
+  const maxBubbles = Math.max(1, Math.min(6, profile.replyMaxMessages ?? 4));
+  const splitLine =
+    profile.replySplitEnabled !== false && maxBubbles > 1
+      ? `Живые люди иногда дробят ответ на 2-${maxBubbles} коротких сообщения подряд. Если это естественно (например приветствие + вопрос, или мысль в два коротких шага), раздели reply на отдельные сообщения строкой ровно из трёх дефисов «---» на ОТДЕЛЬНОЙ строке между ними. Максимум ${maxBubbles} сообщений. НЕ дроби ради дробления: короткий ответ — одно сообщение без «---». Не пиши «---» внутри сообщения и как часть текста.`
+      : "";
+
   const needBlock = detectedNeed
     ? `## ПОТРЕБНОСТЬ КЛИЕНТА (установлена, НЕ переспрашивай)\n${detectedNeed}`
     : `## ПОТРЕБНОСТЬ КЛИЕНТА\nпока не установлена, выясни первым вопросом`;
@@ -1071,7 +1103,7 @@ ${personaGenderLine}
 
 ## ФОРМАТ
 ${formatLengthLine}
-Говори как живой человек в переписке, а не как оператор колл-центра: суть в ПЕРВЫХ словах, без длинных канцелярских вводных. Клиент не должен дочитывать абзац, чтобы понять ответ.
+${splitLine ? `${splitLine}\n` : ""}Говори как живой человек в переписке, а не как оператор колл-центра: суть в ПЕРВЫХ словах, без длинных канцелярских вводных. Клиент не должен дочитывать абзац, чтобы понять ответ.
 Объяснять, отвечать на вопросы, прогревать и консультировать МОЖНО и нужно — но дозированно: раскрывай мысль по частям, по ходу диалога, а не одним абзацем за раз.
 ⛔ НЕ накрывай клиента простынёй: не вали в одно сообщение объяснение + презентацию + условия + вопрос разом. Дай немного по делу, узнай реакцию и потребность, потом продолжи следующим сообщением. Убирай длинные обороты («хотел бы отметить», «во многом зависит от того, что…», «мы работаем на результат, поэтому…») и рекламные пассажи.
 Это про ФОРМУ (короткие дозы, живой тон), а НЕ про скорость закрытия. НЕ перепрыгивай к «оформлю заявку, как вас зовут» раньше, чем понял потребность и прогрел клиента. Сначала нормальный человеческий разговор, закрытие — когда клиент готов (см. ОТ ПОТРЕБНОСТИ К ЗАКРЫТИЮ).

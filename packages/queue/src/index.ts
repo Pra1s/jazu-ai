@@ -10,12 +10,14 @@ export {
   QUEUE_LEAD_NOTIFY,
   QUEUE_WA_FLUSH,
   QUEUE_STYLE_ANALYZE,
+  QUEUE_WA_FOLLOWUP,
   getQueue,
   getInboundQueue,
   getOutboundQueue,
   getLeadNotifyQueue,
   getFlushQueue,
   getStyleAnalyzeQueue,
+  getFollowupQueue,
   startWorker,
   closeAllQueues,
   type WaInboundJob,
@@ -23,6 +25,7 @@ export {
   type LeadNotifyJob,
   type WaFlushJob,
   type StyleAnalyzeJob,
+  type FollowupJob,
   type StartedWorker
 } from "./queues.js";
 

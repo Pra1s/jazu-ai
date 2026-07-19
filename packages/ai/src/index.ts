@@ -26,6 +26,7 @@ import {
   getFallback,
   getNextQuestions,
   mergeProfile,
+  splitBotReply,
   stripEmptyPatchValues,
   resolveCarcass,
   summarizeLead,
@@ -412,6 +413,59 @@ function identifyLeadNeed(text: string): { handoff: boolean; reason?: string } {
   return { handoff: false };
 }
 
+/**
+ * Генерирует текст авто-дожима (follow-up) в стиле владельца: клиент замолчал —
+ * пишем короткое ненавязчивое напоминание, опираясь на контекст переписки, стиль
+ * и RAG-примеры. Возвращает готовый текст (может содержать «---» для мультисообщений),
+ * или пустую строку при недоступности LLM/исчерпании бюджета (тогда дожим пропускаем).
+ */
+export async function generateFollowupText(params: {
+  profile: BusinessProfile;
+  businessPrompt?: string | null;
+  history?: Array<{ role: "user" | "assistant"; content: string }>;
+  detectedNeed?: string | null;
+  detectedName?: string | null;
+  retrievedExamples?: string[];
+  attempt: number;
+  telemetry?: LlmTelemetryHooks;
+}): Promise<string> {
+  const systemPrompt =
+    params.businessPrompt && params.businessPrompt.trim().length > 0
+      ? params.businessPrompt
+      : buildRuntimePrompt(params.profile);
+  const runtimeSystem = buildRuntimeEnvelope(
+    systemPrompt,
+    params.profile,
+    params.detectedNeed ?? null,
+    params.detectedName ?? null,
+    new Date(),
+    params.retrievedExamples ?? []
+  );
+  const instruction = `[СЛУЖЕБНАЯ ЗАДАЧА: ДОЖИМ] Клиент перестал отвечать (попытка №${
+    params.attempt + 1
+  }). Напиши короткое, тёплое и НЕнавязчивое сообщение, чтобы мягко вернуть клиента к разговору, опираясь на контекст переписки выше. НЕ здоровайся заново (диалог уже идёт), не дави, не повторяй прошлые формулировки дословно, не выдумывай новые факты/цены. Верни JSON как обычно; в поле reply — только текст сообщения-напоминания.`;
+  try {
+    const wrapper = await runJsonCallWithTelemetry<{ reply?: string }>(
+      {
+        system: runtimeSystem,
+        messages: [
+          ...(params.history ?? []).map((m) => ({ role: m.role, content: m.content })),
+          { role: "user", content: instruction }
+        ],
+        temperature: 0.6
+      },
+      params.telemetry
+    );
+    if (wrapper.blocked) return "";
+    const reply = wrapper.result?.reply;
+    if (typeof reply !== "string") return "";
+    return postProcessUserText(sanitizeAssistantText(reply));
+  } catch (error) {
+    console.error("[generateFollowupText] LLM call failed", error);
+    return "";
+  }
+}
+
 export async function buildRuntimeTurn(
   profile: BusinessProfile,
   userText: string,
@@ -744,6 +798,7 @@ export {
   getFallback,
   getNextQuestions,
   mergeProfile,
+  splitBotReply,
   resolveCarcass,
   summarizeLead,
   completeStream,

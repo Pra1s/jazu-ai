@@ -26,18 +26,27 @@ export function computeTargetReplyAtMs(inboundReceivedAtMs: number, isFirstBotRe
 export async function enqueueReply(params: {
   agentId: string;
   chatId: string;
-  reply: string;
+  /** Один ответ (fallback). Если задан replies — используется он. */
+  reply?: string;
+  /** Мультисообщения: пузыри для последовательной отправки. */
+  replies?: string[];
   inboundReceivedAtMs: number;
   isFirstBotReply: boolean;
   inboundJobId?: string;
   requestId?: string;
   waMessageId?: string;
 }): Promise<void> {
+  const parts = (params.replies && params.replies.length > 0
+    ? params.replies
+    : [params.reply ?? ""]
+  ).filter((t) => t && t.trim().length > 0);
+  if (parts.length === 0) return;
   const targetReplyAtMs = computeTargetReplyAtMs(params.inboundReceivedAtMs, params.isFirstBotReply);
   const outbound: WaOutboundJob = {
     agentId: params.agentId,
     chatId: params.chatId,
-    text: params.reply,
+    text: parts.join("\n"),
+    ...(parts.length > 1 ? { texts: parts } : {}),
     humanize: true,
     inboundReceivedAtMs: params.inboundReceivedAtMs,
     targetReplyAtMs,

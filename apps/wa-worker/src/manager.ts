@@ -12,8 +12,10 @@ import { env } from "./env.js";
 import { useDbAuthState } from "./db-auth-state.js";
 import { getInboundQueue, type WaInboundJob } from "@jazu/queue";
 import {
+  computeBubblePauseMs,
   randomInt,
   stopTyping,
+  typeBubblePause,
   waitWithTyping,
   type HumanizeTimingConfig
 } from "./humanize-reply.js";
@@ -1219,6 +1221,7 @@ export class ConnectionManager {
     payload: {
       chatId: string;
       text: string;
+      texts?: string[];
       humanize?: { targetReplyAtMs: number; isFirstBotReply: boolean };
     }
   ): Promise<void> {
@@ -1247,6 +1250,7 @@ export class ConnectionManager {
     payload: {
       chatId: string;
       text: string;
+      texts?: string[];
       humanize?: { targetReplyAtMs: number; isFirstBotReply: boolean };
     }
   ): Promise<void> {
@@ -1254,10 +1258,16 @@ export class ConnectionManager {
     if (!connection?.socket) {
       throw new Error("Connection is not active");
     }
+    const socket = connection.socket;
+    const chatId = payload.chatId;
+
+    // Мультисообщения: список пузырей (или один текст). Пустые отбрасываем.
+    const bubbles = (payload.texts && payload.texts.length > 0 ? payload.texts : [payload.text])
+      .map((t) => (t ?? "").trim())
+      .filter((t) => t.length > 0);
+    if (bubbles.length === 0) return;
 
     if (env.WA_HUMANIZE_REPLIES && payload.humanize) {
-      const socket = connection.socket;
-      const chatId = payload.chatId;
       await waitWithTyping(
         socket,
         chatId,
@@ -1277,18 +1287,25 @@ export class ConnectionManager {
     // это первый ад-хок защитный слой; масштабный rate-limit на стороне
     // outbound-консьюмера в bullmq (см. handlers/wa-outbound.ts).
     const MIN_INTERVAL_MS = env.WA_PER_CHAT_MIN_INTERVAL_MS;
-    const last = connection.lastSentAt.get(payload.chatId) ?? 0;
-    const now = Date.now();
-    const wait = MIN_INTERVAL_MS - (now - last);
-    if (wait > 0) {
-      await new Promise((resolve) => setTimeout(resolve, wait));
+    const rateLimit = async () => {
+      const last = connection.lastSentAt.get(chatId) ?? 0;
+      const wait = MIN_INTERVAL_MS - (Date.now() - last);
+      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    };
+
+    for (let i = 0; i < bubbles.length; i++) {
+      // Между пузырями — пауза «печатает…» пропорционально длине следующего.
+      if (i > 0 && env.WA_HUMANIZE_REPLIES) {
+        await typeBubblePause(socket, chatId, computeBubblePauseMs(bubbles[i]!));
+      }
+      await rateLimit();
+      await socket.sendMessage(chatId, { text: bubbles[i]! });
+      connection.lastSentAt.set(chatId, Date.now());
     }
 
-    await connection.socket.sendMessage(payload.chatId, { text: payload.text });
-    await stopTyping(connection.socket, payload.chatId);
-    connection.lastSentAt.set(payload.chatId, Date.now());
+    await stopTyping(socket, chatId);
     connection.lastSeenAt = new Date();
-    this.markReplied(agentId, payload.chatId);
+    this.markReplied(agentId, chatId);
   }
 
   /**

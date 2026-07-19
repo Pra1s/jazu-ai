@@ -8,11 +8,13 @@ import {
   QUEUE_WA_FLUSH,
   QUEUE_LEAD_NOTIFY,
   QUEUE_STYLE_ANALYZE,
+  QUEUE_WA_FOLLOWUP,
   startWorker,
   type WaInboundJob,
   type WaFlushJob,
   type LeadNotifyJob,
-  type StyleAnalyzeJob
+  type StyleAnalyzeJob,
+  type FollowupJob
 } from "@jazu/queue";
 import {
   captureError,
@@ -28,6 +30,7 @@ import { handleWaInbound } from "./handlers/wa-inbound.js";
 import { handleWaFlush } from "./handlers/wa-flush.js";
 import { handleLeadNotify } from "./handlers/lead-notify.js";
 import { handleStyleAnalyze } from "./handlers/style-analyze.js";
+import { handleFollowup } from "./handlers/followup.js";
 import { logger } from "./logger.js";
 import { startRetentionCron } from "./retention.js";
 import { startSubscriptionRemindersCron } from "./subscription-reminders.js";
@@ -111,6 +114,23 @@ styleAnalyzeWorker.worker.on("failed", (job, err) => {
     route: "jobs:style-analyze",
     agentId: (job?.data)?.agentId ?? null,
     extra: { jobId: job?.id, attemptsMade: job?.attemptsMade }
+  });
+});
+
+// Дожим клиента (follow-up): напоминания по серии шагов, если клиент замолчал.
+const followupWorker = startWorker<FollowupJob>(QUEUE_WA_FOLLOWUP, handleFollowup, {
+  concurrency: 5
+});
+
+followupWorker.worker.on("ready", () => {
+  logger.info({ queue: QUEUE_WA_FOLLOWUP }, "worker ready");
+});
+
+followupWorker.worker.on("failed", (job, err) => {
+  captureError(err, {
+    route: "jobs:wa-followup",
+    agentId: (job?.data)?.agentId ?? null,
+    extra: { jobId: job?.id, attempt: (job?.data)?.attempt ?? null }
   });
 });
 
@@ -222,6 +242,11 @@ async function shutdown(signal: string): Promise<void> {
     await styleAnalyzeWorker.close();
   } catch (err) {
     logger.error({ err }, "error closing style-analyze worker");
+  }
+  try {
+    await followupWorker.close();
+  } catch (err) {
+    logger.error({ err }, "error closing wa:followup worker");
   }
   try {
     await closeAllQueues();

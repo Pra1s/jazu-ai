@@ -1,5 +1,5 @@
 import { type Job, type WaInboundJob } from "@jazu/queue";
-import { ingestWaInbound } from "@jazu/wa-pipeline";
+import { ingestWaInbound, cancelFollowup, scheduleFollowup } from "@jazu/wa-pipeline";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { enqueueReply } from "./outbound.js";
@@ -34,6 +34,9 @@ export async function handleWaInbound(job: Job<WaInboundJob>): Promise<void> {
   const elapsedMs = Date.now() - started;
 
   if (result.status === "ingested") {
+    // Клиент написал — отменяем запланированный дожим (серия начнётся заново после
+    // следующего ответа бота во flush).
+    await cancelFollowup(agentId, chatId);
     await scheduleFlush(agentId, chatId, result.batchStartedAtMs);
     log.info({ chatId, elapsedMs }, "wa:inbound ingested, flush scheduled");
     return;
@@ -57,6 +60,9 @@ export async function handleWaInbound(job: Job<WaInboundJob>): Promise<void> {
       if (result.isFirstBotReply && result.agentOwnerUserId) {
         await markBotActivatedOnce(result.agentOwnerUserId, agentId, log);
       }
+      // Немедленный ответ = тоже ход бота: перезапускаем серию дожима с нуля.
+      await cancelFollowup(agentId, chatId);
+      await scheduleFollowup(agentId, chatId, 0);
     }
     log.info({ chatId, elapsedMs }, "wa:inbound immediate reply (voice fallback)");
     return;

@@ -1,5 +1,5 @@
 import { type Job, type WaFlushJob } from "@jazu/queue";
-import { flushWaConversation } from "@jazu/wa-pipeline";
+import { flushWaConversation, scheduleFollowup } from "@jazu/wa-pipeline";
 import { capturePostHog } from "@jazu/observability";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
@@ -63,7 +63,7 @@ export async function handleWaFlush(job: Job<WaFlushJob>): Promise<void> {
     await enqueueReply({
       agentId,
       chatId,
-      reply: result.reply,
+      replies: result.replyParts,
       // Тайминг считаем от первого сообщения пакета — задержка обычно уже истекла
       // за время окна склейки, поэтому ответ уходит почти сразу (только typing).
       inboundReceivedAtMs: result.batchFirstMessageMs,
@@ -76,6 +76,10 @@ export async function handleWaFlush(job: Job<WaFlushJob>): Promise<void> {
     if (result.isFirstBotReply && result.agentOwnerUserId) {
       await markBotActivatedOnce(result.agentOwnerUserId, agentId, log);
     }
+
+    // Дожим: после ответа бота планируем серию с нуля (attempt 0). Отменится при
+    // следующем входящем клиента. Best-effort — не влияет на основной поток.
+    await scheduleFollowup(agentId, chatId, 0, { lastClientAtMs: result.batchFirstMessageMs });
   }
 
   // Новый лид — шлём событие РОВНО при создании лида в этом flush (не на каждом

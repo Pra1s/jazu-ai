@@ -29,6 +29,7 @@ export function startOutboundWorker(manager: ConnectionManager): StartedWorker<W
         agentId,
         chatId,
         text,
+        texts,
         humanize,
         targetReplyAtMs,
         isFirstBotReply
@@ -48,6 +49,7 @@ export function startOutboundWorker(manager: ConnectionManager): StartedWorker<W
       await manager.send(agentId, {
         chatId,
         text,
+        ...(texts && texts.length > 0 ? { texts } : {}),
         ...(humanizeOptions ? { humanize: humanizeOptions } : {})
       });
     },
