@@ -111,7 +111,7 @@ function parseBranches(text: string): BranchRow[] {
 const FIELD_META: { key: keyof Fields; label: string; placeholder: string; rows: number; maxLength: number }[] = [
   { key: "companyName", label: "Название компании", placeholder: "Например: Студия красоты «Алия»", rows: 1, maxLength: 300 },
   { key: "services", label: "Список услуг / товаров", placeholder: "Стрижка\nОкрашивание\nМаникюр", rows: 3, maxLength: 4000 },
-  { key: "links", label: "Ссылки (Instagram, 2ГИС, сайт)", placeholder: "https://instagram.com/...\nhttps://2gis.kz/...", rows: 2, maxLength: 2000 },
+  { key: "links", label: "Ссылки (по одной на строку, в порядке отправки)", placeholder: "Запись - https://...\nМеню - https://...\nОплата - https://...", rows: 3, maxLength: 2000 },
   { key: "pricing", label: "Прайс / цены", placeholder: "Стрижка - 5000 ₸\nОкрашивание - от 15000 ₸", rows: 3, maxLength: 4000 },
   { key: "script", label: "Скрипт / сценарий продаж", placeholder: "Как бот должен вести клиента к заявке", rows: 3, maxLength: 20000 },
   { key: "restrictions", label: "Ограничения / чего не делаем", placeholder: "Не работаем с детьми до 18\nБез выезда за город", rows: 2, maxLength: 2000 }
@@ -214,7 +214,12 @@ export default function ExtraDataDialog({ open, onClose, onSaved }: ExtraDataDia
         setFields({
           companyName: typeof p.businessName === "string" ? p.businessName : "",
           services: Array.isArray(p.servicesList) ? (p.servicesList as string[]).join("\n") : "",
-          links: "",
+          links: Array.isArray(p.links)
+            ? (p.links as Array<{ label?: string; url?: string }>)
+                .filter((l) => l && l.url)
+                .map((l) => (l.label && l.label.trim() ? `${l.label.trim()} - ${l.url}` : String(l.url)))
+                .join("\n")
+            : "",
           pricing: typeof p.pricingPolicy === "string" ? p.pricingPolicy : "",
           script: "",
           restrictions: Array.isArray(p.notAllowed) ? (p.notAllowed as string[]).join("\n") : ""
@@ -307,6 +312,12 @@ export default function ExtraDataDialog({ open, onClose, onSaved }: ExtraDataDia
                   "focus:border-foreground focus:ring-1 focus:ring-foreground/10"
                 )}
               />
+              {f.key === "links" && (
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  Бот отправит подходящую ссылку дословно. Если нужно несколько — по очереди,
+                  отдельными сообщениями, в порядке сверху вниз. Формат строки: «подпись - ссылка» или просто ссылка.
+                </p>
+              )}
               {fields[f.key].length >= f.maxLength * 0.9 && (
                 <p className="mt-1 text-xs text-muted-foreground">
                   {fields[f.key].length.toLocaleString("ru-RU")} / {f.maxLength.toLocaleString("ru-RU")} символов

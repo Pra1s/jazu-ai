@@ -1647,6 +1647,25 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     const splitLines = (s?: string) =>
       (s ?? "").split(/[\n;]+/).map((x) => x.trim()).filter(Boolean);
 
+    // Ссылки: по строке на ссылку (порядок = порядок отправки ботом). Формат строки —
+    // «подпись - https://...» или просто «https://...». Берём URL дословно, остаток
+    // строки → label. Строки без URL игнорируем.
+    const parseLinks = (s?: string): Array<{ label: string; url: string }> =>
+      (s ?? "")
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .flatMap((line) => {
+          const m = line.match(/https?:\/\/\S+/i);
+          if (!m) return [];
+          const url = m[0];
+          const label = line
+            .replace(url, "")
+            .replace(/^[\s\-—:|]+|[\s\-—:|]+$/g, "")
+            .trim();
+          return [{ label, url }];
+        });
+
     // Семантика «пустое поле = нечего сказать, не трогаем» (как в enrichment).
     // Форма шлёт ВСЕ поля всегда, незаполненные — пустой строкой; писать их в
     // patch нельзя: mergeProfile спредит ...patch без ??-защиты и пустое значение
@@ -1670,11 +1689,14 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       const list = splitLines(body.restrictions);
       if (list.length > 0) patch.notAllowed = list;
     }
-    // Ссылки и скрипт складываем в notes/integrations как доп-контекст.
-    const noteParts: string[] = [];
-    if (body.links) noteParts.push(`Ссылки: ${body.links.trim()}`);
-    if (body.script) noteParts.push(`Скрипт/сценарий: ${body.script.trim()}`);
-    if (noteParts.length > 0) patch.notes = noteParts.join("\n");
+    // Ссылки — в отдельное структурированное поле (инжектятся в промпт ДОСЛОВНО и
+    // по очереди, см. buildRuntimeEnvelope), НЕ в notes и НЕ в LLM-обогащение —
+    // иначе модель заменяла URL на «[ссылка]» и теряла порядок.
+    if (body.links !== undefined) {
+      patch.links = parseLinks(body.links);
+    }
+    // Скрипт складываем в notes как доп-контекст для обогащения.
+    if (body.script && body.script.trim()) patch.notes = `Скрипт/сценарий: ${body.script.trim()}`;
 
     const merged = mergeProfile(profile, patch);
     await prisma.businessProfile.upsert({
@@ -1692,7 +1714,10 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       const currentPrompt = existingPrompt?.content || agent.currentPrompt || buildFallbackPrompt(merged);
       const formData = Object.fromEntries(
         Object.entries(body).flatMap(([key, value]) =>
-          typeof value === "string" && value.trim().length > 0 ? [[key, value.trim()]] as const : []
+          // links исключаем: они инжектятся в промпт напрямую и дословно, LLM их не трогает.
+          key !== "links" && typeof value === "string" && value.trim().length > 0
+            ? ([[key, value.trim()]] as const)
+            : []
         )
       ) as Record<string, string>;
 

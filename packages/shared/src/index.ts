@@ -42,6 +42,13 @@ export const businessProfileSchema = z.object({
   // читает profile.carcass (значение подмешивается из Agent на вызове рантайма).
   carcass: z.enum(CARCASSES).optional(),
   notes: z.string().optional(),
+  // Ссылки/ресурсы бизнеса (запись, меню, оплата, соцсети). Упорядоченный список —
+  // бот отправляет их ДОСЛОВНО и, если нужно несколько, ПО ОЧЕРЕДИ (см.
+  // buildRuntimeEnvelope). label — короткая подпись «когда слать» (опц.).
+  links: z
+    .array(z.object({ label: z.string().max(200).default(""), url: z.string().max(1000) }))
+    .max(30)
+    .default([]),
   // Фича «бот в стиле владельца» (результат анализа диалогов). Всё опционально:
   // без стиля рантайм работает бит-в-бит как раньше (см. buildRuntimeEnvelope).
   // styleGuide — паспорт стиля (как писать), stylePlaybook — паттерны отработки
