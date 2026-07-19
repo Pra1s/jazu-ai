@@ -137,9 +137,18 @@ app.post("/connections/:agentId/start", async (request) => {
 
 app.post("/connections/:agentId/pair", async (request, reply) => {
   const { agentId } = z.object({ agentId: z.string().min(1) }).parse(request.params);
-  const { phone } = z.object({ phone: z.string().regex(/^\d{10,15}$/) }).parse(request.body);
+  const { phone, styleHistoryCapture } = z
+    .object({
+      phone: z.string().regex(/^\d{10,15}$/),
+      styleHistoryCapture: z.boolean().optional()
+    })
+    .parse(request.body);
   try {
-    return await manager.pair(agentId, phone);
+    return await manager.pair(
+      agentId,
+      phone,
+      styleHistoryCapture !== undefined ? { styleHistoryCapture } : {}
+    );
   } catch (err) {
     captureError(err, { agentId, route: "wa-worker:pair" });
     const message = err instanceof Error ? err.message : "Не удалось получить код";

@@ -143,7 +143,10 @@ export type WorkerPairResponse = {
 
 export async function pairWorkerConnection(
   agentId: string,
-  phoneDigits: string
+  phoneDigits: string,
+  // Фича «бот в стиле владельца»: согласие на захват истории (свежая привязка по
+  // коду тоже триггерит history-sync, как и QR).
+  options: { styleHistoryCapture?: boolean } = {}
 ): Promise<WorkerPairResponse> {
   if (!env.WA_WORKER_URL) {
     throw new Error("WA_WORKER_URL is not configured");
@@ -152,7 +155,12 @@ export async function pairWorkerConnection(
   const response = await workerFetch(new URL(`/connections/${agentId}/pair`, env.WA_WORKER_URL), {
     method: "POST",
     headers: buildHeaders(),
-    body: JSON.stringify({ phone: phoneDigits })
+    body: JSON.stringify({
+      phone: phoneDigits,
+      ...(options.styleHistoryCapture !== undefined
+        ? { styleHistoryCapture: options.styleHistoryCapture }
+        : {})
+    })
   });
 
   const data = (await response.json()) as Partial<WorkerPairResponse> & { error?: string };

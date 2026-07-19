@@ -1066,7 +1066,11 @@ export class ConnectionManager {
    *  - аккаунт ещё не зарегистрирован (creds.registered === false).
    *    Если связь уже стоит — pairing code запрашивать нельзя, нужно сначала stop().
    */
-  async pair(agentId: string, phoneDigits: string): Promise<{ code: string; phone: string }> {
+  async pair(
+    agentId: string,
+    phoneDigits: string,
+    options: { styleHistoryCapture?: boolean } = {}
+  ): Promise<{ code: string; phone: string }> {
     let connection = this.getConnection(agentId);
 
     // Уже подключено — pairing не нужен.
@@ -1105,7 +1109,14 @@ export class ConnectionManager {
     //     ключи устройства, и WhatsApp выдаст реально работающий код.
     await wipeAuthStateInDb(agentId).catch(() => undefined);
 
-    await this.start(agentId, { fresh: true });
+    // Прокидываем согласие на захват истории: pairing-code — это свежая привязка,
+    // при которой WhatsApp пришлёт history-sync (как и QR), поэтому флаг нужен.
+    await this.start(agentId, {
+      fresh: true,
+      ...(options.styleHistoryCapture !== undefined
+        ? { styleHistoryCapture: options.styleHistoryCapture }
+        : {})
+    });
     connection = this.getConnection(agentId);
     if (!connection?.socket) {
       throw new Error("Не удалось инициализировать WhatsApp-сокет");

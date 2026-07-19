@@ -2851,7 +2851,14 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     }
 
     try {
-      const result = await pairWorkerConnection(agent.id, digits);
+      // Согласие на захват истории переносим в свежую привязку (как в QR-флоу).
+      const prior = await prisma.waConnection.findUnique({
+        where: { agentId: agent.id },
+        select: { styleHistoryCapture: true }
+      });
+      const result = await pairWorkerConnection(agent.id, digits, {
+        styleHistoryCapture: prior?.styleHistoryCapture ?? false
+      });
 
       // Запишем телефон сразу — даже если юзер потом не введёт код, у нас
       // будет привязка для отображения. Финальный статус прилетит через
