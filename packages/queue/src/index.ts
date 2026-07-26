@@ -14,6 +14,7 @@ export {
   getQueue,
   getInboundQueue,
   getOutboundQueue,
+  OUTBOUND_JOB_OPTIONS,
   getLeadNotifyQueue,
   getFlushQueue,
   getStyleAnalyzeQueue,

@@ -562,6 +562,28 @@ async function enqueueOwnerOutbound(
   });
 }
 
+/**
+ * Ограничивает ожидание промиса. Нужен для socket.sendMessage: своего таймаута у
+ * Baileys нет, и на «мёртвом, но не закрытом» сокете отправка может не завершиться
+ * никогда — тогда навсегда залипает и per-chat лок, и сама задача BullMQ.
+ *
+ * Исходный промис не отменяем (это невозможно), но обработчик у него уже есть —
+ * Promise.race, поэтому поздний reject не станет unhandled rejection.
+ */
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label}: таймаут ${ms} мс`)), ms);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** Сколько id своих отправок держим на чат-соединение (страховка от эха). */
 const SELF_SENT_IDS_LIMIT = 500;
 
@@ -1306,6 +1328,10 @@ export class ConnectionManager {
       text: string;
       texts?: string[];
       humanize?: { targetReplyAtMs: number; isFirstBotReply: boolean };
+      /** С какого пузыря продолжать (докачка после обрыва). По умолчанию с нуля. */
+      startIndex?: number;
+      /** Вызывается после каждого доставленного пузыря — consumer пишет прогресс. */
+      onBubbleSent?: (sentCount: number) => Promise<void>;
     }
   ): Promise<void> {
     const lockKey = chatKey(agentId, payload.chatId);
@@ -1335,6 +1361,8 @@ export class ConnectionManager {
       text: string;
       texts?: string[];
       humanize?: { targetReplyAtMs: number; isFirstBotReply: boolean };
+      startIndex?: number;
+      onBubbleSent?: (sentCount: number) => Promise<void>;
     }
   ): Promise<void> {
     const connection = this.getConnection(agentId);
@@ -1350,7 +1378,15 @@ export class ConnectionManager {
       .filter((t) => t.length > 0);
     if (bubbles.length === 0) return;
 
-    if (env.WA_HUMANIZE_REPLIES && payload.humanize) {
+    // Докачка после обрыва: пузыри до startIndex клиент уже получил, повторять их
+    // нельзя. Если доставлено всё — задача идемпотентно завершается пустой.
+    const startIndex = Math.max(0, payload.startIndex ?? 0);
+    if (startIndex >= bubbles.length) return;
+
+    // Полную «человеческую» задержку выдерживаем только на первом заходе: на
+    // докачке клиент уже получил начало ответа и ждёт продолжения — тянуть ещё
+    // минуту молчания неправильно.
+    if (env.WA_HUMANIZE_REPLIES && payload.humanize && startIndex === 0) {
       await waitWithTyping(
         socket,
         chatId,
@@ -1376,15 +1412,22 @@ export class ConnectionManager {
       if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
     };
 
-    for (let i = 0; i < bubbles.length; i++) {
+    for (let i = startIndex; i < bubbles.length; i++) {
       // Между пузырями — пауза «печатает…» пропорционально длине следующего.
       if (i > 0 && env.WA_HUMANIZE_REPLIES) {
         await typeBubblePause(socket, chatId, computeBubblePauseMs(bubbles[i]!));
       }
       await rateLimit();
-      const sent = await socket.sendMessage(chatId, { text: bubbles[i]! });
+      const sent = await withTimeout(
+        socket.sendMessage(chatId, { text: bubbles[i]! }),
+        env.WA_SEND_TIMEOUT_MS,
+        `sendMessage(${chatId}) пузырь ${i + 1}/${bubbles.length}`
+      );
       rememberSelfSent(connection, sent?.key?.id);
       connection.lastSentAt.set(chatId, Date.now());
+      // Фиксируем прогресс СРАЗУ после доставки: если следующий пузырь упадёт,
+      // ретрай продолжит с него, а не отправит клиенту начало ответа заново.
+      await payload.onBubbleSent?.(i + 1);
     }
 
     await stopTyping(socket, chatId);

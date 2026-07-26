@@ -7,7 +7,12 @@
 import { createInitialProfile, generateFollowupText, splitBotReply } from "@jazu/ai";
 import { prisma as defaultPrisma, type Prisma } from "@jazu/db";
 import { businessProfileSchema, type BusinessProfile } from "@jazu/shared";
-import { getFollowupQueue, getOutboundQueue, type WaOutboundJob } from "@jazu/queue";
+import {
+  getFollowupQueue,
+  getOutboundQueue,
+  OUTBOUND_JOB_OPTIONS,
+  type WaOutboundJob
+} from "@jazu/queue";
 import { buildLlmTelemetry } from "./llm-telemetry.js";
 import { retrieveStyleExamples } from "./style-rag.js";
 
@@ -325,7 +330,7 @@ export async function runFollowup(
     targetReplyAtMs: Date.now() + 2_000 + Math.floor(Math.random() * 4_000),
     isFirstBotReply: false
   };
-  await getOutboundQueue().add("wa-outbound", outbound);
+  await getOutboundQueue().add("wa-outbound", outbound, OUTBOUND_JOB_OPTIONS);
 
   // Планируем следующий шаг серии (если он есть).
   await scheduleFollowup(agentId, chatId, attempt + 1, { prisma });

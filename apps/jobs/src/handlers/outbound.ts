@@ -1,4 +1,4 @@
-import { getOutboundQueue, type WaOutboundJob } from "@jazu/queue";
+import { getOutboundQueue, OUTBOUND_JOB_OPTIONS, type WaOutboundJob } from "@jazu/queue";
 import { env } from "../env.js";
 
 function randomInt(min: number, max: number): number {
@@ -55,5 +55,5 @@ export async function enqueueReply(params: {
     ...(params.requestId ? { requestId: params.requestId } : {}),
     ...(params.waMessageId ? { waMessageId: params.waMessageId } : {})
   };
-  await getOutboundQueue().add("wa-outbound", outbound);
+  await getOutboundQueue().add("wa-outbound", outbound, OUTBOUND_JOB_OPTIONS);
 }

@@ -20,6 +20,11 @@ const envSchema = z.object({
   WA_OUTBOUND_CONCURRENCY: z.coerce.number().int().positive().default(8),
   /** BullMQ lockDuration для wa:outbound (job может ждать до 150с). */
   WA_OUTBOUND_LOCK_MS: z.coerce.number().int().positive().default(180_000),
+  // Потолок ожидания одного socket.sendMessage. Baileys своего таймаута на
+  // отправку не даёт: на «мёртвом, но не закрытом» сокете промис может висеть
+  // вечно, а вместе с ним — per-chat лок отправки, и чат встаёт колом. Лучше
+  // упасть и уйти в ретрай (прогресс по пузырям сохранён, см. WaOutboundJob).
+  WA_SEND_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
   /** Включить humanize: read receipt, typing, задержку ответа. */
   WA_HUMANIZE_REPLIES: z
     .enum(["true", "false", "1", "0"])

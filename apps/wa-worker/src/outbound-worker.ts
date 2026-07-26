@@ -38,6 +38,8 @@ export function startOutboundWorker(manager: ConnectionManager): StartedWorker<W
       if (status.status !== "connected") {
         // Сокет ещё/уже не активен — пусть BullMQ повторит с backoff.
         // Это происходит, например, во время реконнекта после network blip.
+        // Прогресс по пузырям (sentCount) при этом сохранён в данных задачи,
+        // поэтому повтор продолжит ответ, а не начнёт его заново.
         throw new Error(`Agent ${agentId} not connected (status=${status.status}); will retry`);
       }
 
@@ -46,11 +48,32 @@ export function startOutboundWorker(manager: ConnectionManager): StartedWorker<W
           ? { targetReplyAtMs, isFirstBotReply }
           : undefined;
 
+      const startIndex = typeof job.data.sentCount === "number" ? job.data.sentCount : 0;
+      if (startIndex > 0) {
+        console.warn(
+          `[wa-outbound] resuming ${chatId}: ${startIndex}/${texts?.length ?? 1} bubbles already delivered`
+        );
+      }
+
       await manager.send(agentId, {
         chatId,
         text,
         ...(texts && texts.length > 0 ? { texts } : {}),
-        ...(humanizeOptions ? { humanize: humanizeOptions } : {})
+        ...(humanizeOptions ? { humanize: humanizeOptions } : {}),
+        startIndex,
+        onBubbleSent: async (sentCount) => {
+          // Прогресс пишем в данные задачи — их видит ретрай той же задачи.
+          // Ошибку записи глушим: не доставить остаток ответа хуже, чем
+          // рискнуть повтором одного пузыря при недоступном Redis.
+          try {
+            await job.updateData({ ...job.data, sentCount });
+          } catch (err) {
+            console.warn(
+              `[wa-outbound] failed to persist bubble progress for ${chatId}:`,
+              err instanceof Error ? err.message : err
+            );
+          }
+        }
       });
     },
     {
