@@ -11,6 +11,7 @@ import {
   assemblePrompt,
   applySectionPatches,
   mergeProfile,
+  splitBotReply,
   stripEmptyPatchValues,
   buildPromptFromProfile,
   ENRICHMENT_FIELD_SECTION,
@@ -322,5 +323,66 @@ describe("обогащение: детерминированная раскла�
     expect(newPrompt).toContain("ПРАЙС");          // сам текст сохранён
     expect(newPrompt).toContain("Стрижка — 5000 ₸");
     expect(newPrompt).not.toMatch(/^#{1,6}\s+ПРАЙС/m); // но не как заголовок
+  });
+});
+
+describe("splitBotReply", () => {
+  it("режет по разделителю на отдельной строке (канонический формат из промпта)", () => {
+    expect(splitBotReply("Здравствуйте!\n---\nЧем могу помочь?", 4)).toEqual([
+      "Здравствуйте!",
+      "Чем могу помочь?"
+    ]);
+  });
+
+  it("режет разделитель, приклеенный к тексту без переводов строк", () => {
+    // Реальный кейс из прода: в JSON-режиме модель теряет \n вокруг «---»,
+    // и раньше клиент получал одно сообщение с дефисами внутри.
+    const reply = [
+      "Хорошо, сейчас подберем варианты где одобряют.",
+      "---Вам нужно будет оставить заявку в каждом из них.",
+      "---одобрение займа 99% - https://track-pdlp.com/h/11no6a4fa4178e2b1?utm_source=ils",
+      "---Напишите, пожалуйста, результат."
+    ].join("");
+
+    const parts = splitBotReply(reply, 4);
+
+    expect(parts).toEqual([
+      "Хорошо, сейчас подберем варианты где одобряют.",
+      "Вам нужно будет оставить заявку в каждом из них.",
+      "одобрение займа 99% - https://track-pdlp.com/h/11no6a4fa4178e2b1?utm_source=ils",
+      "Напишите, пожалуйста, результат."
+    ]);
+    // Главное: ни в одном сообщении не осталось сырого разделителя.
+    expect(parts.some((p) => p.includes("---"))).toBe(false);
+  });
+
+  it("ссылка, к которой вплотную приклеен разделитель, остаётся целой", () => {
+    const [link, tail] = splitBotReply("https://track-pdlp.com/h/11no6a4fa4178e2b1?utm_source=ils---Напишите результат", 4);
+    expect(link).toBe("https://track-pdlp.com/h/11no6a4fa4178e2b1?utm_source=ils");
+    expect(tail).toBe("Напишите результат");
+  });
+
+  it("при выключенном дроблении склеивает части, но не оставляет дефисы", () => {
+    expect(splitBotReply("Первое.---Второе.", 1)).toEqual(["Первое.\nВторое."]);
+  });
+
+  it("лишние части сверх лимита склеиваются в последнее сообщение", () => {
+    expect(splitBotReply("a---b---c---d", 2)).toEqual(["a", "b\nc\nd"]);
+  });
+
+  it("разделитель в начале и в конце не даёт пустых сообщений", () => {
+    expect(splitBotReply("---Привет---", 4)).toEqual(["Привет"]);
+  });
+
+  it("пустой ответ (осознанное молчание) остаётся пустым", () => {
+    expect(splitBotReply("", 4)).toEqual([]);
+    expect(splitBotReply("   ", 4)).toEqual([]);
+    expect(splitBotReply("---", 4)).toEqual([]);
+  });
+
+  it("обычный дефис и тире в тексте не считаются разделителем", () => {
+    expect(splitBotReply("Стрижка - 5000 тенге, работаем 9:00-18:00", 4)).toEqual([
+      "Стрижка - 5000 тенге, работаем 9:00-18:00"
+    ]);
   });
 });
