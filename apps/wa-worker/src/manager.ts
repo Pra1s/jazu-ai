@@ -41,6 +41,13 @@ type ManagedConnection = {
   stopRequested: boolean;
   /** Per-chat rate-limit: timestamp последнего исходящего на chatId, ms. */
   lastSentAt: Map<string, number>;
+  /**
+   * id сообщений, отправленных САМИМ ботом через этот сокет. Нужен как страховка
+   * при разборе `fromMe`-сообщений: свои отправки Baileys отдаёт типом `append`
+   * (мы их и так не слушаем), но если эхо всё же прилетит как `notify` — не
+   * запишем ответ бота второй раз, уже как ручной. Ограничен по размеру.
+   */
+  selfSentIds: Set<string>;
   reconnectTimer?: NodeJS.Timeout;
   reconnectAttempts: number;
   /** Фича «бот в стиле владельца»: захватывать ли личную историю при синке
@@ -528,6 +535,47 @@ async function enqueueInbound(
 }
 
 /**
+ * Ручной ответ владельца, написанный со своего телефона. Кладём в ту же очередь
+ * `wa:inbound` с флагом fromOwner — jobs запишет его как исходящую реплику, чтобы
+ * бот видел весь разговор и не начинал его заново после паузы.
+ */
+async function enqueueOwnerOutbound(
+  agentId: string,
+  chatId: string,
+  message: string,
+  waMessageId: string | undefined,
+  workerSessionId: string,
+  messageTimestamp: number | undefined
+): Promise<void> {
+  const payload: WaInboundJob = {
+    agentId,
+    chatId,
+    message,
+    workerSessionId,
+    fromOwner: true,
+    requestId: `wa-own-${agentId.slice(-6)}-${randomUUID()}`,
+    ...(waMessageId !== undefined ? { waMessageId } : {}),
+    ...(messageTimestamp !== undefined ? { messageTimestamp } : {})
+  };
+  await getInboundQueue().add("wa-inbound", payload, {
+    ...(waMessageId ? { jobId: `wa-own:${agentId}:${waMessageId}` } : {})
+  });
+}
+
+/** Сколько id своих отправок держим на чат-соединение (страховка от эха). */
+const SELF_SENT_IDS_LIMIT = 500;
+
+function rememberSelfSent(connection: ManagedConnection, waMsgId: string | null | undefined): void {
+  if (!waMsgId) return;
+  if (connection.selfSentIds.size >= SELF_SENT_IDS_LIMIT) {
+    // Set сохраняет порядок вставки — выкидываем самый старый id.
+    const oldest = connection.selfSentIds.values().next().value;
+    if (oldest) connection.selfSentIds.delete(oldest);
+  }
+  connection.selfSentIds.add(waMsgId);
+}
+
+/**
  * Legacy/fallback путь: если REDIS_URL не выставлен — стучимся напрямую
  * в API синхронно. Воркер ждёт ответ и сам отправляет reply в WhatsApp,
  * как раньше. Используется только в dev без поднятого Redis.
@@ -704,6 +752,7 @@ export class ConnectionManager {
       lastSeenAt: new Date(),
       stopRequested: false,
       lastSentAt: existing?.lastSentAt ?? new Map<string, number>(),
+      selfSentIds: existing?.selfSentIds ?? new Set<string>(),
       reconnectAttempts: existingAttempts,
       styleHistoryCapture,
       pairingMode: existing?.pairingMode ?? false,
@@ -919,6 +968,40 @@ export class ConnectionManager {
 
       for (const message of payload.messages) {
         if (message.key.fromMe) {
+          // Владелец ответил клиенту сам, со своего телефона. Пишем такую реплику
+          // в диалог: без неё бот не видит половину разговора и, вернувшись с
+          // паузы, здоровается заново поверх живой переписки.
+          //
+          // Свои же отправки сюда НЕ попадают: Baileys помечает их типом "append"
+          // (messages-send), а мы обрабатываем только "notify". selfSentIds —
+          // вторая линия защиты на случай эха.
+          const ownChatId = message.key.remoteJid;
+          const ownText = getTextMessage(message);
+          const ownMsgId = message.key.id ?? undefined;
+          if (
+            !env.REDIS_URL
+            || !ownChatId
+            || !ownText
+            || !isPersonalJid(ownChatId)
+            || (ownMsgId && managed.selfSentIds.has(ownMsgId))
+          ) {
+            continue;
+          }
+          try {
+            await enqueueOwnerOutbound(
+              agentId,
+              ownChatId,
+              ownText,
+              ownMsgId,
+              managed.workerSessionId,
+              extractMessageTimestamp(message.messageTimestamp)
+            );
+          } catch (err) {
+            console.error(
+              "Failed to enqueue owner outbound:",
+              err instanceof Error ? err.message : err
+            );
+          }
           continue;
         }
 
@@ -1299,7 +1382,8 @@ export class ConnectionManager {
         await typeBubblePause(socket, chatId, computeBubblePauseMs(bubbles[i]!));
       }
       await rateLimit();
-      await socket.sendMessage(chatId, { text: bubbles[i]! });
+      const sent = await socket.sendMessage(chatId, { text: bubbles[i]! });
+      rememberSelfSent(connection, sent?.key?.id);
       connection.lastSentAt.set(chatId, Date.now());
     }
 

@@ -79,6 +79,14 @@ export type WaInboundJob = {
    *  на history-sync (старые сообщения, которые WhatsApp присылает пачкой
    *  при connection). См. WaConnection.botRespondsSince. */
   messageTimestamp?: number;
+  /**
+   * Сообщение написано ВЛАДЕЛЬЦЕМ вручную со своего телефона (Baileys
+   * `key.fromMe`), а не клиентом. Такие задачи не идут в обычный ingest: их
+   * обрабатывает `ingestOwnerOutbound` — пишет реплику как исходящую и
+   * закрывает ей неотвеченный пакет, чтобы бот не отвечал следом за человеком.
+   * Свои же отправки бот в очередь не кладёт (Baileys помечает их `append`).
+   */
+  fromOwner?: boolean;
   /** request-id для end-to-end-трассировки (HTTP → BullMQ → log → SSE). */
   requestId?: string;
 };

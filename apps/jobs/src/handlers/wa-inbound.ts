@@ -1,9 +1,15 @@
+import type { Logger } from "pino";
 import { type Job, type WaInboundJob } from "@jazu/queue";
-import { ingestWaInbound, cancelFollowup, scheduleFollowup } from "@jazu/wa-pipeline";
+import {
+  ingestWaInbound,
+  ingestOwnerOutbound,
+  cancelFollowup,
+  scheduleFollowup
+} from "@jazu/wa-pipeline";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { enqueueReply } from "./outbound.js";
-import { scheduleFlush } from "./flush-scheduler.js";
+import { cancelPendingFlush, scheduleFlush } from "./flush-scheduler.js";
 import { markBotActivatedOnce } from "./analytics.js";
 
 /**
@@ -23,6 +29,13 @@ export async function handleWaInbound(job: Job<WaInboundJob>): Promise<void> {
   const started = Date.now();
   const { agentId, chatId, waMessageId, requestId } = job.data;
   const log = logger.child({ reqId: requestId ?? null, agentId, jobId: job.id });
+
+  // Сообщение написал владелец руками — это не обращение клиента, а ход «нашей
+  // стороны»: записываем его в диалог и уступаем ему очередь (см. ниже).
+  if (job.data.fromOwner) {
+    await handleOwnerOutbound(job, log);
+    return;
+  }
 
   const result = await ingestWaInbound(job.data, {
     telegramBotToken: env.TELEGRAM_BOT_TOKEN,
@@ -89,7 +102,8 @@ export async function handleWaInbound(job: Job<WaInboundJob>): Promise<void> {
   }
 
   if (result.status === "bot_paused") {
-    log.info({ chatId }, "wa:inbound bot paused by owner — drop");
+    // Сообщение сохранено как контекст (см. recordPausedInbound), но бот молчит.
+    log.info({ chatId }, "wa:inbound bot paused by owner — recorded, no reply");
     return;
   }
 
@@ -97,4 +111,43 @@ export async function handleWaInbound(job: Job<WaInboundJob>): Promise<void> {
     log.info({ chatId }, "wa:inbound pre-connection message — drop");
     return;
   }
+}
+
+/**
+ * Ручной ответ владельца (fromOwner). Записываем реплику в диалог — это контекст,
+ * без которого бот не видит половину разговора.
+ *
+ * Если ответом закрыт неотвеченный пакет клиента, бот на эти сообщения молчит:
+ * человек уже ответил, второй ответ подряд выглядел бы дублем. Курсор двигает
+ * сам ingestOwnerOutbound, отложенный flush снимаем здесь. Дожим тоже отменяем —
+ * диалог ведёт владелец, напоминание от бота было бы поверх живой переписки.
+ */
+async function handleOwnerOutbound(
+  job: Job<WaInboundJob>,
+  log: Logger
+): Promise<void> {
+  const { agentId, chatId, waMessageId } = job.data;
+  const result = await ingestOwnerOutbound(job.data, {
+    workerUrl: env.WA_WORKER_URL,
+    internalToken: env.API_INTERNAL_TOKEN
+  });
+
+  if (result.status === "recorded") {
+    await cancelFollowup(agentId, chatId);
+    if (result.closedBatch) {
+      await cancelPendingFlush(agentId, chatId);
+    }
+    log.info(
+      { chatId, closedBatch: result.closedBatch },
+      "wa:inbound owner reply recorded"
+    );
+    return;
+  }
+
+  if (result.status === "deduplicated") {
+    log.info({ chatId, waMessageId }, "wa:inbound owner reply deduplicated");
+    return;
+  }
+
+  log.info({ chatId, status: result.status }, "wa:inbound owner reply skipped");
 }

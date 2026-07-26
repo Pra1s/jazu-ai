@@ -67,6 +67,25 @@ export async function scheduleFlush(agentId: string, chatId: string, batchStarte
 }
 
 /**
+ * Снять отложенный flush: владелец ответил клиенту руками, боту отвечать нечем.
+ * Курсор к этому моменту уже сдвинут (ingestOwnerOutbound), поэтому даже если
+ * задача успела уйти в работу, она увидит пустой пакет — снятие лишь убирает
+ * бессмысленный прогон и сужает окно гонки.
+ */
+export async function cancelPendingFlush(agentId: string, chatId: string): Promise<void> {
+  const job = await getFlushQueue().getJob(flushJobId(agentId, chatId));
+  if (!job) return;
+  try {
+    const state = await job.getState();
+    if (state === "delayed" || state === "waiting") {
+      await job.remove();
+    }
+  } catch {
+    // Задача уже ушла в работу/удалена — идемпотентность обеспечит курсор.
+  }
+}
+
+/**
  * Self-reschedule из активного flush: стабильный jobId сейчас занят (мы внутри
  * этой задачи), поэтому ставим разовую задачу с УНИКАЛЬНЫМ id и коротким окном.
  * Нужна, когда во время flush пришли новые входящие. Идемпотентность гарантирует

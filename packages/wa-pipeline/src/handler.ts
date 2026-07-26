@@ -600,6 +600,94 @@ async function countUnansweredAfter(
 }
 
 /**
+ * Чат, который бот не ведёт: сообщение старше отсечки `botRespondsSince`, сам чат
+ * заведён до неё, либо он есть в снимке `WaPreConnectionChat` (существовал в
+ * WhatsApp до подключения). Вынесено отдельно, потому что зовётся и из обычного
+ * ingest, и из записи ручных ответов владельца.
+ */
+async function isPreConnectionChat(
+  prisma: PrismaClient,
+  agentId: string,
+  chatId: string,
+  messageTimestamp?: number
+): Promise<boolean> {
+  const waConnection = await prisma.waConnection.findUnique({
+    where: { agentId },
+    select: { botRespondsSince: true }
+  });
+  const respondsSince = waConnection?.botRespondsSince ?? null;
+  if (respondsSince) {
+    if (messageTimestamp !== undefined && new Date(messageTimestamp * 1000) < respondsSince) {
+      return true;
+    }
+    const existingConversation = await prisma.conversation.findUnique({
+      where: { agentId_waChatId: { agentId, waChatId: chatId } },
+      select: { createdAt: true }
+    });
+    if (existingConversation && existingConversation.createdAt < respondsSince) {
+      return true;
+    }
+  }
+
+  const preConnectionChat = await prisma.waPreConnectionChat.findUnique({
+    where: { agentId_waChatId: { agentId, waChatId: chatId } },
+    select: { id: true }
+  });
+  return Boolean(preConnectionChat);
+}
+
+/**
+ * Входящее, пришедшее пока бот на паузе. Сохраняем его в диалог (это будущий
+ * контекст), но LLM не зовём и квоту не списываем — платного действия не было.
+ *
+ * Курсор `lastAnsweredWaMessageId` двигаем за сообщением: пакет считаем
+ * обработанным. Иначе, включив бота, владелец получил бы залп ответов на всё,
+ * что накопилось за паузу, — вместо продолжения живого разговора.
+ */
+async function recordPausedInbound(
+  prisma: PrismaClient,
+  agentId: string,
+  input: WaInboundInput
+): Promise<IngestResult> {
+  const conversation = await getOrCreateConversation(
+    prisma,
+    agentId,
+    input.chatId,
+    input.senderName,
+    input.senderPhone
+  );
+
+  if (input.waMessageId) {
+    const dup = await prisma.waMessage.findFirst({
+      where: { conversationId: conversation.id, waMsgId: input.waMessageId, direction: "in" }
+    });
+    if (dup) return { status: "deduplicated", conversationId: conversation.id };
+  }
+
+  // Голосовые на паузе НЕ распознаём: STT платный, а отвечать бот всё равно не
+  // будет. В историю кладём плейсхолдер — видно, что клиент присылал голосовое.
+  const body = input.message.trim() || (input.audioBase64 ? "[голосовое сообщение]" : "");
+  if (!body) return { status: "bot_paused" };
+
+  const message = await prisma.waMessage.create({
+    data: {
+      conversationId: conversation.id,
+      direction: "in",
+      body,
+      waMsgId: input.waMessageId ?? null,
+      parts: jsonInput([{ type: "text", text: body }])
+    }
+  });
+
+  await prisma.conversation.update({
+    where: { id: conversation.id },
+    data: { lastMessageAt: new Date(), lastAnsweredWaMessageId: message.id }
+  });
+
+  return { status: "bot_paused" };
+}
+
+/**
  * Фаза 1 — ingest. Всё, что ДО LLM: фильтры, дедуп, квота, распознавание голоса,
  * сохранение входящего. НЕ зовёт LLM, НЕ пишет ответ/лид. Возвращает `ingested`
  * (нужно запланировать flush) или терминальный статус. Голосовой fallback —
@@ -625,42 +713,18 @@ export async function ingestWaInbound(
   });
   if (!agent) return { status: "agent_not_found" };
 
-  // Глобальный «выключатель» бота: владелец агента может поставить бот на паузу.
-  // НЕ сохраняем inbound, НЕ списываем квоту — будто бота вообще нет.
-  if (!agent.botEnabled) {
-    return { status: "bot_paused" };
-  }
-
-  // Фильтр «бот отвечает только на сообщения после подключения» (history-sync
-  // flood + вторжение в чаты вне бота). Если botRespondsSince=NULL — выключен.
-  const waConnection = await prisma.waConnection.findUnique({
-    where: { agentId: agent.id },
-    select: { botRespondsSince: true }
-  });
-  const respondsSince = waConnection?.botRespondsSince ?? null;
-  if (respondsSince) {
-    if (input.messageTimestamp !== undefined) {
-      const msgDate = new Date(input.messageTimestamp * 1000);
-      if (msgDate < respondsSince) {
-        return { status: "pre_connection_message" };
-      }
-    }
-    const existingConversation = await prisma.conversation.findUnique({
-      where: { agentId_waChatId: { agentId: agent.id, waChatId: input.chatId } },
-      select: { createdAt: true }
-    });
-    if (existingConversation && existingConversation.createdAt < respondsSince) {
-      return { status: "pre_connection_message" };
-    }
-  }
-
-  // Чат существовал в WhatsApp ДО подключения (снимок WaPreConnectionChat) — не лезем.
-  const preConnectionChat = await prisma.waPreConnectionChat.findUnique({
-    where: { agentId_waChatId: { agentId: agent.id, waChatId: input.chatId } },
-    select: { id: true }
-  });
-  if (preConnectionChat) {
+  // ВНИМАНИЕ: доконнектные фильтры стоят ВЫШЕ проверки паузы. В чатах, которые
+  // бот не ведёт (история подключения, переписки владельца до бота), мы не
+  // сохраняем ничего — даже как контекст на паузе.
+  if (await isPreConnectionChat(prisma, agent.id, input.chatId, input.messageTimestamp)) {
     return { status: "pre_connection_message" };
+  }
+
+  // Глобальный «выключатель» бота: владелец поставил бота на паузу. Бот молчит и
+  // квоту НЕ тратит, но переписку ПИШЕМ — иначе, вернув бота в работу, он не
+  // увидит, о чём клиент уже говорил, и начнёт диалог с приветствия заново.
+  if (!agent.botEnabled) {
+    return recordPausedInbound(prisma, agent.id, input);
   }
 
   const trackResult = await trackConversationUsage(prisma, {
@@ -730,7 +794,8 @@ export async function ingestWaInbound(
       return { status: "ingested", agentId: agent.id, conversationId: conversation.id, batchStartedAtMs, usage };
     }
     const priorOutbound = await prisma.waMessage.count({
-      where: { conversationId: conversation.id, direction: "out" }
+      // Только реплики бота (waMsgId=null), без ручных ответов владельца.
+      where: { conversationId: conversation.id, direction: "out", waMsgId: null }
     });
     const fallbackReply =
       "Извините, не получилось распознать голосовое. Напишите, пожалуйста, текстом.";
@@ -774,6 +839,103 @@ export async function ingestWaInbound(
   const batchStartedAtMs = (batch[0]?.createdAt ?? inboundMsg.createdAt).getTime();
 
   return { status: "ingested", agentId: agent.id, conversationId: conversation.id, batchStartedAtMs, usage };
+}
+
+/** Результат записи ручного ответа владельца (написанного с его телефона). */
+export type OwnerOutboundResult =
+  | {
+      status: "recorded";
+      conversationId: string;
+      /** Ответом закрыт неотвеченный пакет клиента (бот на него уже не ответит). */
+      closedBatch: boolean;
+    }
+  | { status: "deduplicated"; conversationId: string }
+  | { status: "agent_not_found" }
+  | { status: "worker_session_mismatch" }
+  | { status: "pre_connection_message" }
+  | { status: "empty" };
+
+/**
+ * Владелец ответил клиенту САМ, со своего телефона (Baileys `key.fromMe`).
+ * Сохраняем реплику как исходящую — без неё бот не видит половину разговора и,
+ * вернувшись в работу, здоровается заново поверх живого диалога.
+ *
+ * Дополнительно двигаем курсор `lastAnsweredWaMessageId` на последнее входящее:
+ * человек уже ответил, дублировать за ним бот не должен. Свои же отправки бот
+ * сюда не присылает — Baileys помечает их типом `append`, а воркер слушает
+ * только `notify` (см. apps/wa-worker/src/manager.ts).
+ *
+ * Квоту НЕ трогаем: диалог ведёт человек, платного хода бота не было.
+ */
+export async function ingestOwnerOutbound(
+  input: WaInboundInput,
+  options: WaInboundOptions = {}
+): Promise<OwnerOutboundResult> {
+  const prisma = options.prisma ?? defaultPrisma;
+
+  if (input.workerSessionId) {
+    const conn = await prisma.waConnection.findUnique({ where: { agentId: input.agentId } });
+    if (!conn || !conn.workerSessionId || conn.workerSessionId !== input.workerSessionId) {
+      return { status: "worker_session_mismatch" };
+    }
+  }
+
+  const body = input.message.trim();
+  if (!body) return { status: "empty" };
+
+  const agent = await prisma.agent.findUnique({
+    where: { id: input.agentId },
+    select: { id: true }
+  });
+  if (!agent) return { status: "agent_not_found" };
+
+  // Личная переписка владельца вне зоны бота (доконнектные чаты) — не пишем.
+  if (await isPreConnectionChat(prisma, agent.id, input.chatId, input.messageTimestamp)) {
+    return { status: "pre_connection_message" };
+  }
+
+  // Имя/телефон клиента из такого сообщения не берём: pushName и ключ здесь
+  // принадлежат владельцу, а не собеседнику.
+  const conversation = await getOrCreateConversation(prisma, agent.id, input.chatId);
+
+  if (input.waMessageId) {
+    const dup = await prisma.waMessage.findFirst({
+      where: { conversationId: conversation.id, waMsgId: input.waMessageId }
+    });
+    if (dup) return { status: "deduplicated", conversationId: conversation.id };
+  }
+
+  // Неотвеченный пакет собираем ДО записи ответа: закрываем именно те входящие,
+  // что были на момент, когда владелец писал.
+  const pending = await selectUnansweredBatch(
+    prisma,
+    conversation.id,
+    conversation.lastAnsweredWaMessageId
+  );
+  const lastPending = pending[pending.length - 1];
+
+  await prisma.waMessage.create({
+    data: {
+      conversationId: conversation.id,
+      direction: "out",
+      body,
+      waMsgId: input.waMessageId ?? null,
+      // author: "owner" отличает ручную реплику от ответа бота (для LLM обе —
+      // ход «нашей стороны», но в кабинете и логах различие важно).
+      parts: jsonInput([{ type: "text", text: body, author: "owner" }])
+    }
+  });
+
+  await prisma.conversation.update({
+    where: { id: conversation.id },
+    data: {
+      lastMessageAt: new Date(),
+      status: "open",
+      ...(lastPending ? { lastAnsweredWaMessageId: lastPending.id } : {})
+    }
+  });
+
+  return { status: "recorded", conversationId: conversation.id, closedBatch: Boolean(lastPending) };
 }
 
 /**
@@ -825,7 +987,15 @@ export async function flushWaConversation(
   const botLoopLimit = options.botLoopMaxRepliesPerHour ?? DEFAULT_BOT_LOOP_LIMIT;
   const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
   const outboundLastHour = await prisma.waMessage.count({
-    where: { conversationId: conversation.id, direction: "out", createdAt: { gte: hourAgo } }
+    // waMsgId=null — признак реплики, написанной ботом: у ручных ответов владельца
+    // там реальный id из WhatsApp. Защита от «бот ↔ бот» считает только бота, иначе
+    // владелец, активно переписывающийся руками, сам бы загнал бота в молчание.
+    where: {
+      conversationId: conversation.id,
+      direction: "out",
+      waMsgId: null,
+      createdAt: { gte: hourAgo }
+    }
   });
   if (outboundLastHour >= botLoopLimit) {
     await prisma.conversation.update({
@@ -850,8 +1020,11 @@ export async function flushWaConversation(
   });
   const systemOverride = activePromptVersion?.content || agent.currentPrompt || null;
 
+  // Ручные ответы владельца не считаем: «первый ответ бота» должен оставаться
+  // первым ответом БОТА (влияет на диапазон «печатает…» и на отметку активации),
+  // даже если в чате до этого писал человек. Признак реплики бота — waMsgId=null.
   const priorOutboundCount = await prisma.waMessage.count({
-    where: { conversationId: conversation.id, direction: "out" }
+    where: { conversationId: conversation.id, direction: "out", waMsgId: null }
   });
   const isFirstBotReply = priorOutboundCount === 0;
 
