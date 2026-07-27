@@ -31,17 +31,28 @@ const envSchema = z.object({
     .optional()
     .transform((v) => v !== "false" && v !== "0")
     .default(true),
-  WA_REPLY_DELAY_FIRST_MIN_MS: z.coerce.number().int().positive().default(45_000),
-  WA_REPLY_DELAY_FIRST_MAX_MS: z.coerce.number().int().positive().default(60_000),
-  WA_REPLY_DELAY_MIN_MS: z.coerce.number().int().positive().default(20_000),
-  WA_REPLY_DELAY_MAX_MS: z.coerce.number().int().positive().default(35_000),
+  /**
+   * Задержка ответа для LEGACY-пути (без REDIS_URL, ответ приходит синхронно из
+   * API). На основном пути через очередь тайминг считает apps/jobs — держим
+   * значения синхронно с apps/jobs/src/env.ts, иначе поведение разъезжается.
+   */
+  WA_REPLY_DELAY_FIRST_MIN_MS: z.coerce.number().int().positive().default(30_000),
+  WA_REPLY_DELAY_FIRST_MAX_MS: z.coerce.number().int().positive().default(35_000),
+  WA_REPLY_DELAY_MIN_MS: z.coerce.number().int().positive().default(8_000),
+  WA_REPLY_DELAY_MAX_MS: z.coerce.number().int().positive().default(15_000),
   /** За сколько до начала ответа бот «читает» входящее (синие галочки). */
   WA_READ_LEAD_MIN_MS: z.coerce.number().int().positive().default(4_000),
   WA_READ_LEAD_MAX_MS: z.coerce.number().int().positive().default(6_000),
-  WA_TYPING_FIRST_MIN_MS: z.coerce.number().int().positive().default(8_000),
-  WA_TYPING_FIRST_MAX_MS: z.coerce.number().int().positive().default(20_000),
-  WA_TYPING_MIN_MS: z.coerce.number().int().positive().default(5_000),
-  WA_TYPING_MAX_MS: z.coerce.number().int().positive().default(12_000),
+  /**
+   * Пол/потолок «печатает…» перед первым сообщением ответа. Саму длительность
+   * задаёт длина текста (эмуляция набора, см. humanize-reply.ts), диапазон её
+   * только ограничивает. Пол применяется ВСЕГДА, в том числе когда окно задержки
+   * уже израсходовано, — иначе индикатора не видно вовсе; поэтому он невелик.
+   */
+  WA_TYPING_FIRST_MIN_MS: z.coerce.number().int().positive().default(3_500),
+  WA_TYPING_FIRST_MAX_MS: z.coerce.number().int().positive().default(12_000),
+  WA_TYPING_MIN_MS: z.coerce.number().int().positive().default(2_500),
+  WA_TYPING_MAX_MS: z.coerce.number().int().positive().default(9_000),
   SENTRY_DSN: z.string().url().optional().or(z.literal("").transform(() => undefined)),
   RELEASE_VERSION: z.string().optional(),
   /**

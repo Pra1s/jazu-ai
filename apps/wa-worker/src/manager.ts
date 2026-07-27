@@ -1392,6 +1392,8 @@ export class ConnectionManager {
         chatId,
         payload.humanize.targetReplyAtMs,
         payload.humanize.isFirstBotReply,
+        // Длительность «печатает…» считаем по первому пузырю — печатают именно его.
+        bubbles[0]!,
         humanizeTimingConfig(),
         {
           // Прочитать входящее за ~5с до начала «печатает…».
@@ -1413,11 +1415,13 @@ export class ConnectionManager {
     };
 
     for (let i = startIndex; i < bubbles.length; i++) {
+      // Rate-limit ЖДЁМ до печати, а не после: иначе между погасшим «печатает…»
+      // и отправкой возникает немая пауза, и индикатор мигает вхолостую.
+      await rateLimit();
       // Между пузырями — пауза «печатает…» пропорционально длине следующего.
       if (i > 0 && env.WA_HUMANIZE_REPLIES) {
         await typeBubblePause(socket, chatId, computeBubblePauseMs(bubbles[i]!));
       }
-      await rateLimit();
       const sent = await withTimeout(
         socket.sendMessage(chatId, { text: bubbles[i]! }),
         env.WA_SEND_TIMEOUT_MS,

@@ -40,10 +40,10 @@ const schema = z.object({
    * удаляются ночью cron-задачей. 0 = выключено.
    */
   RETENTION_DAYS: z.coerce.number().int().min(0).default(90),
-  WA_REPLY_DELAY_FIRST_MIN_MS: z.coerce.number().int().positive().default(45_000),
-  WA_REPLY_DELAY_FIRST_MAX_MS: z.coerce.number().int().positive().default(60_000),
-  WA_REPLY_DELAY_MIN_MS: z.coerce.number().int().positive().default(20_000),
-  WA_REPLY_DELAY_MAX_MS: z.coerce.number().int().positive().default(35_000),
+  WA_REPLY_DELAY_FIRST_MIN_MS: z.coerce.number().int().positive().default(30_000),
+  WA_REPLY_DELAY_FIRST_MAX_MS: z.coerce.number().int().positive().default(35_000),
+  WA_REPLY_DELAY_MIN_MS: z.coerce.number().int().positive().default(8_000),
+  WA_REPLY_DELAY_MAX_MS: z.coerce.number().int().positive().default(15_000),
   /**
    * Склейка нескольких входящих клиента в ОДИН ответ бота (гибрид «тишина + потолок»):
    *  - WA_BATCH_QUIET_MS — период «тишины»: таймер ответа сбрасывается на каждое

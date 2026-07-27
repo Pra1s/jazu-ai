@@ -19,20 +19,53 @@ export function computeRemainingWait(targetReplyAtMs: number, nowMs = Date.now()
   return Math.max(0, targetReplyAtMs - nowMs);
 }
 
-/** Длительность typing перед отправкой (не больше remainingWait). */
+/** «Скорость набора»: стартовая пауза + время на символ. */
+const TYPING_BASE_MS = 900;
+const TYPING_MS_PER_CHAR = 38;
+
+/** Эмуляция набора текста — сырая длительность, без клампа. */
+function rawTypingMs(text: string): number {
+  const len = (text ?? "").trim().length;
+  return TYPING_BASE_MS + len * TYPING_MS_PER_CHAR;
+}
+
+/** Разброс вниз (85–100%), чтобы паузы не были одинаковыми от ответа к ответу. */
+function jitter(ms: number): number {
+  return randomInt(Math.round(ms * 0.85), ms);
+}
+
+/**
+ * Сколько показывать «печатает…» перед ПЕРВЫМ сообщением ответа.
+ *
+ * Длительность задаёт сам текст (эмуляция набора), а НЕ остаток окна ожидания.
+ * Раньше было наоборот — `min(random, remainingWait)` — и индикатор исчезал
+ * совсем: к моменту отправки бюджет задержки уже съеден окном склейки входящих
+ * (WA_BATCH_QUIET_MS) и работой LLM, поэтому remainingWait почти всегда 0.
+ *
+ * Диапазон из конфига работает как пол/потолок: короткая реплика печатается
+ * минимум typingMin, длинная — не дольше typingMax.
+ */
 export function computeTypingDurationMs(
   isFirstBotReply: boolean,
-  remainingWaitMs: number,
+  text: string,
   config: HumanizeTimingConfig
 ): number {
-  if (remainingWaitMs <= 0) return 0;
   const [minMs, maxMs] = isFirstBotReply
     ? [config.typingFirstMinMs, config.typingFirstMaxMs]
     : [config.typingMinMs, config.typingMaxMs];
-  return Math.min(randomInt(minMs, maxMs), remainingWaitMs);
+  return Math.max(minMs, Math.min(maxMs, jitter(rawTypingMs(text))));
 }
 
-const TYPING_REFRESH_MS = 8_000;
+/** Presence «composing» протухает на стороне WhatsApp — обновляем чаще. */
+const TYPING_REFRESH_MS = 5_000;
+
+/** Пол/потолок паузы «печатает…» МЕЖДУ пузырями мультисообщения. */
+const BUBBLE_TYPING_MIN_MS = 1_200;
+const BUBBLE_TYPING_MAX_MS = 5_000;
+
+/** Пауза между «прочитано» и началом набора, когда ждать уже нечего. */
+const READ_TO_TYPING_MIN_MS = 700;
+const READ_TO_TYPING_MAX_MS = 1_800;
 
 function sleep(ms: number): Promise<void> {
   if (ms <= 0) return Promise.resolve();
@@ -40,22 +73,23 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Пауза «печатает…» между пузырями мультисообщения. Длительность ~пропорциональна
- * длине следующего сообщения (эмуляция набора): база + мс/символ, с клампом и
- * лёгким разбросом. Держит бота живым, но не заставляет клиента долго ждать.
+ * Пауза «печатает…» между пузырями мультисообщения — та же эмуляция набора,
+ * что и перед первым сообщением, но с более узким клампом: клиент уже получил
+ * начало ответа и не должен долго ждать продолжения.
  */
 export function computeBubblePauseMs(text: string): number {
-  const len = (text ?? "").trim().length;
-  const base = 700 + len * 35;
-  const clamped = Math.max(1200, Math.min(5000, base));
-  return randomInt(Math.round(clamped * 0.8), clamped);
+  return Math.max(
+    BUBBLE_TYPING_MIN_MS,
+    Math.min(BUBBLE_TYPING_MAX_MS, jitter(rawTypingMs(text)))
+  );
 }
 
 /**
- * Показывает «печатает…» указанное время (с рефрешем presence), затем возвращает
- * управление — вызывающий отправляет следующий пузырь. Между сообщениями бота.
+ * Держит статус «печатает…» указанное время, обновляя presence, — иначе WhatsApp
+ * гасит индикатор через несколько секунд. Появляемся в сети прямо здесь: до
+ * начала набора бот оффлайн (markOnlineOnConnect: false).
  */
-export async function typeBubblePause(
+async function showTyping(
   socket: Pick<WASocket, "sendPresenceUpdate">,
   chatId: string,
   durationMs: number
@@ -71,6 +105,18 @@ export async function typeBubblePause(
   }
 }
 
+/**
+ * Показывает «печатает…» указанное время, затем возвращает управление —
+ * вызывающий отправляет следующий пузырь. Между сообщениями бота.
+ */
+export async function typeBubblePause(
+  socket: Pick<WASocket, "sendPresenceUpdate">,
+  chatId: string,
+  durationMs: number
+): Promise<void> {
+  await showTyping(socket, chatId, durationMs);
+}
+
 export type ReadBeforeReply = {
   /** За сколько мс до начала «печатает…» поставить «прочитано». */
   readLeadMs: number;
@@ -79,55 +125,44 @@ export type ReadBeforeReply = {
 };
 
 /**
- * Ждём до targetReplyAtMs, показываем «печатает…» в конце окна,
- * затем вызывающий код отправляет сообщение и зовёт stopTyping().
+ * Выдерживает «человеческую» паузу перед ответом и показывает «печатает…»
+ * непосредственно перед отправкой. Порядок как у живого человека:
+ * молчание (бот оффлайн) → прочитал → набирает → отправил.
  *
- * Если передан `read`, то примерно за read.readLeadMs до начала печати
- * вызываем read.onRead() — так бот «читает» сообщение перед самым ответом,
- * а не сразу по приходу.
+ * Окно ожидания до targetReplyAtMs гасится МОЛЧАНИЕМ, а набор идёт в конце:
+ * итоговая задержка ≈ max(остаток окна, длительность набора). Если бюджет уже
+ * израсходован (типичный случай после склейки входящих и работы LLM), молчания
+ * нет, но «печатает…» показывается всё равно — иначе сообщение падает клиенту
+ * без единого признака жизни.
  */
 export async function waitWithTyping(
   socket: Pick<WASocket, "sendPresenceUpdate">,
   chatId: string,
   targetReplyAtMs: number,
   isFirstBotReply: boolean,
+  firstBubbleText: string,
   config: HumanizeTimingConfig,
   read?: ReadBeforeReply
 ): Promise<void> {
-  const remainingWait = computeRemainingWait(targetReplyAtMs);
-  if (remainingWait <= 0) {
-    // Окно уже вышло — читаем и сразу отвечаем.
-    if (read) await read.onRead();
-    return;
-  }
-
-  const typingDuration = computeTypingDurationMs(isFirstBotReply, remainingWait, config);
-  const silentWait = remainingWait - typingDuration;
+  const typingDuration = computeTypingDurationMs(isFirstBotReply, firstBubbleText, config);
+  const silentWait = Math.max(0, computeRemainingWait(targetReplyAtMs) - typingDuration);
 
   if (read) {
     // Молчим, читаем за ~readLeadMs до печати, ждём остаток до печати.
     const waitBeforeRead = Math.max(0, silentWait - read.readLeadMs);
     await sleep(waitBeforeRead);
     await read.onRead();
-    await sleep(silentWait - waitBeforeRead);
+    const afterRead = silentWait - waitBeforeRead;
+    // Даже без бюджета выдерживаем короткую паузу между галочками и набором:
+    // человек сначала прочитал и лишь потом начал печатать.
+    await sleep(afterRead > 0 ? afterRead : randomInt(READ_TO_TYPING_MIN_MS, READ_TO_TYPING_MAX_MS));
   } else {
     await sleep(silentWait);
   }
 
-  // Появляемся в сети только сейчас — когда реально начинаем отвечать
-  // (печатать). До этого момента бот оффлайн (markOnlineOnConnect: false).
-  await socket.sendPresenceUpdate("available", chatId).catch(() => undefined);
-
-  const typingUntil = Date.now() + typingDuration;
-  while (Date.now() < typingUntil) {
-    await socket.sendPresenceUpdate("composing", chatId).catch(() => undefined);
-    const left = typingUntil - Date.now();
-    if (left <= 0) break;
-    await sleep(Math.min(TYPING_REFRESH_MS, left));
-  }
-
-  const finalWait = computeRemainingWait(targetReplyAtMs);
-  await sleep(finalWait);
+  // Печатаем ВПЛОТНУЮ к отправке: вызывающий шлёт сообщение сразу после return,
+  // поэтому индикатор не успевает погаснуть между «печатает…» и пузырём.
+  await showTyping(socket, chatId, typingDuration);
 }
 
 export async function stopTyping(
