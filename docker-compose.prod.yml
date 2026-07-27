@@ -121,6 +121,16 @@ services:
       REDIS_URL: redis://redis:6379
       WA_OUTBOUND_CONCURRENCY: ${WA_OUTBOUND_CONCURRENCY:-8}
       WA_PER_CHAT_MIN_INTERVAL_MS: ${WA_PER_CHAT_MIN_INTERVAL_MS:-1200}
+      # Humanize: «прочитано» + «печатает…». Крутится через .env, БЕЗ правки кода
+      # на сервере. Значения по умолчанию держать синхронно с apps/wa-worker/src/env.ts
+      # (пустую строку сюда подставлять нельзя — zod свалится на coerce).
+      WA_HUMANIZE_REPLIES: ${WA_HUMANIZE_REPLIES:-true}
+      WA_READ_LEAD_MIN_MS: ${WA_READ_LEAD_MIN_MS:-4000}
+      WA_READ_LEAD_MAX_MS: ${WA_READ_LEAD_MAX_MS:-6000}
+      WA_TYPING_FIRST_MIN_MS: ${WA_TYPING_FIRST_MIN_MS:-3500}
+      WA_TYPING_FIRST_MAX_MS: ${WA_TYPING_FIRST_MAX_MS:-12000}
+      WA_TYPING_MIN_MS: ${WA_TYPING_MIN_MS:-2500}
+      WA_TYPING_MAX_MS: ${WA_TYPING_MAX_MS:-9000}
       SENTRY_DSN: ${SENTRY_DSN:-}
       RELEASE_VERSION: ${RELEASE_VERSION:-}
     depends_on:
@@ -174,6 +184,16 @@ services:
       JOBS_CONCURRENCY: ${JOBS_CONCURRENCY:-10}
       JOBS_HEALTH_PORT: "4002"
       RETENTION_DAYS: ${RETENTION_DAYS:-90}
+      # Тайминг ответа бота: окно склейки входящих + «человеческая» задержка.
+      # Крутится через .env, БЕЗ правки кода на сервере. Значения по умолчанию
+      # держать синхронно с apps/jobs/src/env.ts (пустую строку подставлять
+      # нельзя — zod свалится на coerce).
+      WA_BATCH_QUIET_MS: ${WA_BATCH_QUIET_MS:-20000}
+      WA_BATCH_MAX_MS: ${WA_BATCH_MAX_MS:-60000}
+      WA_REPLY_DELAY_FIRST_MIN_MS: ${WA_REPLY_DELAY_FIRST_MIN_MS:-30000}
+      WA_REPLY_DELAY_FIRST_MAX_MS: ${WA_REPLY_DELAY_FIRST_MAX_MS:-35000}
+      WA_REPLY_DELAY_MIN_MS: ${WA_REPLY_DELAY_MIN_MS:-8000}
+      WA_REPLY_DELAY_MAX_MS: ${WA_REPLY_DELAY_MAX_MS:-15000}
       SENTRY_DSN: ${SENTRY_DSN:-}
       RELEASE_VERSION: ${RELEASE_VERSION:-}
       POSTHOG_PROJECT_TOKEN: ${POSTHOG_PROJECT_TOKEN:-}
