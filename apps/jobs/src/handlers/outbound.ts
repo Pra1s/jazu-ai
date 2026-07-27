@@ -1,5 +1,6 @@
 import { getOutboundQueue, OUTBOUND_JOB_OPTIONS, type WaOutboundJob } from "@jazu/queue";
 import { env } from "../env.js";
+import { logger } from "../logger.js";
 
 function randomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -55,5 +56,17 @@ export async function enqueueReply(params: {
     ...(params.requestId ? { requestId: params.requestId } : {}),
     ...(params.waMessageId ? { waMessageId: params.waMessageId } : {})
   };
+  // Логируем размер ответа В ПУЗЫРЯХ: без этого «бот прислал одно сообщение»
+  // не отличить от «модель и сформулировала один пузырь» — а лечатся эти
+  // ситуации совершенно по-разному (доставка vs промпт).
+  logger.info(
+    {
+      agentId: params.agentId,
+      chatId: params.chatId,
+      bubbles: parts.length,
+      ...(params.requestId ? { reqId: params.requestId } : {})
+    },
+    "wa:outbound enqueued"
+  );
   await getOutboundQueue().add("wa-outbound", outbound, OUTBOUND_JOB_OPTIONS);
 }

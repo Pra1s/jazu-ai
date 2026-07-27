@@ -1,4 +1,6 @@
 import {
+  getOutboundQueue,
+  OUTBOUND_JOB_OPTIONS,
   QUEUE_WA_OUTBOUND,
   startWorker,
   type Job,
@@ -7,6 +9,67 @@ import {
 } from "@jazu/queue";
 import { env } from "./env.js";
 import type { ConnectionManager } from "./manager.js";
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Сколько пузырей всего в этой задаче (мультисообщение или одиночный текст). */
+function totalBubbles(data: WaOutboundJob): number {
+  return data.texts && data.texts.length > 0 ? data.texts.length : 1;
+}
+
+/**
+ * Ждёт восстановления сокета до timeoutMs, опрашивая статус раз в 1.5с.
+ * Реконнект после network blip укладывается в секунды, поэтому ждать на месте
+ * дешевле, чем падать в ретрай: попытка не сгорает, а клиент получает хвост
+ * ответа сразу, а не через очередной шаг backoff.
+ */
+async function waitForConnected(
+  manager: ConnectionManager,
+  agentId: string,
+  timeoutMs: number
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let status = (await manager.status(agentId)).status;
+  while (status !== "connected" && Date.now() < deadline) {
+    await sleep(1_500);
+    status = (await manager.status(agentId)).status;
+  }
+  return status;
+}
+
+/**
+ * Последний рубеж: все попытки выгорели, а хвост мультисообщения не доставлен.
+ * Такое бывает, когда WhatsApp восстанавливает сессию дольше, чем живут ретраи
+ * (~5 минут). Молча потерять хвост нельзя — клиент видит начало ответа и ждёт
+ * продолжения, поэтому переставляем ОСТАТОК новой задачей с растущей паузой.
+ * sentCount переносится, значит доставленные пузыри не повторятся.
+ */
+async function requeueUndelivered(job: Job<WaOutboundJob>, reason: string): Promise<void> {
+  const data = job.data;
+  const total = totalBubbles(data);
+  const sent = data.sentCount ?? 0;
+  if (sent >= total) return; // всё доставлено — задача упала уже на финализации
+
+  const requeueCount = data.requeueCount ?? 0;
+  if (requeueCount >= env.WA_OUTBOUND_REQUEUE_MAX) {
+    console.error(
+      `[wa-outbound] ХВОСТ ПОТЕРЯН ${data.chatId}: доставлено ${sent}/${total} пузырей, ` +
+        `добивка исчерпана (${requeueCount}/${env.WA_OUTBOUND_REQUEUE_MAX}). Причина: ${reason}`
+    );
+    return;
+  }
+
+  const delay = 60_000 * 2 ** requeueCount; // 1 мин → 2 мин → 4 мин
+  console.warn(
+    `[wa-outbound] ${data.chatId}: доставлено ${sent}/${total}, попытки выгорели — ` +
+      `переставляю остаток через ${Math.round(delay / 1000)}с (добивка ${requeueCount + 1}/${env.WA_OUTBOUND_REQUEUE_MAX}). Причина: ${reason}`
+  );
+  await getOutboundQueue().add(
+    "wa-outbound",
+    { ...data, requeueCount: requeueCount + 1 },
+    { ...OUTBOUND_JOB_OPTIONS, delay }
+  );
+}
 
 /**
  * Consumer для wa:outbound. Запускается ВНУТРИ wa-worker процесса, потому что
@@ -22,7 +85,7 @@ import type { ConnectionManager } from "./manager.js";
  * одному и тому же чату). На разные чаты сообщения уходят параллельно.
  */
 export function startOutboundWorker(manager: ConnectionManager): StartedWorker<WaOutboundJob> {
-  return startWorker<WaOutboundJob>(
+  const started = startWorker<WaOutboundJob>(
     QUEUE_WA_OUTBOUND,
     async (job: Job<WaOutboundJob>) => {
       const {
@@ -34,13 +97,12 @@ export function startOutboundWorker(manager: ConnectionManager): StartedWorker<W
         targetReplyAtMs,
         isFirstBotReply
       } = job.data;
-      const status = await manager.status(agentId);
-      if (status.status !== "connected") {
-        // Сокет ещё/уже не активен — пусть BullMQ повторит с backoff.
-        // Это происходит, например, во время реконнекта после network blip.
-        // Прогресс по пузырям (sentCount) при этом сохранён в данных задачи,
-        // поэтому повтор продолжит ответ, а не начнёт его заново.
-        throw new Error(`Agent ${agentId} not connected (status=${status.status}); will retry`);
+      // Сокет может быть в реконнекте после network blip — ждём его на месте,
+      // не сжигая попытку. Не дождались — уходим в ретрай с backoff; прогресс по
+      // пузырям (sentCount) сохранён, поэтому повтор продолжит ответ, а не начнёт заново.
+      const status = await waitForConnected(manager, agentId, env.WA_OUTBOUND_WAIT_RECONNECT_MS);
+      if (status !== "connected") {
+        throw new Error(`Agent ${agentId} not connected (status=${status}); will retry`);
       }
 
       const humanizeOptions =
@@ -48,11 +110,10 @@ export function startOutboundWorker(manager: ConnectionManager): StartedWorker<W
           ? { targetReplyAtMs, isFirstBotReply }
           : undefined;
 
+      const total = totalBubbles(job.data);
       const startIndex = typeof job.data.sentCount === "number" ? job.data.sentCount : 0;
       if (startIndex > 0) {
-        console.warn(
-          `[wa-outbound] resuming ${chatId}: ${startIndex}/${texts?.length ?? 1} bubbles already delivered`
-        );
+        console.warn(`[wa-outbound] resuming ${chatId}: ${startIndex}/${total} bubbles already delivered`);
       }
 
       await manager.send(agentId, {
@@ -75,10 +136,33 @@ export function startOutboundWorker(manager: ConnectionManager): StartedWorker<W
           }
         }
       });
+
+      if (total > 1) {
+        console.log(`[wa-outbound] ${chatId}: доставлено ${total}/${total} пузырей`);
+      }
     },
     {
       concurrency: env.WA_OUTBOUND_CONCURRENCY,
       lockDuration: env.WA_OUTBOUND_LOCK_MS
     }
   );
+
+  // Финальный провал задачи (все попытки выгорели) с недоставленным хвостом —
+  // единственный сценарий, где клиент навсегда остаётся с половиной ответа.
+  // Переставляем остаток вместо молчания. Обработчик синхронный, поэтому
+  // асинхронную добивку запускаем без await и глушим её ошибки.
+  started.worker.on("failed", (job, err) => {
+    if (!job) return;
+    const attemptsAllowed = job.opts.attempts ?? 1;
+    if (job.attemptsMade < attemptsAllowed) return; // ретраи ещё будут
+    if (env.WA_OUTBOUND_REQUEUE_MAX === 0) return;
+    void requeueUndelivered(job, err.message).catch((requeueErr) => {
+      console.error(
+        `[wa-outbound] не удалось переставить остаток для ${job.data?.chatId ?? "?"}:`,
+        requeueErr instanceof Error ? requeueErr.message : requeueErr
+      );
+    });
+  });
+
+  return started;
 }

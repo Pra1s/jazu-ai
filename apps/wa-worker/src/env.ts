@@ -25,6 +25,13 @@ const envSchema = z.object({
   // вечно, а вместе с ним — per-chat лок отправки, и чат встаёт колом. Лучше
   // упасть и уйти в ретрай (прогресс по пузырям сохранён, см. WaOutboundJob).
   WA_SEND_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  // Сколько ждать восстановления сокета ВНУТРИ задачи, прежде чем уходить в
+  // ретрай. Реконнект после network blip занимает секунды: дешевле подождать на
+  // месте, чем сжигать попытку и ждать следующего шага backoff.
+  WA_OUTBOUND_WAIT_RECONNECT_MS: z.coerce.number().int().nonnegative().default(20_000),
+  // Сколько раз переставлять недоставленный хвост мультисообщения после того,
+  // как выгорели все попытки (~5 мин). 0 = выключить добивку.
+  WA_OUTBOUND_REQUEUE_MAX: z.coerce.number().int().nonnegative().default(3),
   /** Включить humanize: read receipt, typing, задержку ответа. */
   WA_HUMANIZE_REPLIES: z
     .enum(["true", "false", "1", "0"])

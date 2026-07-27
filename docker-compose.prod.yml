@@ -129,6 +129,12 @@ services:
       REDIS_URL: redis://redis:6379
       WA_OUTBOUND_CONCURRENCY: ${WA_OUTBOUND_CONCURRENCY:-8}
       WA_PER_CHAT_MIN_INTERVAL_MS: ${WA_PER_CHAT_MIN_INTERVAL_MS:-1200}
+      # Надёжность доставки мультисообщения. Значения по умолчанию держать
+      # синхронно с apps/wa-worker/src/env.ts (пустую строку подставлять нельзя).
+      WA_SEND_TIMEOUT_MS: ${WA_SEND_TIMEOUT_MS:-60000}
+      WA_OUTBOUND_LOCK_MS: ${WA_OUTBOUND_LOCK_MS:-180000}
+      WA_OUTBOUND_WAIT_RECONNECT_MS: ${WA_OUTBOUND_WAIT_RECONNECT_MS:-20000}
+      WA_OUTBOUND_REQUEUE_MAX: ${WA_OUTBOUND_REQUEUE_MAX:-3}
       # Humanize: «прочитано» + «печатает…». Крутится через .env, БЕЗ правки кода
       # на сервере. Значения по умолчанию держать синхронно с apps/wa-worker/src/env.ts
       # (пустую строку сюда подставлять нельзя — zod свалится на coerce).
