@@ -18,6 +18,7 @@
     "db:migrate-carcass": "tsx --env-file=../../.env scripts/migrate-carcass-layer-b.ts",
     "reset-agent": "tsx --env-file=../../.env scripts/reset-agent.ts",
     "copy-agent": "tsx --env-file=../../.env scripts/copy-agent.ts",
+    "reindex-style-rag": "tsx --env-file=../../.env scripts/reindex-style-rag.ts",
     "analyze-style": "tsx --env-file=../../.env scripts/analyze-style.ts",
     "start": "node --env-file=../../.env --import tsx/esm src/index.ts"
   },

@@ -543,8 +543,11 @@ export async function transcribeAudio(
 
 /**
  * Эмбеддинги для RAG по стилю (фича «бот в стиле владельца»).
- * Модель фиксирована размерностью колонки vector(1536) в БД — по умолчанию
- * text-embedding-3-small (1536). Меняешь модель → меняй и размерность миграции.
+ * Размерность жёстко связана с колонкой vector(1536) в БД, поэтому в запрос всегда
+ * идёт `dimensions: EMBEDDING_DIM` — так любая модель отдаёт вектор нужной длины:
+ *   - OpenAI text-embedding-3-small/large — 1536 нативно или усечением;
+ *   - Gemini gemini-embedding-001 — нативно 3072, усекается до 1536 (MRL).
+ * Меняешь EMBEDDING_DIM → меняй и размерность колонки миграцией.
  * Использует OpenAI-совместимый /embeddings (тот же baseUrl/ключ, что и chat).
  * Возвращает [] без ключа/при ошибке — вызывающий деградирует на статичный стиль.
  */
@@ -568,7 +571,7 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
       "Content-Type": "application/json",
       Authorization: `Bearer ${embedKey}`
     },
-    body: JSON.stringify({ model, input: inputs })
+    body: JSON.stringify({ model, input: inputs, dimensions: EMBEDDING_DIM })
   });
   if (!response.ok) {
     const errorText = await response.text();

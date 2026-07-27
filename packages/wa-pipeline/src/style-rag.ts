@@ -3,7 +3,7 @@
 // Prisma Client не читает/пишет Unsupported("vector"). Всё «мягко»: любая ошибка
 // (нет расширения vector, нет ключа эмбеддингов) → деградация на статичный стиль.
 
-import { cardToExchanges, embedText, embedTexts, type DialogueCard } from "@jazu/ai";
+import { cardToExchanges, embedText, embedTexts, EMBEDDING_DIM, type DialogueCard } from "@jazu/ai";
 import { prisma as defaultPrisma } from "@jazu/db";
 import { randomUUID } from "node:crypto";
 
@@ -41,7 +41,9 @@ export async function indexStyleExchanges(
     for (let j = 0; j < batch.length; j++) {
       const e = batch[j]!;
       const vec = vectors[j];
-      if (!vec || vec.length === 0) continue;
+      // Длина должна совпадать с колонкой vector(EMBEDDING_DIM): при неверно
+      // настроенной модели (другая размерность) INSERT упал бы для каждой строки.
+      if (!vec || vec.length !== EMBEDDING_DIM) continue;
       await prisma.$executeRawUnsafe(
         `INSERT INTO "StyleExchange" ("id","agentId","situation","clientText","ownerText","embedding")
          VALUES ($1,$2,$3,$4,$5,$6::vector)`,
@@ -80,7 +82,7 @@ export async function retrieveStyleExamples(
   if (!trimmed) return [];
   try {
     const vec = await embedText(trimmed);
-    if (!vec) return [];
+    if (!vec || vec.length !== EMBEDDING_DIM) return [];
     const rows = await prisma.$queryRawUnsafe<ExchangeRow[]>(
       `SELECT "clientText", "ownerText"
        FROM "StyleExchange"
