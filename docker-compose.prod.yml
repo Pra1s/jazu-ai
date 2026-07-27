@@ -47,7 +47,15 @@ services:
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
+      # Пул ключей round-robin (через запятую). Пусто = одиночный ключ выше.
+      LLM_API_KEYS: ${LLM_API_KEYS:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # Эмбеддинги для RAG стиля. Пусто = тот же endpoint/ключ, что и чат, с моделью
+      # text-embedding-3-small. Если чат переведён на Gemini — задать в .env
+      # EMBEDDING_MODEL=gemini-embedding-001, иначе Google вернёт 404.
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       # STT (распознавание голосовых). Пусто = gemini + OpenAI fallback.
       STT_PROVIDER: ${STT_PROVIDER:-}
       STT_MODEL: ${STT_MODEL:-}
@@ -173,7 +181,15 @@ services:
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
+      # Пул ключей round-robin (через запятую). Пусто = одиночный ключ выше.
+      LLM_API_KEYS: ${LLM_API_KEYS:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # Эмбеддинги для RAG стиля. Пусто = тот же endpoint/ключ, что и чат, с моделью
+      # text-embedding-3-small. Если чат переведён на Gemini — задать в .env
+      # EMBEDDING_MODEL=gemini-embedding-001, иначе Google вернёт 404.
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       # STT (распознавание голосовых). Пусто = gemini + OpenAI fallback.
       STT_PROVIDER: ${STT_PROVIDER:-}
       STT_MODEL: ${STT_MODEL:-}
