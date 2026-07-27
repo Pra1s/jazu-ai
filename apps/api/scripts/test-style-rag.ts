@@ -20,7 +20,6 @@ type Row = {
   clientText: string;
   ownerText: string;
   dist: number;
-  label: string | null;
 };
 
 async function main() {
@@ -63,13 +62,12 @@ async function main() {
   }
 
   const rows = await prisma.$queryRawUnsafe<Row[]>(
-    `SELECT e."situation", e."clientText", e."ownerText",
-            (e."embedding" <=> $2::vector) AS dist,
-            d."sourceChatLabel" AS label
-     FROM "StyleExchange" e
-     LEFT JOIN "DialogueCard" d ON d."id" = e."dialogueCardId"
-     WHERE e."agentId" = $1 AND e."embedding" IS NOT NULL
-     ORDER BY e."embedding" <=> $2::vector
+    // dialogueCardId при индексации не заполняется (indexStyleExchanges его не
+    // пишет), поэтому исходный чат не показываем — контекст даёт поле situation.
+    `SELECT "situation", "clientText", "ownerText", ("embedding" <=> $2::vector) AS dist
+     FROM "StyleExchange"
+     WHERE "agentId" = $1 AND "embedding" IS NOT NULL
+     ORDER BY "embedding" <=> $2::vector
      LIMIT $3`,
     agentId,
     `[${vec.join(",")}]`,
@@ -81,7 +79,7 @@ async function main() {
 
   rows.forEach((r, i) => {
     const similarity = (1 - Number(r.dist)).toFixed(3);
-    console.log(`#${i + 1}  близость ${similarity}${r.label ? `  [${r.label}]` : ""}`);
+    console.log(`#${i + 1}  близость ${similarity}`);
     if (r.situation) console.log(`   ситуация: ${r.situation}`);
     if (r.clientText) console.log(`   Клиент:   ${r.clientText}`);
     console.log(`   Владелец: ${r.ownerText}\n`);
