@@ -1823,10 +1823,18 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
   // Ставит задачу анализа. removeOnFail: true критично: без него упавшая задача
   // остаётся в failed-set (дефолт очереди — до 7 дней), и повторный add с тем же
   // jobId `style:<agentId>` молча игнорируется — перезапуск был бы невозможен.
-  async function enqueueStyleAnalysis(agentId: string, clearHistoryOnSuccess = false): Promise<void> {
+  async function enqueueStyleAnalysis(
+    agentId: string,
+    clearHistoryOnSuccess = false,
+    append = false
+  ): Promise<void> {
     await getStyleAnalyzeQueue().add(
       "style-analyze",
-      { agentId, ...(clearHistoryOnSuccess ? { clearHistoryOnSuccess } : {}) },
+      {
+        agentId,
+        ...(clearHistoryOnSuccess ? { clearHistoryOnSuccess } : {}),
+        ...(append ? { append } : {})
+      },
       { jobId: `style:${agentId}`, attempts: 1, removeOnComplete: true, removeOnFail: true }
     );
   }
@@ -1834,6 +1842,8 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
   const styleDialoguesSchema = z.object({
     // Как владелец подписан в .txt-чатах (для JSON-дампа wtsexporter не нужно).
     ownerName: z.string().max(200).optional(),
+    // Дозагрузка: прежний стиль не стирается, новые диалоги добавляются к нему.
+    append: z.boolean().optional(),
     files: z
       .array(
         z.object({
@@ -1895,7 +1905,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       }
     });
 
-    await enqueueStyleAnalysis(agent.id);
+    await enqueueStyleAnalysis(agent.id, false, body.append === true);
 
     return { ok: true, totalEpisodes: episodes.length };
   });
@@ -2032,7 +2042,13 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
   // теряется безвозвратно (история приходит лишь при переподключении номера).
   app.post("/agent/style-history-analyze", async (request, reply) => {
     const { agent } = await buildWriteSessionView(request, reply);
-    const body = z.object({ waChatIds: z.array(z.string().min(1)).min(1).max(2000) }).parse(request.body);
+    const body = z
+      .object({
+        waChatIds: z.array(z.string().min(1)).min(1).max(2000),
+        // Дозагрузка: прежний стиль не стирается, выбранные чаты добавляются к нему.
+        append: z.boolean().optional()
+      })
+      .parse(request.body);
 
     if (await isStyleAnalysisRunning(prisma, agent.id)) {
       return reply.code(409).send({ error: "analysis_running", message: "Анализ уже идёт — дождитесь завершения." });
@@ -2070,7 +2086,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         episodes
       }
     });
-    await enqueueStyleAnalysis(agent.id, true);
+    await enqueueStyleAnalysis(agent.id, true, body.append === true);
 
     return { ok: true, totalEpisodes: episodes.length };
   });

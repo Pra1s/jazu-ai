@@ -74,6 +74,9 @@ export default function StyleImportDialog({ open, onClose, onApplied }: StyleImp
   const [historyChats, setHistoryChats] = useState<HistoryChat[]>([]);
   const [historyInfo, setHistoryInfo] = useState<HistoryInfo | null>(null);
   const [selectedChats, setSelectedChats] = useState<Set<string>>(new Set());
+  // Дозагрузка вместо пересборки с нуля. Показывается, только когда стиль уже есть;
+  // по умолчанию включена — «докинуть переписок» ожидаемее, чем стереть накопленное.
+  const [appendMode, setAppendMode] = useState(true);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const historyPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -162,7 +165,11 @@ export default function StyleImportDialog({ open, onClose, onApplied }: StyleImp
       );
       const res = await apiJson<{ ok: boolean; totalEpisodes: number }>("/agent/style-dialogues", {
         method: "POST",
-        body: JSON.stringify({ ownerName: ownerName.trim() || undefined, files: payloadFiles })
+        body: JSON.stringify({
+          ownerName: ownerName.trim() || undefined,
+          files: payloadFiles,
+          append: Boolean(status?.hasStyle) && appendMode
+        })
       });
       toast.success(`Загружено, эпизодов: ${res.totalEpisodes}. Анализирую…`);
       setFiles([]);
@@ -220,7 +227,10 @@ export default function StyleImportDialog({ open, onClose, onApplied }: StyleImp
     try {
       const res = await apiJson<{ ok: boolean; totalEpisodes: number }>("/agent/style-history-analyze", {
         method: "POST",
-        body: JSON.stringify({ waChatIds: Array.from(selectedChats) })
+        body: JSON.stringify({
+          waChatIds: Array.from(selectedChats),
+          append: Boolean(status?.hasStyle) && appendMode
+        })
       });
       toast.success(`Отобрано эпизодов: ${res.totalEpisodes}. Анализирую…`);
       setHistoryChats([]);
@@ -335,6 +345,28 @@ export default function StyleImportDialog({ open, onClose, onApplied }: StyleImp
                 Из WhatsApp
               </button>
             </div>
+
+            {/* Стиль уже собран — даём выбрать: докинуть переписок или пересобрать с нуля */}
+            {hasStyle && (
+              <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border bg-secondary/30 p-3">
+                <input
+                  type="checkbox"
+                  checked={appendMode}
+                  onChange={(e) => setAppendMode(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 shrink-0"
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-foreground">
+                    Дополнить текущий стиль
+                  </span>
+                  <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">
+                    {appendMode
+                      ? "Новые переписки добавятся к уже разобранным — накопленный стиль сохранится, повторно загруженные диалоги пропустятся."
+                      : "Стиль соберётся заново: прежние разобранные диалоги удалятся, останутся только те, что загружаете сейчас."}
+                  </span>
+                </span>
+              </label>
+            )}
 
             {tab === "files" && (
               <div className="space-y-3">
