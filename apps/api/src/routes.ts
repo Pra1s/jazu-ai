@@ -396,7 +396,10 @@ async function savePromptVersion(
   agentId: string,
   content: string,
   source: "create" | "edit" | "correction" | "enrichment",
-  meta?: { correctionType?: string | null; sectionEdited?: string | null }
+  meta?: { correctionType?: string | null; sectionEdited?: string | null },
+  // Кто автор версии. По умолчанию "ai" (промпт собрал конструктор), "user" —
+  // ручная правка владельцем через редактор промпта.
+  createdBy: "ai" | "user" = "ai"
 ) {
   const previous = await prisma.promptVersion.findFirst({
     where: { agentId },
@@ -409,7 +412,7 @@ async function savePromptVersion(
       content,
       charCount: content.length,
       source,
-      createdBy: "ai",
+      createdBy,
       correctionType: meta?.correctionType ?? null,
       sectionEdited: meta?.sectionEdited ?? null,
       parentId: previous?.id ?? null,
@@ -1624,6 +1627,44 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
       prompt: promptVersion?.content || agent.currentPrompt || buildFallbackPrompt(profile),
       businessProfile: profile
     };
+  });
+
+  // Ручная правка промпта владельцем из редактора (иконка карандаша в панели
+  // промпта). Пишется как обычная версия промпта, но с createdBy="user" — так
+  // в истории видно, что текст правил человек, а не конструктор.
+  //
+  // ВАЖНО: рантайм берёт ПОСЛЕДНЮЮ версию промпта, поэтому следующий ход
+  // конструктора / коррекция / догрузка доп-данных перезапишут ручную правку
+  // своей версией. Это осознанно: единственный источник правды — последняя версия.
+  const promptEditSchema = z.object({
+    // Нижняя граница совпадает с гардом applyPromptCorrection (>80): более
+    // короткий текст в рантайме считается «промпта нет» и включает фолбэк.
+    prompt: z
+      .string()
+      .trim()
+      .min(80, "Промпт слишком короткий — минимум 80 символов")
+      .max(30_000, "Промпт слишком длинный — максимум 30 000 символов")
+  });
+
+  app.put("/agent/prompt", async (request, reply) => {
+    const { agent } = await buildWriteSessionView(request, reply);
+    const body = promptEditSchema.parse(request.body);
+
+    const latest = await prisma.promptVersion.findFirst({
+      where: { agentId: agent.id },
+      orderBy: { createdAt: "desc" },
+      select: { content: true }
+    });
+    const current = latest?.content || agent.currentPrompt || "";
+    if (current.trim() === body.prompt) {
+      return { ok: true, prompt: body.prompt, unchanged: true };
+    }
+
+    // Отдельная запись в AuditLog не нужна: сама версия промпта с
+    // createdBy="user" и есть след ручной правки (видна в GET /agent/versions).
+    await savePromptVersion(agent.id, body.prompt, "edit", undefined, "user");
+
+    return { ok: true, prompt: body.prompt, unchanged: false };
   });
 
   // Доп-данные бизнеса: структурированный ввод (ссылки, прайс, скрипт,

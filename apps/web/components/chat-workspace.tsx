@@ -630,6 +630,10 @@ export default function ChatWorkspace() {
   const [busy, setBusy] = useState(false);
   const [correction, setCorrection] = useState<CorrectionState | null>(null);
   const [promptDrawerOpen, setPromptDrawerOpen] = useState(false);
+  // Ручная правка промпта прямо в панели. promptDraftEdit — черновик в textarea;
+  // null = режим просмотра. Сохранение пишет новую версию промпта на бэке.
+  const [promptDraftEdit, setPromptDraftEdit] = useState<string | null>(null);
+  const [promptSaving, setPromptSaving] = useState(false);
   const [extraDataOpen, setExtraDataOpen] = useState(false);
   const [styleImportOpen, setStyleImportOpen] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
@@ -841,6 +845,29 @@ export default function ChatWorkspace() {
     } catch { /* localStorage недоступен (приватный режим) — шлём как обычно */ }
     track(AnalyticsEvent.BotTestStarted);
   }, [mode]);
+
+  /** Сохранить ручную правку промпта: новая версия на бэке + локальное обновление. */
+  async function savePromptEdit() {
+    const draft = (promptDraftEdit ?? "").trim();
+    if (draft.length < 80) {
+      toast.error("Промпт слишком короткий — минимум 80 символов");
+      return;
+    }
+    setPromptSaving(true);
+    try {
+      const data = await apiJson<{ prompt: string }>("/agent/prompt", {
+        method: "PUT",
+        body: JSON.stringify({ prompt: draft })
+      });
+      setPrompt(data.prompt);
+      setPromptDraftEdit(null);
+      toast.success("Промпт сохранён — бот отвечает по нему");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Не удалось сохранить промпт");
+    } finally {
+      setPromptSaving(false);
+    }
+  }
 
   async function refreshPrompt() {
     try {
@@ -1463,19 +1490,50 @@ export default function ChatWorkspace() {
             <div className="flex items-center justify-between border-b border-border px-4 py-3">
               <div>
                 <h2 className="text-sm font-semibold text-foreground">Текущий промпт бота</h2>
-                <p className="text-xs text-muted-foreground">Этим текстом руководствуется бот при ответе клиенту</p>
+                <p className="text-xs text-muted-foreground">
+                  {promptDraftEdit === null
+                    ? "Этим текстом руководствуется бот при ответе клиенту"
+                    : "Правьте текст — бот начнёт отвечать по нему сразу после сохранения"}
+                </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setPromptDrawerOpen(false)}
-                className="rounded-full px-2 py-1 text-xs text-muted-foreground transition hover:bg-secondary hover:text-foreground"
-                aria-label="Закрыть"
-              >
-                ✕
-              </button>
+              <div className="flex items-center gap-1">
+                {promptDraftEdit === null && prompt && prompt.trim().length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setPromptDraftEdit(prompt)}
+                    className="rounded-full p-1.5 text-muted-foreground transition hover:bg-secondary hover:text-foreground"
+                    aria-label="Редактировать промпт"
+                    title="Редактировать промпт"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPromptDraftEdit(null);
+                    setPromptDrawerOpen(false);
+                  }}
+                  className="rounded-full px-2 py-1 text-xs text-muted-foreground transition hover:bg-secondary hover:text-foreground"
+                  aria-label="Закрыть"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
             <div className="scrollbar-hide flex-1 overflow-y-auto px-4 py-4">
-              {prompt && prompt.trim().length > 0 ? (
+              {promptDraftEdit !== null ? (
+                <textarea
+                  value={promptDraftEdit}
+                  onChange={(e) => setPromptDraftEdit(e.target.value)}
+                  spellCheck={false}
+                  className={cn(
+                    "scrollbar-hide h-full min-h-[60vh] w-full resize-none rounded-md bg-secondary px-3 py-3",
+                    "font-mono text-[12px] leading-5 text-foreground outline-none",
+                    "focus:ring-1 focus:ring-foreground/20"
+                  )}
+                />
+              ) : prompt && prompt.trim().length > 0 ? (
                 <pre className="scrollbar-hide whitespace-pre-wrap break-words rounded-md bg-secondary px-3 py-3 font-mono text-[12px] leading-5 text-foreground">
                   {prompt}
                 </pre>
@@ -1485,22 +1543,47 @@ export default function ChatWorkspace() {
                 </div>
               )}
             </div>
-            <div className="flex items-center justify-between border-t border-border px-4 py-3">
+            <div className="flex items-center justify-between gap-3 border-t border-border px-4 py-3">
               <span className="text-xs text-muted-foreground">
-                {prompt ? `${prompt.length} символов` : "пусто"}
+                {promptDraftEdit !== null
+                  ? `${promptDraftEdit.length} символов`
+                  : prompt
+                    ? `${prompt.length} символов`
+                    : "пусто"}
               </span>
-              <button
-                type="button"
-                onClick={() => {
-                  if (prompt) {
-                    void navigator.clipboard?.writeText(prompt).then(() => toast.success("Скопировано"));
-                  }
-                }}
-                className="rounded-full bg-foreground px-3 py-1 text-xs font-medium text-background transition hover:opacity-90 disabled:opacity-40"
-                disabled={!prompt}
-              >
-                Скопировать
-              </button>
+              {promptDraftEdit !== null ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPromptDraftEdit(null)}
+                    disabled={promptSaving}
+                    className="rounded-full px-3 py-1 text-xs font-medium text-muted-foreground transition hover:bg-secondary hover:text-foreground disabled:opacity-40"
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void savePromptEdit()}
+                    disabled={promptSaving || promptDraftEdit.trim().length < 80}
+                    className="rounded-full bg-foreground px-3 py-1 text-xs font-medium text-background transition hover:opacity-90 disabled:opacity-40"
+                  >
+                    {promptSaving ? "Сохраняю…" : "Сохранить"}
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (prompt) {
+                      void navigator.clipboard?.writeText(prompt).then(() => toast.success("Скопировано"));
+                    }
+                  }}
+                  className="rounded-full bg-foreground px-3 py-1 text-xs font-medium text-background transition hover:opacity-90 disabled:opacity-40"
+                  disabled={!prompt}
+                >
+                  Скопировать
+                </button>
+              )}
             </div>
           </div>
         </div>
