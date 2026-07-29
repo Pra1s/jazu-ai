@@ -159,6 +159,10 @@ export type FlushResult =
       reply: string;
       /** reply, разбитый на отдельные сообщения (мультисообщения); [] если пусто. */
       replyParts: string[];
+      /** id созданной строки WaMessage — нужен, чтобы записать статус доставки
+       *  КАЖДОГО пузыря (WaMessageDelivery). undefined, если reply был пуст
+       *  (осознанное молчание — строка не создавалась). */
+      outboundMessageId?: string;
       summary: string;
       conversationId: string;
       leadId: string | null;
@@ -1105,24 +1109,34 @@ export async function flushWaConversation(
   const combinedReply = replyParts.join("\n\n");
   const hasReply = replyParts.length > 0;
 
-  // Транзакция: исходящее (если есть) + сдвиг курсора + апдейт conversation.
-  // Курсор и outbound коммитим атомарно → ретрай после коммита = nothing_to_flush.
-  await prisma.$transaction([
-    ...(hasReply
-      ? [
-          prisma.waMessage.create({
-            data: {
-              conversationId: conversation.id,
-              direction: "out",
-              body: combinedReply,
-              parts: jsonInput(
-                toAssistantParts(replyParts[0] ?? "", runtimeTurn.actionButton, replyParts.slice(1))
-              )
-            }
-          })
-        ]
-      : []),
-    prisma.conversation.update({
+  // Транзакция: исходящее (если есть, + по строке WaMessageDelivery на каждый
+  // пузырь — pending, статус проставит wa:delivery после реальной отправки) +
+  // сдвиг курсора + апдейт conversation. Курсор и outbound коммитим атомарно →
+  // ретрай после коммита = nothing_to_flush.
+  //
+  // Колбэчная форма (не массив) — нужно вытащить id только что созданной
+  // WaMessage, чтобы протащить его дальше как outboundMessageId (иначе
+  // wa:delivery не знает, в какую строку писать статус). Два простых запроса,
+  // без LLM внутри — {timeout: 10_000} с большим запасом.
+  let outboundMessageId: string | undefined;
+  await prisma.$transaction(async (tx) => {
+    if (hasReply) {
+      const created = await tx.waMessage.create({
+        data: {
+          conversationId: conversation.id,
+          direction: "out",
+          body: combinedReply,
+          parts: jsonInput(
+            toAssistantParts(replyParts[0] ?? "", runtimeTurn.actionButton, replyParts.slice(1))
+          ),
+          deliveries: {
+            create: replyParts.map((text, index) => ({ index, text }))
+          }
+        }
+      });
+      outboundMessageId = created.id;
+    }
+    await tx.conversation.update({
       where: { id: conversation.id },
       data: {
         lastMessageAt: new Date(),
@@ -1131,8 +1145,8 @@ export async function flushWaConversation(
         ...(needToWrite ? { detectedNeed: needToWrite } : {}),
         ...(nameToWrite ? { detectedName: nameToWrite } : {})
       }
-    })
-  ]);
+    });
+  }, { timeout: 10_000 });
 
   const summary = runtimeTurn.summary || summarizeLead(profile, combinedMessage);
   // Два номера для карточки: базовый WA-номер чата (реальный, не lid) и отдельно
@@ -1170,6 +1184,7 @@ export async function flushWaConversation(
     status: "flushed",
     reply: combinedReply,
     replyParts,
+    ...(outboundMessageId ? { outboundMessageId } : {}),
     summary: runtimeTurn.summary || summary,
     conversationId: conversation.id,
     leadId: lead.leadId,

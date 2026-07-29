@@ -9,12 +9,14 @@ import {
   QUEUE_LEAD_NOTIFY,
   QUEUE_STYLE_ANALYZE,
   QUEUE_WA_FOLLOWUP,
+  QUEUE_WA_DELIVERY,
   startWorker,
   type WaInboundJob,
   type WaFlushJob,
   type LeadNotifyJob,
   type StyleAnalyzeJob,
-  type FollowupJob
+  type FollowupJob,
+  type WaDeliveryJob
 } from "@jazu/queue";
 import {
   captureError,
@@ -31,9 +33,11 @@ import { handleWaFlush } from "./handlers/wa-flush.js";
 import { handleLeadNotify } from "./handlers/lead-notify.js";
 import { handleStyleAnalyze } from "./handlers/style-analyze.js";
 import { handleFollowup } from "./handlers/followup.js";
+import { handleWaDelivery } from "./handlers/wa-delivery.js";
 import { logger } from "./logger.js";
 import { startRetentionCron } from "./retention.js";
 import { startSubscriptionRemindersCron } from "./subscription-reminders.js";
+import { startWaDeliveryWatchdogCron } from "./wa-delivery-watchdog.js";
 
 initSentry({
   service: "jobs",
@@ -134,6 +138,28 @@ followupWorker.worker.on("failed", (job, err) => {
   });
 });
 
+// Статус доставки пузырей мультисообщения (wa-worker сам в Postgres не пишет —
+// шлёт сюда). Fire-and-forget с точки зрения отправки, поэтому concurrency
+// повыше: задачи маленькие (один UPDATE), а поток может быть частым.
+const waDeliveryWorker = startWorker<WaDeliveryJob>(QUEUE_WA_DELIVERY, handleWaDelivery, {
+  concurrency: 10
+});
+
+waDeliveryWorker.worker.on("ready", () => {
+  logger.info({ queue: QUEUE_WA_DELIVERY }, "worker ready");
+});
+
+waDeliveryWorker.worker.on("failed", (job, err) => {
+  captureError(err, {
+    route: "jobs:wa-delivery",
+    extra: {
+      jobId: job?.id,
+      outboundMessageId: (job?.data)?.outboundMessageId ?? null,
+      index: (job?.data)?.index ?? null
+    }
+  });
+});
+
 waInboundWorker.worker.on("completed", (job) => {
   logger.debug({ jobId: job.id }, "job completed");
 });
@@ -156,6 +182,13 @@ const stopRetention = startRetentionCron(env.RETENTION_DAYS);
 
 // Daily — напоминания об окончании тарифа / исчерпании диалогов (WA + email).
 const stopSubReminders = startSubscriptionRemindersCron();
+
+// Сторожевой таймер доставки мультисообщений — без него потеря пузыря
+// (WaMessageDelivery застрял в pending) невидима никому.
+const stopWaDeliveryWatchdog = startWaDeliveryWatchdogCron(
+  env.WA_DELIVERY_STALE_MS,
+  env.WA_DELIVERY_WATCHDOG_INTERVAL_MS
+);
 
 // Маленький Fastify-сервер для k8s/Compose healthcheck'ов. Только /healthz и /readyz.
 const health = Fastify({ logger: false, trustProxy: true });
@@ -217,6 +250,7 @@ async function shutdown(signal: string): Promise<void> {
 
   stopRetention();
   stopSubReminders();
+  stopWaDeliveryWatchdog();
 
   try {
     await health.close();
@@ -242,6 +276,11 @@ async function shutdown(signal: string): Promise<void> {
     await styleAnalyzeWorker.close();
   } catch (err) {
     logger.error({ err }, "error closing style-analyze worker");
+  }
+  try {
+    await waDeliveryWorker.close();
+  } catch (err) {
+    logger.error({ err }, "error closing wa:delivery worker");
   }
   try {
     await followupWorker.close();

@@ -464,9 +464,39 @@ model WaMessage {
   parts           Json
   createdAt       DateTime  @default(now())
   conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  deliveries      WaMessageDelivery[]
 
   @@unique([conversationId, waMsgId])
   @@index([conversationId, createdAt])
+}
+
+/// Статус доставки КАЖДОГО пузыря мультисообщения (см. WaMessageDelivery). До
+/// этой таблицы прогресс жил только в Redis (WaOutboundJob.sentCount) — потеря
+/// пузыря была невидима: строка WaMessage пишется ДО отправки и никогда не
+/// обновляется, кабинет показывал «отправлено» независимо от реальной доставки.
+///
+/// НЕ строка-на-пузырь в самой WaMessage: waMsgId=null там — маркер «писал бот»
+/// (bot-loop protection и isFirstBotReply считают именно по нему), а несколько
+/// строк на один ответ бота исказили бы оба счётчика. Отдельная таблица не
+/// трогает этот контракт вообще.
+model WaMessageDelivery {
+  id          String            @id @default(cuid())
+  waMessageId String
+  /// Порядковый номер пузыря в ответе (0-based), как в WaOutboundJob.texts.
+  index       Int
+  text        String
+  status      WaDeliveryStatus  @default(pending)
+  /// Реальный id сообщения из WhatsApp (Baileys sendMessage().key.id) — сегодня
+  /// живёт только в памяти воркера (selfSentIds), после доставки персистится сюда.
+  waMsgId     String?
+  error       String?
+  sentAt      DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  message     WaMessage         @relation(fields: [waMessageId], references: [id], onDelete: Cascade)
+
+  @@unique([waMessageId, index])
+  @@index([status, createdAt])
 }
 
 model Lead {
@@ -518,6 +548,12 @@ enum ConversationStatus {
 enum MessageDirection {
   in
   out
+}
+
+enum WaDeliveryStatus {
+  pending
+  sent
+  failed
 }
 
 enum LeadStatus {

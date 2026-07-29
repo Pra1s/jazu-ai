@@ -1411,8 +1411,9 @@ export class ConnectionManager {
       humanize?: { targetReplyAtMs: number; isFirstBotReply: boolean };
       /** С какого пузыря продолжать (докачка после обрыва). По умолчанию с нуля. */
       startIndex?: number;
-      /** Вызывается после каждого доставленного пузыря — consumer пишет прогресс. */
-      onBubbleSent?: (sentCount: number) => Promise<void>;
+      /** Вызывается после каждого доставленного пузыря — consumer пишет прогресс
+       *  и статус доставки (waMsgId — реальный id сообщения из WhatsApp). */
+      onBubbleSent?: (sentCount: number, waMsgId?: string) => Promise<void>;
     }
   ): Promise<void> {
     const lockKey = chatKey(agentId, payload.chatId);
@@ -1443,7 +1444,7 @@ export class ConnectionManager {
       texts?: string[];
       humanize?: { targetReplyAtMs: number; isFirstBotReply: boolean };
       startIndex?: number;
-      onBubbleSent?: (sentCount: number) => Promise<void>;
+      onBubbleSent?: (sentCount: number, waMsgId?: string) => Promise<void>;
     }
   ): Promise<void> {
     const initial = this.getConnection(agentId);
@@ -1531,7 +1532,8 @@ export class ConnectionManager {
       current.lastSentAt.set(chatId, Date.now());
       // Фиксируем прогресс СРАЗУ после доставки: если следующий пузырь упадёт,
       // ретрай продолжит с него, а не отправит клиенту начало ответа заново.
-      await payload.onBubbleSent?.(i + 1);
+      // waMsgId — реальный id из WhatsApp, consumer передаст его в wa:delivery.
+      await payload.onBubbleSent?.(i + 1, sent?.key?.id ?? undefined);
     }
 
     const final = live();

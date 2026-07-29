@@ -11,6 +11,7 @@ export {
   QUEUE_WA_FLUSH,
   QUEUE_STYLE_ANALYZE,
   QUEUE_WA_FOLLOWUP,
+  QUEUE_WA_DELIVERY,
   getQueue,
   getInboundQueue,
   getOutboundQueue,
@@ -19,6 +20,7 @@ export {
   getFlushQueue,
   getStyleAnalyzeQueue,
   getFollowupQueue,
+  getDeliveryQueue,
   startWorker,
   closeAllQueues,
   type WaInboundJob,
@@ -27,6 +29,7 @@ export {
   type WaFlushJob,
   type StyleAnalyzeJob,
   type FollowupJob,
+  type WaDeliveryJob,
   type StartedWorker
 } from "./queues.js";
 

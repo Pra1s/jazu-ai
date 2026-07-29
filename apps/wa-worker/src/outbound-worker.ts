@@ -1,4 +1,5 @@
 import {
+  getDeliveryQueue,
   getOutboundQueue,
   OUTBOUND_JOB_OPTIONS,
   QUEUE_WA_OUTBOUND,
@@ -16,6 +17,29 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Сколько пузырей всего в этой задаче (мультисообщение или одиночный текст). */
 function totalBubbles(data: WaOutboundJob): number {
   return data.texts && data.texts.length > 0 ? data.texts.length : 1;
+}
+
+/**
+ * Репортит статус доставки одного пузыря в wa:delivery. Fire-and-forget:
+ * wa-worker не имеет доступа к Postgres (см. QUEUE_WA_DELIVERY в packages/queue),
+ * поэтому обновление статуса — best-effort задача в очередь, а не прямая запись.
+ * Не блокирует и не роняет саму отправку — ошибку глушим с логом.
+ */
+function reportDeliveryStatus(
+  outboundMessageId: string | undefined,
+  index: number,
+  status: "sent" | "failed",
+  extra: { waMsgId?: string; error?: string } = {}
+): void {
+  if (!outboundMessageId) return;
+  void getDeliveryQueue()
+    .add("wa-delivery", { outboundMessageId, index, status, ...extra })
+    .catch((err) => {
+      console.warn(
+        `[wa-outbound] failed to enqueue wa:delivery (outboundMessageId=${outboundMessageId}, index=${index}, status=${status}):`,
+        err instanceof Error ? err.message : err
+      );
+    });
 }
 
 /**
@@ -60,6 +84,12 @@ async function requeueUndelivered(job: Job<WaOutboundJob>, reason: string): Prom
       route: "wa-worker:outbound-requeue",
       extra: { chatId: data.chatId, sent, total, requeueCount }
     });
+    // Недоставленный хвост помечаем failed — иначе строки WaMessageDelivery
+    // остаются в pending навсегда (сторожевой крон в apps/jobs их бы поймал
+    // как "зависшие", хотя причина уже известна и записана здесь).
+    for (let index = sent; index < total; index++) {
+      reportDeliveryStatus(data.outboundMessageId, index, "failed", { error: reason.slice(0, 500) });
+    }
     return;
   }
 
@@ -126,7 +156,7 @@ export function startOutboundWorker(manager: ConnectionManager): StartedWorker<W
         ...(texts && texts.length > 0 ? { texts } : {}),
         ...(humanizeOptions ? { humanize: humanizeOptions } : {}),
         startIndex,
-        onBubbleSent: async (sentCount) => {
+        onBubbleSent: async (sentCount, waMsgId) => {
           // Прогресс пишем в данные задачи — их видит ретрай той же задачи.
           // Ошибку записи глушим: не доставить остаток ответа хуже, чем
           // рискнуть повтором одного пузыря при недоступном Redis.
@@ -138,6 +168,10 @@ export function startOutboundWorker(manager: ConnectionManager): StartedWorker<W
               err instanceof Error ? err.message : err
             );
           }
+          // Статус доставки в БД (best-effort, не блокирует цикл отправки).
+          reportDeliveryStatus(job.data.outboundMessageId, sentCount - 1, "sent", {
+            ...(waMsgId ? { waMsgId } : {})
+          });
         }
       });
 

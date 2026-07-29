@@ -53,6 +53,11 @@ export const QUEUE_STYLE_ANALYZE = "style-analyze";
 // ставится при ответе бота, отменяется при входящем клиента. Хендлер шлёт напоминание
 // (пресет или авто LLM+RAG) и планирует следующий шаг серии. См. apps/jobs/handlers/followup.ts.
 export const QUEUE_WA_FOLLOWUP = "wa-followup";
+// Статус доставки КАЖДОГО пузыря мультисообщения (WaMessageDelivery). wa-worker
+// не имеет доступа к Postgres (изоляция, см. apps/wa-worker/src/db-auth-state.ts) —
+// поэтому пишет статус не напрямую, а fire-and-forget задачей сюда; обрабатывает
+// apps/jobs, где Prisma и так есть. См. apps/jobs/handlers/wa-delivery.ts.
+export const QUEUE_WA_DELIVERY = "wa-delivery";
 
 export type WaInboundJob = {
   agentId: string;
@@ -132,6 +137,30 @@ export type WaOutboundJob = {
   waMessageId?: string;
   /** participant для group-чатов (read receipt). */
   participant?: string;
+  /**
+   * id строки WaMessage (исходящий ответ бота), в которую нужно записать статус
+   * доставки по каждому пузырю (см. WaMessageDelivery). НЕ путать с полем
+   * waMessageId выше — то id ВХОДЯЩЕГО сообщения клиента (read receipt/dedupe),
+   * это же — id уже СОЗДАННОЙ строки исходящего ответа в БД.
+   */
+  outboundMessageId?: string;
+};
+
+/**
+ * Статус доставки ОДНОГО пузыря мультисообщения. wa-worker не имеет доступа к
+ * Postgres, поэтому шлёт статус этой задачей вместо прямой записи — обрабатывает
+ * apps/jobs (см. QUEUE_WA_DELIVERY выше).
+ */
+export type WaDeliveryJob = {
+  /** id строки WaMessage, к которой относится пузырь (WaOutboundJob.outboundMessageId). */
+  outboundMessageId: string;
+  /** Порядковый номер пузыря (0-based), как в WaOutboundJob.texts. */
+  index: number;
+  status: "sent" | "failed";
+  /** Реальный id сообщения из WhatsApp (Baileys sendMessage().key.id) — только при status="sent". */
+  waMsgId?: string;
+  /** Причина отказа — только при status="failed". */
+  error?: string;
 };
 
 export type LeadNotifyJob = {
@@ -237,6 +266,10 @@ export function getStyleAnalyzeQueue(): Queue<StyleAnalyzeJob> {
 
 export function getFollowupQueue(): Queue<FollowupJob> {
   return getQueue<FollowupJob>(QUEUE_WA_FOLLOWUP);
+}
+
+export function getDeliveryQueue(): Queue<WaDeliveryJob> {
+  return getQueue<WaDeliveryJob>(QUEUE_WA_DELIVERY);
 }
 
 export type StartedWorker<T> = {

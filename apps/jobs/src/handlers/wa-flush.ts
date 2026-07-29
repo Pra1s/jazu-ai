@@ -69,7 +69,8 @@ export async function handleWaFlush(job: Job<WaFlushJob>): Promise<void> {
       inboundReceivedAtMs: result.batchFirstMessageMs,
       isFirstBotReply: result.isFirstBotReply,
       ...(job.id ? { inboundJobId: String(job.id) } : {}),
-      ...(requestId ? { requestId } : {})
+      ...(requestId ? { requestId } : {}),
+      ...(result.outboundMessageId ? { outboundMessageId: result.outboundMessageId } : {})
     });
 
     // Активация владельца — только на первом живом ответе.

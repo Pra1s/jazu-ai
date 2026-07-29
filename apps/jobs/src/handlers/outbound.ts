@@ -36,6 +36,9 @@ export async function enqueueReply(params: {
   inboundJobId?: string;
   requestId?: string;
   waMessageId?: string;
+  /** id строки WaMessage (исходящий ответ) — нужен воркеру, чтобы репортить
+   *  статус доставки каждого пузыря через wa:delivery. См. WaMessageDelivery. */
+  outboundMessageId?: string;
 }): Promise<void> {
   const parts = (params.replies && params.replies.length > 0
     ? params.replies
@@ -54,7 +57,8 @@ export async function enqueueReply(params: {
     isFirstBotReply: params.isFirstBotReply,
     ...(params.inboundJobId ? { inboundJobId: params.inboundJobId } : {}),
     ...(params.requestId ? { requestId: params.requestId } : {}),
-    ...(params.waMessageId ? { waMessageId: params.waMessageId } : {})
+    ...(params.waMessageId ? { waMessageId: params.waMessageId } : {}),
+    ...(params.outboundMessageId ? { outboundMessageId: params.outboundMessageId } : {})
   };
   // Логируем размер ответа В ПУЗЫРЯХ: без этого «бот прислал одно сообщение»
   // не отличить от «модель и сформулировала один пузырь» — а лечатся эти

@@ -59,7 +59,16 @@ const schema = z.object({
    * поймать «номер для связи», названный сразу после закрытия, и отправить ОДНУ
    * полную карточку. По умолчанию 120000 (2 мин); поставь 180000 для 3 мин.
    */
-  LEAD_NOTIFY_DELAY_MS: z.coerce.number().int().positive().default(120_000)
+  LEAD_NOTIFY_DELAY_MS: z.coerce.number().int().positive().default(120_000),
+  /**
+   * Сторожевой таймер доставки мультисообщений (WaMessageDelivery): раз в
+   * WA_DELIVERY_WATCHDOG_INTERVAL_MS ищет строки со статусом pending старше
+   * WA_DELIVERY_STALE_MS и шлёт их в Sentry — иначе потеря пузыря невидима.
+   * Пузырь может провисеть в pending дольше пары секунд легитимно (job ещё
+   * в очереди/ретраится), поэтому порог заметно больше типичной отправки.
+   */
+  WA_DELIVERY_STALE_MS: z.coerce.number().int().positive().default(15 * 60_000),
+  WA_DELIVERY_WATCHDOG_INTERVAL_MS: z.coerce.number().int().positive().default(5 * 60_000)
 });
 
 export const env = schema.parse(process.env);
