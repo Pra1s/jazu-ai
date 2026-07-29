@@ -4,7 +4,7 @@
 // flush-scheduler: одна отложенная задача на чат (jobId = followup:<agentId>:<chatId>),
 // ставится при ответе бота (attempt 0), отменяется при входящем клиента.
 
-import { createInitialProfile, generateFollowupText, splitBotReply } from "@jazu/ai";
+import { createInitialProfile, generateFollowupText, resolveBubbleCap, splitBotReply } from "@jazu/ai";
 import { prisma as defaultPrisma, type Prisma } from "@jazu/db";
 import { businessProfileSchema, type BusinessProfile } from "@jazu/shared";
 import {
@@ -39,8 +39,8 @@ type FollowupConfig = {
   quietStart: number;
   quietEnd: number;
   timezone: string;
-  splitEnabled: boolean;
-  maxMessages: number;
+  /** Единственный источник правды про потолок пузырей — см. resolveBubbleCap. */
+  bubbleCap: number;
 };
 
 function normalizeFollowupConfig(profile: BusinessProfile): FollowupConfig {
@@ -56,8 +56,7 @@ function normalizeFollowupConfig(profile: BusinessProfile): FollowupConfig {
     quietStart: profile.followupQuietStart ?? 22,
     quietEnd: profile.followupQuietEnd ?? 9,
     timezone: profile.followupTimezone ?? "Asia/Almaty",
-    splitEnabled: profile.replySplitEnabled !== false,
-    maxMessages: profile.replyMaxMessages ?? 4
+    bubbleCap: resolveBubbleCap(profile)
   };
 }
 
@@ -298,7 +297,7 @@ export async function runFollowup(
     return "skipped_no_text";
   }
 
-  const parts = splitBotReply(text, config.splitEnabled ? config.maxMessages : 1);
+  const parts = splitBotReply(text, config.bubbleCap);
   if (parts.length === 0) {
     await scheduleFollowup(agentId, chatId, attempt + 1, { prisma });
     return "skipped_no_text";

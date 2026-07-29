@@ -37,6 +37,8 @@ import {
 } from "./prompts.js";
 // 3.1 (П6): механическая чистка исходящего текста ДЛЯ ПОЛЬЗОВАТЕЛЯ (тире/пробелы).
 import { postProcessUserText } from "./postProcess.js";
+// Контракт runtime-ответа: messages: string[] вместо «---» внутри reply-строки.
+import { coerceReplyMessages, resolveBubbleCap } from "./reply-messages.js";
 
 export type { BotModel, Carcass } from "@jazu/shared";
 
@@ -57,7 +59,16 @@ export type BuilderTurn = {
 };
 
 export type RuntimeTurn = {
+  /** reply = messages.join("\n\n") — совместимость с местами, что читают
+   *  ответ целиком (лог/CRM, тест-чат). Пузыри для отправки в WhatsApp — messages. */
   reply: string;
+  /**
+   * Ответ клиенту, разбитый на отдельные сообщения WhatsApp (мультисообщения).
+   * Источник данных — поле `messages` контракта модели (см. buildRuntimeEnvelope),
+   * с фолбэком на legacy reply-строку с «---», если модель вернула старый формат.
+   * Пустой массив — ОСОЗНАННОЕ молчание (спам/офф-топик), не ошибка.
+   */
+  messages: string[];
   shouldHandoff: boolean;
   handoffType?: "hot_lead" | "complaint" | "out_of_scope" | "requested" | null;
   summary?: string;
@@ -505,9 +516,14 @@ export async function buildRuntimeTurn(
     options.retrievedExamples ?? []
   );
 
+  // Тот же кап, что промпт обещает клиенту в контракте messages (см.
+  // buildRuntimeEnvelope) — единственный источник правды, см. resolveBubbleCap.
+  const cap = resolveBubbleCap(profile);
+
   try {
     const wrapper = await runJsonCallWithTelemetry<{
       reply?: string;
+      messages?: string[];
       shouldHandoff?: boolean;
       handoffType?: "hot_lead" | "complaint" | "out_of_scope" | "requested" | null;
       summary?: string;
@@ -533,19 +549,25 @@ export async function buildRuntimeTurn(
 
     if (wrapper.blocked) {
       // Бюджет исчерпан — отдаём дружелюбный fallback вместо тишины бота.
+      const blockedText = "Извините, сейчас мне нужно немного подождать перед ответом. Можно повторить чуть позже?";
       return {
-        reply: "Извините, сейчас мне нужно немного подождать перед ответом. Можно повторить чуть позже?",
+        reply: blockedText,
+        messages: [blockedText],
         shouldHandoff: false,
         summary
       };
     }
     const completion = wrapper.result;
 
-    // Р1: пустая строка reply — ОСОЗНАННОЕ молчание (спам/офф-топик по контракту
-    // envelope «пусто если спам»), её пропускаем дальше как есть: бэк (К5-гард в
-    // handler.ts) пустой пузырь не персистит и в WhatsApp не отправляет. Ошибкой
-    // считаем только отсутствие строки (битый/неполный JSON) — там fallback.
-    if (!completion || typeof completion.reply !== "string") {
+    // Р1: пустой messages: [] (или пустая reply-строка по legacy-контракту) —
+    // ОСОЗНАННОЕ молчание (спам/офф-топик по контракту envelope «пусто если
+    // спам»), пропускаем дальше как есть: бэк (К5-гард в handler.ts) пустой
+    // пузырь не персистит и в WhatsApp не отправляет. Ошибкой считаем только
+    // отсутствие ОБОИХ полей — ни валидного массива messages, ни строки reply
+    // (битый/неполный JSON) — там fallback.
+    const hasMessages = Array.isArray(completion?.messages);
+    const hasReply = typeof completion?.reply === "string";
+    if (!completion || (!hasMessages && !hasReply)) {
       throw new Error("empty completion");
     }
 
@@ -565,9 +587,14 @@ export async function buildRuntimeTurn(
       ? completion.extractedPhone.trim()
       : "";
 
+    // messages — коэрсер уже чистит тире/пробелы поэлементно (postProcessUserText+
+    // sanitizeAssistantText внутри coerceReplyMessages) и режет legacy «---»,
+    // если модель вернула старый формат reply-строкой без messages.
+    const messages = coerceReplyMessages(completion, { cap });
+
     return {
-      // 3.1 (П6): механически чистим тире/пробелы в исходящем reply сразу после парсинга.
-      reply: postProcessUserText(sanitizeAssistantText(completion.reply)),
+      reply: messages.join("\n\n"),
+      messages,
       shouldHandoff: completion.shouldHandoff ?? handoff.handoff,
       ...(completion.handoffType !== undefined ? { handoffType: completion.handoffType } : {}),
       summary: completion.summary || summary,
@@ -580,8 +607,10 @@ export async function buildRuntimeTurn(
   } catch (error) {
     console.error("[buildRuntimeTurn] LLM call failed", error);
     if (handoff.handoff) {
+      const handoffText = "Передаю специалисту, чтобы он быстро помог с этим вопросом.";
       return {
-        reply: "Передаю специалисту, чтобы он быстро помог с этим вопросом.",
+        reply: handoffText,
+        messages: [handoffText],
         shouldHandoff: true,
         summary
       };
@@ -591,10 +620,12 @@ export async function buildRuntimeTurn(
     // приветствием (D1). В СЕРЕДИНЕ диалога приветствие повторять нельзя (R6),
     // отдаём нейтральную просьбу повторить, без «здравствуйте».
     const midDialog = history.some((m) => m.role === "assistant");
+    const fallbackText = midDialog
+      ? "Извините, не расслышал. Можете повторить?"
+      : getFallback(profile.botModel ?? null);
     return {
-      reply: midDialog
-        ? "Извините, не расслышал. Можете повторить?"
-        : getFallback(profile.botModel ?? null),
+      reply: fallbackText,
+      messages: [fallbackText],
       shouldHandoff: false
     };
   }
@@ -805,6 +836,8 @@ export {
   RUNTIME_FALLBACK,
   type StreamChunk
 };
+
+export { resolveBubbleCap, coerceReplyMessages } from "./reply-messages.js";
 
 export {
   calcCostMicroUsd,

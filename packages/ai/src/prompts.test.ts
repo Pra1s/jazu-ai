@@ -211,6 +211,38 @@ describe("buildRuntimeEnvelope", () => {
     expect(out).toContain("пятница");
     expect(out).toContain("12 июня 2026");
   });
+
+  describe("контракт messages[] вместо текстового разделителя «---» в reply", () => {
+    it("JSON-контракт объявляет messages как массив, а не reply как строку", () => {
+      const out = buildRuntimeEnvelope("BIZ", profile({ botModel: "admin" }), null);
+      expect(out).toContain('"messages": string[]');
+      expect(out).not.toContain('"reply": string');
+    });
+
+    it("не содержит старую инструкцию «раздели reply ... строкой из трёх дефисов» (устранённое противоречие)", () => {
+      const out = buildRuntimeEnvelope("BIZ", profile({ botModel: "admin" }), null);
+      expect(out).not.toContain("раздели reply на отдельные сообщения строкой");
+    });
+
+    it("не содержит старое требование «ответь ЦЕЛЬНО — одним живым сообщением» (противоречило дроблению)", () => {
+      const out = buildRuntimeEnvelope("BIZ", profile({ botModel: "admin" }), null);
+      expect(out).not.toContain("ответь ЦЕЛЬНО");
+    });
+
+    it("replySplitEnabled: false → правило messages требует РОВНО один элемент", () => {
+      const out = buildRuntimeEnvelope("BIZ", profile({ botModel: "admin", replySplitEnabled: false }), null);
+      expect(out).toContain("Ровно ОДИН элемент");
+    });
+
+    it("дробление включено → правило messages называет реальный потолок (replyMaxMessages)", () => {
+      const out = buildRuntimeEnvelope(
+        "BIZ",
+        profile({ botModel: "admin", replySplitEnabled: true, replyMaxMessages: 3 }),
+        null
+      );
+      expect(out).toContain("От 1 до 3 элементов");
+    });
+  });
 });
 
 describe("buildBuilderSystemPrompt", () => {

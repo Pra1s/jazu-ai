@@ -1,7 +1,6 @@
 import {
   buildRuntimeTurn,
   createInitialProfile,
-  splitBotReply,
   summarizeLead,
   transcribeAudio
 } from "@jazu/ai";
@@ -1099,12 +1098,10 @@ export async function flushWaConversation(
       ? runtimeTurn.extractedName
       : null;
 
-  // Мультисообщения: режем reply по «---» на отдельные пузыри (кап из профиля).
-  // Пустой reply — осознанное молчание (спам/офф-топик); пустой пузырь не пишем.
-  const replyParts = splitBotReply(
-    runtimeTurn.reply ?? "",
-    runtimeProfile.replySplitEnabled === false ? 1 : runtimeProfile.replyMaxMessages ?? 4
-  );
+  // Мультисообщения: buildRuntimeTurn уже разобрал ответ на пузыри (контракт
+  // messages: string[], см. reply-messages.ts) и применил кап того же runtimeProfile.
+  // Пустой messages — осознанное молчание (спам/офф-топик); пустой пузырь не пишем.
+  const replyParts = runtimeTurn.messages;
   const combinedReply = replyParts.join("\n\n");
   const hasReply = replyParts.length > 0;
 

@@ -62,3 +62,59 @@ describe("buildRuntimeTurn: пустой reply = осознанное молча
     expect(turn.shouldHandoff).toBe(false);
   });
 });
+
+describe("buildRuntimeTurn: контракт messages[] (мультисообщения)", () => {
+  beforeEach(() => {
+    mocks.runJsonCallWithTelemetry.mockReset();
+  });
+
+  it("messages: [] от LLM — осознанное молчание (Р1), НЕ подменяется fallback-приветствием", async () => {
+    // Регрессия, которую легко сломать неверным гардом: пустой МАССИВ — валидный
+    // ответ модели (спам/офф-топик), а не признак битого JSON.
+    mocks.runJsonCallWithTelemetry.mockResolvedValue({
+      blocked: false,
+      result: { messages: [], shouldHandoff: false }
+    });
+    const turn = await buildRuntimeTurn(adminProfile(), "куплю подписчиков, скинь прайс на накрутку", []);
+    expect(turn.messages).toEqual([]);
+    expect(turn.reply).toBe("");
+    expect(RUNTIME_FALLBACK.admin).not.toContain(turn.reply);
+  });
+
+  it("messages: ['a','b'] — reply это join('\\n\\n'), messages сохраняет пузыри отдельно", async () => {
+    mocks.runJsonCallWithTelemetry.mockResolvedValue({
+      blocked: false,
+      result: { messages: ["a", "b"], shouldHandoff: false }
+    });
+    const turn = await buildRuntimeTurn(adminProfile(), "здравствуйте", []);
+    expect(turn.messages).toEqual(["a", "b"]);
+    expect(turn.reply).toBe("a\n\nb");
+  });
+
+  it("ни messages, ни reply (битый JSON) → fallback тоже приходит как messages: [текст]", async () => {
+    mocks.runJsonCallWithTelemetry.mockResolvedValue({
+      blocked: false,
+      result: {}
+    });
+    const turn = await buildRuntimeTurn(adminProfile(), "здравствуйте", []);
+    expect(turn.messages).toHaveLength(1);
+    expect(turn.messages[0]).toBe(turn.reply);
+  });
+
+  it("бюджет заблокирован (blocked: true) — messages содержит ровно один фолбэк-текст", async () => {
+    mocks.runJsonCallWithTelemetry.mockResolvedValue({ blocked: true });
+    const turn = await buildRuntimeTurn(adminProfile(), "здравствуйте", []);
+    expect(turn.messages).toHaveLength(1);
+    expect(turn.messages[0]).toBe(turn.reply);
+    expect(turn.reply.length).toBeGreaterThan(0);
+  });
+
+  it("legacy reply-строка с «---» без messages — работает как раньше (обратная совместимость)", async () => {
+    mocks.runJsonCallWithTelemetry.mockResolvedValue({
+      blocked: false,
+      result: { reply: "Здравствуйте!---Чем могу помочь?", shouldHandoff: false }
+    });
+    const turn = await buildRuntimeTurn(adminProfile(), "здравствуйте", []);
+    expect(turn.messages).toEqual(["Здравствуйте!", "Чем могу помочь?"]);
+  });
+});
