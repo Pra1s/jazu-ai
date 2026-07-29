@@ -8,6 +8,7 @@ import {
   makeWASocket,
   type WAMessage,
 } from "@whiskeysockets/baileys";
+import { captureError } from "@jazu/observability";
 import { env } from "./env.js";
 import { useDbAuthState } from "./db-auth-state.js";
 import { getInboundQueue, type WaInboundJob } from "@jazu/queue";
@@ -840,6 +841,20 @@ export class ConnectionManager {
       }
 
       if (update.connection === "open") {
+        // Сокет реально ожил — сбрасываем счётчик реконнектов СИНХРОННО, до
+        // асинхронного claim ниже. Иначе сетевая ошибка claimWaPhone могла бы
+        // пропустить сброс, а reconnectAttempts копится за всю жизнь процесса
+        // (см. ветку close) — без сброса агент через несколько разрывов
+        // навсегда перестаёт переподключаться, хотя сокет сейчас живой.
+        managed.reconnectAttempts = 0;
+        // Не обнуляем сам managed.reconnectTimer — clearTimeout уже отменил
+        // срабатывание, а следующая точка планирования (:988) перезапишет
+        // ссылку. exactOptionalPropertyTypes запрещает явный undefined на
+        // необязательном поле без "| undefined" в типе.
+        if (managed.reconnectTimer) {
+          clearTimeout(managed.reconnectTimer);
+        }
+
         // Анти-абуз: атомарно «застолбить» номер за владельцем агента.
         // Делаем ДО того как пометим себя connected — иначе юзер увидит
         // «Подключено» на долю секунды, а потом «Этот номер уже занят».
@@ -976,6 +991,25 @@ export class ConnectionManager {
             managed.reconnectTimer = setTimeout(() => {
               void this.start(agentId);
             }, delay);
+          } else {
+            // Попытки исчерпаны — раньше это было тихим тупиком: ни лога, ни
+            // статуса, агент навсегда остаётся disconnected до ручного рестарта
+            // процесса. Сообщаем явно, чтобы это было видно и заметно, а не
+            // выглядело как «бот просто перестал отвечать».
+            const message = `Переподключение исчерпано (${managed.reconnectAttempts}/${MAX_ATTEMPTS} попыток) — нужен ручной перезапуск подключения`;
+            console.error(`[wa] reconnect exhausted agent=${agentId}: ${message}`);
+            captureError(new Error(message), { agentId, route: "wa-worker:reconnect" });
+            // ВАЖНО: managed.status НЕ трогаем — он уже "disconnected" (выставлен
+            // выше по потоку). start() без restart/fresh считает соединение живым
+            // при любом статусе, кроме "disconnected" (см. guard в start()), и
+            // ручной рестарт через POST /connections/:id/start стал бы no-op.
+            // Статус "error" уходит ТОЛЬКО в API/дашборд — это отдельное состояние
+            // от internal guard.
+            void pushStatusToApi(agentId, {
+              status: "error",
+              qrText: message,
+              workerSessionId: managed.workerSessionId
+            });
           }
         } else if (reasonCode === DisconnectReason.loggedOut) {
           managed.reconnectAttempts = 0;
@@ -1423,7 +1457,11 @@ export class ConnectionManager {
         await typeBubblePause(socket, chatId, computeBubblePauseMs(bubbles[i]!));
       }
       const sent = await withTimeout(
-        socket.sendMessage(chatId, { text: bubbles[i]! }),
+        // linkPreview: null — не даём Baileys генерировать превью ссылки перед
+        // отправкой (динамический import "link-preview-js", в проекте не
+        // установлен, но если он появится транзитивно — каждый пузырь со
+        // ссылкой получит лишний HTTP-запрос внутри окна отправки).
+        socket.sendMessage(chatId, { text: bubbles[i]!, linkPreview: null }),
         env.WA_SEND_TIMEOUT_MS,
         `sendMessage(${chatId}) пузырь ${i + 1}/${bubbles.length}`
       );

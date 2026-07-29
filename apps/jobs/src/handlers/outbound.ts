@@ -46,7 +46,7 @@ export async function enqueueReply(params: {
   const outbound: WaOutboundJob = {
     agentId: params.agentId,
     chatId: params.chatId,
-    text: parts.join("\n"),
+    text: parts.join("\n\n"),
     ...(parts.length > 1 ? { texts: parts } : {}),
     humanize: true,
     inboundReceivedAtMs: params.inboundReceivedAtMs,

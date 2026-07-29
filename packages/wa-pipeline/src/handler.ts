@@ -1105,7 +1105,7 @@ export async function flushWaConversation(
     runtimeTurn.reply ?? "",
     runtimeProfile.replySplitEnabled === false ? 1 : runtimeProfile.replyMaxMessages ?? 4
   );
-  const combinedReply = replyParts.join("\n");
+  const combinedReply = replyParts.join("\n\n");
   const hasReply = replyParts.length > 0;
 
   // Транзакция: исходящее (если есть) + сдвиг курсора + апдейт conversation.

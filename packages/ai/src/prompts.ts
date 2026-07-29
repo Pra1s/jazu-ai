@@ -184,7 +184,7 @@ export function splitBotReply(reply: string, maxMessages = 1): string[] {
   const max = Math.max(1, Math.floor(maxMessages));
   if (parts.length <= max) return parts;
   const head = parts.slice(0, max - 1);
-  const tail = parts.slice(max - 1).join("\n");
+  const tail = parts.slice(max - 1).join("\n\n");
   return [...head, tail];
 }
 

@@ -303,7 +303,7 @@ export async function runFollowup(
     await scheduleFollowup(agentId, chatId, attempt + 1, { prisma });
     return "skipped_no_text";
   }
-  const combined = parts.join("\n");
+  const combined = parts.join("\n\n");
 
   // Персистим исходящий дожим (история + курсор становится «out» → входящее клиента
   // потом отменит серию), затем кладём в outbound на отправку через воркер.

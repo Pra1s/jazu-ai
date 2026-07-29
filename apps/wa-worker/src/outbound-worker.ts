@@ -7,6 +7,7 @@ import {
   type StartedWorker,
   type WaOutboundJob
 } from "@jazu/queue";
+import { captureError } from "@jazu/observability";
 import { env } from "./env.js";
 import type { ConnectionManager } from "./manager.js";
 
@@ -52,10 +53,13 @@ async function requeueUndelivered(job: Job<WaOutboundJob>, reason: string): Prom
 
   const requeueCount = data.requeueCount ?? 0;
   if (requeueCount >= env.WA_OUTBOUND_REQUEUE_MAX) {
-    console.error(
-      `[wa-outbound] ХВОСТ ПОТЕРЯН ${data.chatId}: доставлено ${sent}/${total} пузырей, ` +
-        `добивка исчерпана (${requeueCount}/${env.WA_OUTBOUND_REQUEUE_MAX}). Причина: ${reason}`
-    );
+    const message = `ХВОСТ ПОТЕРЯН ${data.chatId}: доставлено ${sent}/${total} пузырей, добивка исчерпана (${requeueCount}/${env.WA_OUTBOUND_REQUEUE_MAX}). Причина: ${reason}`;
+    console.error(`[wa-outbound] ${message}`);
+    captureError(new Error(message), {
+      agentId: data.agentId,
+      route: "wa-worker:outbound-requeue",
+      extra: { chatId: data.chatId, sent, total, requeueCount }
+    });
     return;
   }
 
@@ -143,9 +147,23 @@ export function startOutboundWorker(manager: ConnectionManager): StartedWorker<W
     },
     {
       concurrency: env.WA_OUTBOUND_CONCURRENCY,
-      lockDuration: env.WA_OUTBOUND_LOCK_MS
+      lockDuration: env.WA_OUTBOUND_LOCK_MS,
+      // Без явных значений сваливания задачи были полностью невидимы: BullMQ
+      // переводит дважды сваленную задачу в failed БЕЗ инкремента attemptsMade,
+      // а generic failed-логгер в startWorker() показывает только текст ошибки,
+      // не факт сваливания. stalled-листенер ниже даёт отдельный сигнал в лог/Sentry.
+      stalledInterval: 30_000,
+      maxStalledCount: 2
     }
   );
+
+  started.worker.on("stalled", (jobId) => {
+    console.error(`[wa-outbound] job ${jobId} stalled (сокет/процесс не отвечал дольше lockDuration)`);
+    captureError(new Error(`wa-outbound job stalled: ${jobId}`), {
+      route: "wa-worker:outbound-stalled",
+      extra: { jobId }
+    });
+  });
 
   // Финальный провал задачи (все попытки выгорели) с недоставленным хвостом —
   // единственный сценарий, где клиент навсегда остаётся с половиной ответа.
@@ -154,7 +172,16 @@ export function startOutboundWorker(manager: ConnectionManager): StartedWorker<W
   started.worker.on("failed", (job, err) => {
     if (!job) return;
     const attemptsAllowed = job.opts.attempts ?? 1;
-    if (job.attemptsMade < attemptsAllowed) return; // ретраи ещё будут
+    // "stalled" — двукратно сваленная задача уходит в failed БЕЗ инкремента
+    // attemptsMade (BullMQ moveStalledJobsToWait), поэтому обычный гард по
+    // attemptsMade её бы пропустил и хвост потерялся бы молча.
+    const stalledFailure = /stalled/i.test(err?.message ?? "");
+    if (!stalledFailure && job.attemptsMade < attemptsAllowed) return; // ретраи ещё будут
+    captureError(err, {
+      agentId: job.data?.agentId ?? null,
+      route: "wa-worker:outbound-failed",
+      extra: { chatId: job.data?.chatId, attemptsMade: job.attemptsMade, stalledFailure }
+    });
     if (env.WA_OUTBOUND_REQUEUE_MAX === 0) return;
     void requeueUndelivered(job, err.message).catch((requeueErr) => {
       console.error(
