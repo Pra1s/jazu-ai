@@ -21,6 +21,7 @@
     "reindex-style-rag": "tsx --env-file=../../.env scripts/reindex-style-rag.ts",
     "test-style-rag": "tsx --env-file=../../.env scripts/test-style-rag.ts",
     "analyze-style": "tsx --env-file=../../.env scripts/analyze-style.ts",
+    "unblock-wa-chat": "tsx --env-file=../../.env scripts/unblock-wa-chat.ts",
     "start": "node --env-file=../../.env --import tsx/esm src/index.ts"
   },
   "dependencies": {
