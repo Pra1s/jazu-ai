@@ -30,7 +30,7 @@ type PublicConnectionState = {
   lastSeenAt?: string | null;
 };
 
-type ManagedConnection = {
+export type ManagedConnection = {
   agentId: string;
   socket?: ReturnType<typeof makeWASocket>;
   status: PublicConnectionState["status"];
@@ -49,6 +49,16 @@ type ManagedConnection = {
    * запишем ответ бота второй раз, уже как ручной. Ограничен по размеру.
    */
   selfSentIds: Set<string>;
+  /**
+   * Инкрементируется на каждый вызов start() (новый Baileys-сокет). Отправка
+   * мультисообщения растягивается на 20-60с (humanize + паузы между пузырями);
+   * если за это время случился реконнект, start() ЗАМЕНЯЕТ весь объект
+   * ManagedConnection — захваченная в начале отправки ссылка на socket протухает,
+   * но остаётся синтаксически валидной, и запись в мёртвый сокет может либо
+   * зависнуть, либо тихо провалиться. Поколение — дешёвый способ обнаружить это
+   * ДО очередной операции с сокетом, а не после 60-секундного таймаута.
+   */
+  generation: number;
   reconnectTimer?: NodeJS.Timeout;
   reconnectAttempts: number;
   /** Фича «бот в стиле владельца»: захватывать ли личную историю при синке
@@ -599,6 +609,38 @@ function rememberSelfSent(connection: ManagedConnection, waMsgId: string | null 
 }
 
 /**
+ * Сокет, захваченный в начале отправки мультисообщения, сменился (реконнект
+ * подменил ManagedConnection целиком) раньше, чем цикл дошёл до очередного
+ * пузыря. Отдельный класс — чтобы в логах/Sentry отличать «протухший сокет»
+ * от обычного таймаута sendMessage (withTimeout) или сетевой ошибки Baileys.
+ */
+export class StaleSocketError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StaleSocketError";
+  }
+}
+
+/**
+ * Гард поколения соединения, вынесенный в чистую функцию ради юнит-теста —
+ * полноценный тест реконнекта нужен с живым Baileys-сокетом, а сама логика
+ * сравнения проверяется и без него. Бросает, если сокета нет ИЛИ поколение
+ * соединения не совпадает с тем, что было на момент начала отправки (см.
+ * ManagedConnection.generation и sendUnlocked).
+ */
+export function assertSameGeneration(
+  current: ManagedConnection | undefined,
+  expectedGeneration: number,
+  context: string
+): asserts current is ManagedConnection & { socket: NonNullable<ManagedConnection["socket"]> } {
+  if (!current?.socket || current.generation !== expectedGeneration) {
+    throw new StaleSocketError(
+      `${context}: сокет сменился (поколение ${expectedGeneration} → ${current?.generation ?? "нет соединения"})`
+    );
+  }
+}
+
+/**
  * Legacy/fallback путь: если REDIS_URL не выставлен — стучимся напрямую
  * в API синхронно. Воркер ждёт ответ и сам отправляет reply в WhatsApp,
  * как раньше. Используется только в dev без поднятого Redis.
@@ -764,6 +806,10 @@ export class ConnectionManager {
     });
 
     const existingAttempts = this.connections.get(agentId)?.reconnectAttempts ?? 0;
+    // Новое поколение соединения на каждый start() — включая обычный реконнект.
+    // sendUnlocked() сверяется с ним перед каждой операцией на сокете, чтобы не
+    // писать в протухшее соединение (см. комментарий у поля generation).
+    const generation = (this.connections.get(agentId)?.generation ?? 0) + 1;
     const managed: ManagedConnection = this.setConnection(agentId, {
       agentId,
       socket,
@@ -776,6 +822,7 @@ export class ConnectionManager {
       stopRequested: false,
       lastSentAt: existing?.lastSentAt ?? new Map<string, number>(),
       selfSentIds: existing?.selfSentIds ?? new Set<string>(),
+      generation,
       reconnectAttempts: existingAttempts,
       styleHistoryCapture,
       pairingMode: existing?.pairingMode ?? false,
@@ -1399,12 +1446,24 @@ export class ConnectionManager {
       onBubbleSent?: (sentCount: number) => Promise<void>;
     }
   ): Promise<void> {
-    const connection = this.getConnection(agentId);
-    if (!connection?.socket) {
+    const initial = this.getConnection(agentId);
+    if (!initial?.socket) {
       throw new Error("Connection is not active");
     }
-    const socket = connection.socket;
     const chatId = payload.chatId;
+
+    // Поколение соединения на момент старта отправки (см. комментарий у поля
+    // generation). Отправка мультисообщения растягивается на 20-60с — за это
+    // время реконнект мог заменить весь ManagedConnection. live() сверяет
+    // поколение ПЕРЕД каждой операцией с сокетом и бросает StaleSocketError,
+    // если оно сменилось, вместо того чтобы писать в протухший сокет молча
+    // или зависнуть на нём до общего таймаута.
+    const generation = initial.generation;
+    const live = (): ManagedConnection & { socket: NonNullable<ManagedConnection["socket"]> } => {
+      const current = this.getConnection(agentId);
+      assertSameGeneration(current, generation, `${agentId}/${chatId}`);
+      return current;
+    };
 
     // Мультисообщения: список пузырей (или один текст). Пустые отбрасываем.
     const bubbles = (payload.texts && payload.texts.length > 0 ? payload.texts : [payload.text])
@@ -1422,7 +1481,7 @@ export class ConnectionManager {
     // минуту молчания неправильно.
     if (env.WA_HUMANIZE_REPLIES && payload.humanize && startIndex === 0) {
       await waitWithTyping(
-        socket,
+        live().socket,
         chatId,
         payload.humanize.targetReplyAtMs,
         payload.humanize.isFirstBotReply,
@@ -1432,7 +1491,7 @@ export class ConnectionManager {
         {
           // Прочитать входящее за ~5с до начала «печатает…».
           readLeadMs: randomInt(env.WA_READ_LEAD_MIN_MS, env.WA_READ_LEAD_MAX_MS),
-          onRead: () => this.markChatRead(agentId, socket, chatId)
+          onRead: () => this.markChatRead(agentId, live().socket, chatId)
         }
       );
     }
@@ -1443,7 +1502,9 @@ export class ConnectionManager {
     // outbound-консьюмера в bullmq (см. handlers/wa-outbound.ts).
     const MIN_INTERVAL_MS = env.WA_PER_CHAT_MIN_INTERVAL_MS;
     const rateLimit = async () => {
-      const last = connection.lastSentAt.get(chatId) ?? 0;
+      // lastSentAt читаем с ТЕКУЩЕГО соединения: после реконнекта Map обычно та
+      // же (start() переносит её), но полагаться на замкнутую константу не стоит.
+      const last = live().lastSentAt.get(chatId) ?? 0;
       const wait = MIN_INTERVAL_MS - (Date.now() - last);
       if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
     };
@@ -1454,26 +1515,28 @@ export class ConnectionManager {
       await rateLimit();
       // Между пузырями — пауза «печатает…» пропорционально длине следующего.
       if (i > 0 && env.WA_HUMANIZE_REPLIES) {
-        await typeBubblePause(socket, chatId, computeBubblePauseMs(bubbles[i]!));
+        await typeBubblePause(live().socket, chatId, computeBubblePauseMs(bubbles[i]!));
       }
+      const current = live();
       const sent = await withTimeout(
         // linkPreview: null — не даём Baileys генерировать превью ссылки перед
         // отправкой (динамический import "link-preview-js", в проекте не
         // установлен, но если он появится транзитивно — каждый пузырь со
         // ссылкой получит лишний HTTP-запрос внутри окна отправки).
-        socket.sendMessage(chatId, { text: bubbles[i]!, linkPreview: null }),
+        current.socket.sendMessage(chatId, { text: bubbles[i]!, linkPreview: null }),
         env.WA_SEND_TIMEOUT_MS,
         `sendMessage(${chatId}) пузырь ${i + 1}/${bubbles.length}`
       );
-      rememberSelfSent(connection, sent?.key?.id);
-      connection.lastSentAt.set(chatId, Date.now());
+      rememberSelfSent(current, sent?.key?.id);
+      current.lastSentAt.set(chatId, Date.now());
       // Фиксируем прогресс СРАЗУ после доставки: если следующий пузырь упадёт,
       // ретрай продолжит с него, а не отправит клиенту начало ответа заново.
       await payload.onBubbleSent?.(i + 1);
     }
 
-    await stopTyping(socket, chatId);
-    connection.lastSeenAt = new Date();
+    const final = live();
+    await stopTyping(final.socket, chatId);
+    final.lastSeenAt = new Date();
     this.markReplied(agentId, chatId);
   }
 
