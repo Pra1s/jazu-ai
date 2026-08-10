@@ -101,8 +101,15 @@ async function findTargets(raw: string, agentArg: string | null): Promise<Target
 
   // Метка могла остаться и без диалога (клиент писал до подключения, бот молчал,
   // Conversation ещё не заведён) — ищем строки снимка отдельно.
+  //
+  // ВАЖНО: ищем и по waChatId НАЙДЕННЫХ диалогов, а не только по кандидатам из
+  // аргумента. Когда чат найден по номеру (customerPhone), его реальный
+  // waChatId — это @lid-идентификатор WhatsApp (`126702155989171@lid`), который
+  // из цифр номера не выводится. Без этого снимок молча не находился, скрипт
+  // рапортовал «блокировки нет», а бот продолжал игнорировать чат.
+  const lookupJids = [...new Set([...jids, ...conversations.map((c) => c.waChatId), maybeId])];
   const preRows = await prisma.waPreConnectionChat.findMany({
-    where: { ...agentFilter, ...(jids.length ? { waChatId: { in: jids } } : { waChatId: maybeId }) },
+    where: { ...agentFilter, waChatId: { in: lookupJids } },
     select: { agentId: true, waChatId: true }
   });
 
